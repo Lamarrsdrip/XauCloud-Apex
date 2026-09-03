@@ -6,7 +6,9 @@
   "accountProfile": "NORMAL",
   "targetEquity": 1000,
   "targetMultiplier": 100,
-  "baseMarginPct": 15,
+  "normalTargetProfitPct": 1000,
+  "normalProfitFloorEnabled": true,
+  "baseMarginPct": 30,
   "layerMultiplier": 2,
   "maxLayers": 0,
   "entryScore": 76,
@@ -22,7 +24,5 @@
   "cooldownMinutes": 0,
   "learningEnabled": true,
   "learningMinCampaigns": 8,
-  "learningMaxScoreAdjustment": 5,
-  "normalTargetProfitPct": 1000,
-  "normalProfitFloorEnabled": true
+  "learningMaxScoreAdjustment": 5
 }

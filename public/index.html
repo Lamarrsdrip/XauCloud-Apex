@@ -1,8 +1,275 @@
-<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>XauCloud Apex</title><style>body{font-family:system-ui;background:#0b0d12;color:#eef2ff;margin:0}.w{max-width:1100px;margin:auto;padding:28px}.hero{padding:30px 0}.tag{font-size:12px;letter-spacing:.2em;color:#9ca3af}.big{font-size:48px;font-weight:800}.muted{color:#9ca3af}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.card{background:#141821;border:1px solid #272d3b;border-radius:18px;padding:18px;margin:12px 0}label{display:block;color:#aab2c5;font-size:12px;margin-bottom:6px}input,select{width:100%;box-sizing:border-box;background:#0d1118;color:white;border:1px solid #30384a;padding:11px;border-radius:10px}button{border:0;border-radius:10px;padding:12px 18px;font-weight:700;margin-right:8px}.arm{background:#22c55e}.dis{background:#ef4444;color:#fff}.warn{color:#fbbf24}pre{white-space:pre-wrap;overflow:auto;background:#090b10;padding:14px;border-radius:12px}.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#242938;margin:3px}</style><div class="w"><div class="hero"><div class="tag">XAUCLOUD • PRIVATE</div><div class="big">Apex</div><p class="muted">ApexStack v2 — impulse → liquidity extreme/sweep → rejection → structure confirmation → aggressive profit-side pyramiding → basket target.</p></div>
-<div class="card"><h3>Cycle target</h3><div class="grid"><div><label>Account profile</label><select id="accountProfile"><option>NORMAL</option><option>UNLIMITED</option></select></div><div><label>Target mode</label><select id="targetMode"><option>MULTIPLIER</option><option>EQUITY</option></select></div><div><label>Target multiplier (100 = 100× equity)</label><input id="targetMultiplier" type="number"></div><div><label>Exact target equity ($)</label><input id="targetEquity" type="number"></div><div><label>Normal-account max multiplier (caps the above on NORMAL profile)</label><input id="normalAccountMaxMultiplier" type="number" step=".1"></div><div><label>Account (0 = this EA account)</label><input id="account"></div></div><p class="warn">On NORMAL profile the effective target is capped at this multiplier (default 3 = +200%) regardless of the configured target, since normal leverage can't sustain the huge multipliers an unlimited-leverage account can. Switch to UNLIMITED to use the configured target as-is.</p></div>
-<div class="card"><h3>Setup invalidation</h3><div class="grid"><div><label>Enable invalidation exit</label><select id="enableInvalidationExit"><option value="true">true</option><option value="false">false</option></select></div><div><label>Giveback % that arms invalidation (0.5 = 50% of peak floating profit)</label><input id="invalidationGivebackPct" type="number" step=".05"></div></div><p class="warn">Closes the basket early if price has given back this much of peak floating profit AND structure breaks against the campaign — instead of holding indefinitely hoping for a reversal.</p></div>
-<div class="card"><h3>Aggressive lot ladder</h3><div class="grid"><div><label>First layer free-margin %</label><input id="baseMarginPct" type="number"></div><div><label>Layer multiplier (2 = double)</label><input id="layerMultiplier" type="number" step=".1"></div><div><label>Max layers (0 = until broker/target stops additions)</label><input id="maxLayers" type="number"></div><div><label>Add spacing ATR</label><input id="addSpacingAtr" type="number" step=".01"></div></div><p class="warn">No broker SL and no daily drawdown cap. “15% risk” is implemented as 15% of current free-margin capacity because without an SL a classical % risk-to-stop cannot be calculated.</p></div>
-<div class="card"><h3>Setup quality</h3><div class="grid"><div><label>Entry score</label><input id="entryScore" type="number"></div><div><label>Add score</label><input id="addScore" type="number"></div><div><label>Impulse ATR</label><input id="impulseAtr" type="number" step=".1"></div><div><label>Sweep ATR</label><input id="sweepAtr" type="number" step=".01"></div><div><label>Rejection bars</label><input id="rejectionBars" type="number"></div><div><label>Watch expiry minutes</label><input id="watchExpiryMinutes" type="number"></div><div><label>Rejection zone (x ATR from extreme)</label><input id="rejectionZoneAtr" type="number" step=".01"></div></div></div>
-<div class="card"><h3>Control</h3><button class="arm" onclick="save(true)">ARM APEX</button><button class="dis" onclick="save(false)">DISARM</button><div id="learn" class="muted"></div></div><div class="card"><h3>Live state / learning</h3><pre id="state">Enter admin token below.</pre><input id="token" placeholder="Admin token"><button onclick="load()">Load</button></div></div><script>
-const ids=['targetMode','accountProfile','targetMultiplier','targetEquity','normalAccountMaxMultiplier','account','baseMarginPct','layerMultiplier','maxLayers','addSpacingAtr','entryScore','addScore','impulseAtr','sweepAtr','rejectionBars','watchExpiryMinutes','rejectionZoneAtr','enableInvalidationExit','invalidationGivebackPct'];const STRING_IDS=['targetMode','accountProfile','account'];const BOOL_IDS=['enableInvalidationExit'];const A=()=>({Authorization:'Bearer '+token.value,'Content-Type':'application/json'});async function load(){const r=await fetch('/api/admin/status',{headers:A()});const d=await r.json();if(r.ok){for(const id of ids)if(d.config[id]!==undefined)document.getElementById(id).value=String(d.config[id]);learn.textContent=`Learning: ${d.learning.authority} • campaigns ${d.learning.completedCampaigns} • target-hit rate ${(d.learning.targetHitRate*100).toFixed(1)}% • entry adj ${d.learning.entryScoreAdjustment}`;}state.textContent=JSON.stringify(d,null,2)}async function save(armed){const r=await fetch('/api/admin/status',{headers:A()});const d=await r.json();if(!r.ok)return state.textContent=JSON.stringify(d,null,2);const c=d.config;for(const id of ids){let v=document.getElementById(id).value;if(BOOL_IDS.includes(id))v=v==='true';else if(!STRING_IDS.includes(id))v=Number(v);c[id]=v}c.armed=armed;const x=await fetch('/api/admin/config',{method:'POST',headers:A(),body:JSON.stringify(c)});state.textContent=JSON.stringify(await x.json(),null,2)}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090d14">
+<title>XauCloud Apex</title>
+<style>
+:root{
+  --bg:#070a10;--panel:#0d121b;--panel2:#111824;--line:#202a39;--text:#f6f8fb;--muted:#8d99aa;
+  --green:#45e28b;--red:#ff6578;--amber:#ffcc66;--blue:#65a7ff;--violet:#9d7bff;
+  --shadow:0 20px 60px rgba(0,0,0,.35);--r:22px
+}
+*{box-sizing:border-box} html{background:var(--bg)} body{
+  margin:0;color:var(--text);background:
+  radial-gradient(1000px 500px at 20% -10%,rgba(101,167,255,.10),transparent 55%),
+  radial-gradient(700px 400px at 100% 0,rgba(157,123,255,.08),transparent 55%),var(--bg);
+  font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif
+}
+button,input,select{font:inherit}.app{min-height:100vh;display:grid;grid-template-columns:260px 1fr}
+aside{position:sticky;top:0;height:100vh;padding:26px 18px;border-right:1px solid var(--line);background:rgba(7,10,16,.86);backdrop-filter:blur(18px)}
+.brand{display:flex;gap:12px;align-items:center;padding:4px 8px 28px}.mark{width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,var(--blue),var(--violet));box-shadow:0 8px 30px rgba(101,167,255,.25)}
+.brand b{font-size:18px}.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:.14em}.nav{display:grid;gap:7px}.nav button{border:0;background:transparent;color:var(--muted);padding:12px 13px;border-radius:13px;text-align:left;cursor:pointer}.nav button.active,.nav button:hover{background:#111824;color:#fff}
+.sidefoot{position:absolute;left:18px;right:18px;bottom:24px}.statusline{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:#5b6472}.dot.ok{background:var(--green);box-shadow:0 0 14px rgba(69,226,139,.8)}.dot.bad{background:var(--red)}
+main{padding:28px 34px 70px;max-width:1500px;width:100%;margin:auto}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:24px}.eyebrow{color:var(--muted);letter-spacing:.14em;font-size:11px;text-transform:uppercase}.title{font-size:31px;font-weight:760;letter-spacing:-.03em;margin:5px 0}.subtitle{color:var(--muted);max-width:720px}
+.actions{display:flex;gap:9px}.btn{border:1px solid var(--line);background:#121925;color:#fff;padding:10px 14px;border-radius:12px;cursor:pointer}.btn.primary{background:#f5f7fb;color:#070a10;border-color:#fff}.btn.danger{background:#2a1015;color:#ff8c9a;border-color:#4a1e27}
+.grid{display:grid;gap:14px}.cards{grid-template-columns:repeat(4,minmax(0,1fr))}.card{background:linear-gradient(180deg,rgba(17,24,36,.96),rgba(12,17,26,.96));border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--shadow)}
+.metric .label{color:var(--muted);font-size:12px}.metric .value{font-size:28px;font-weight:760;letter-spacing:-.03em;margin-top:7px}.metric .sub{margin-top:4px;font-size:12px;color:var(--muted)}
+.heroGrid{grid-template-columns:1.25fr .75fr;margin-top:14px}.sectionTitle{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.sectionTitle h2{font-size:17px;margin:0}.badge{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:#0a0f17;border-radius:999px;padding:6px 10px;font-size:12px;color:#c8d0dd}.badge.good{color:var(--green)}
+.progressWrap{padding:6px 0 2px}.progressLabels{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-bottom:9px}.bar{height:12px;background:#080c12;border:1px solid var(--line);border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--violet));border-radius:999px;transition:width .5s ease}.targetNums{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}.targetNums div{padding:12px;border:1px solid var(--line);border-radius:14px;background:#0a0f17}.targetNums small{display:block;color:var(--muted)}.targetNums b{display:block;margin-top:4px;font-size:17px}
+.stage{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-top:14px}.stage div{padding:9px 7px;text-align:center;border-radius:12px;border:1px solid var(--line);color:#6f7b8d;font-size:11px;background:#0a0f17}.stage div.on{color:#fff;border-color:#39547a;background:#102037}
+.campaign{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}.kv{padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:#0a0f17}.kv small{display:block;color:var(--muted);font-size:11px}.kv b{display:block;margin-top:4px}
+.timeline{display:grid;gap:10px}.event{display:grid;grid-template-columns:74px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid #17202c}.event:last-child{border-bottom:0}.event time{color:var(--muted);font-size:12px}.event b{display:block;font-size:13px}.event span{color:var(--muted);font-size:12px}
+.page{display:none}.page.active{display:block}.two{grid-template-columns:1fr 1fr}.formgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.field input,.field select{width:100%;background:#090e16;border:1px solid var(--line);color:#fff;border-radius:12px;padding:11px 12px;outline:none}.field input:focus,.field select:focus{border-color:#3f6697}.help{color:var(--muted);font-size:12px;margin-top:7px}.quick{display:flex;gap:8px;flex-wrap:wrap}.chip{border:1px solid var(--line);background:#0a0f17;color:#dbe3ef;border-radius:999px;padding:8px 11px;cursor:pointer}.chip:hover{border-color:#45638a}
+.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:12px 8px;border-bottom:1px solid #17202c}.table th{color:var(--muted);font-size:11px;font-weight:500}.empty{padding:28px;text-align:center;color:var(--muted)}
+.lock{position:fixed;inset:0;display:grid;place-items:center;background:rgba(4,7,11,.86);backdrop-filter:blur(16px);z-index:50}.login{width:min(430px,calc(100% - 30px));padding:25px;border-radius:24px;background:#0d131d;border:1px solid var(--line);box-shadow:var(--shadow)}.login h1{margin:0 0 5px;font-size:26px}.login p{margin:0 0 18px;color:var(--muted)}.login input{width:100%;background:#080d14;border:1px solid var(--line);color:#fff;border-radius:12px;padding:12px;margin-bottom:10px}.login .err{min-height:20px;color:#ff8291;font-size:12px}.hidden{display:none!important}
+.mobileNav{display:none}
+@media(max-width:1000px){.app{grid-template-columns:1fr}aside{display:none}main{padding:20px 18px 90px}.cards{grid-template-columns:repeat(2,1fr)}.heroGrid,.two{grid-template-columns:1fr}.mobileNav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:10px;right:10px;bottom:10px;z-index:20;background:rgba(12,17,26,.94);border:1px solid var(--line);border-radius:18px;padding:6px;backdrop-filter:blur(15px)}.mobileNav button{border:0;background:transparent;color:#7f8b9c;font-size:10px;padding:10px 3px;border-radius:12px}.mobileNav button.active{background:#17202d;color:#fff}}
+@media(max-width:620px){.top{display:block}.actions{margin-top:15px}.cards{grid-template-columns:1fr 1fr}.metric .value{font-size:22px}.stage{grid-template-columns:repeat(3,1fr)}.formgrid{grid-template-columns:1fr}.targetNums{grid-template-columns:1fr}.campaign{grid-template-columns:1fr 1fr}.title{font-size:27px}}
+</style>
+</head>
+<body>
+<div id="lock" class="lock">
+  <div class="login">
+    <div class="eyebrow">XAUCLOUD • PRIVATE</div>
+    <h1>Welcome to Apex</h1>
+    <p>Enter your admin access token to open the private trading terminal.</p>
+    <input id="loginToken" type="password" autocomplete="current-password" placeholder="Admin access token">
+    <button class="btn primary" style="width:100%" onclick="login()">Open Apex</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+</div>
+
+<div class="app">
+<aside>
+  <div class="brand"><div class="mark"></div><div><b>XauCloud Apex</b><small>PRIVATE TERMINAL</small></div></div>
+  <div class="nav">
+    <button class="active" data-page="dashboard">Dashboard</button>
+    <button data-page="campaigns">Campaigns</button>
+    <button data-page="history">History</button>
+    <button data-page="learning">Learning</button>
+    <button data-page="settings">Settings</button>
+  </div>
+  <div class="sidefoot">
+    <div class="statusline"><i id="sideDot" class="dot"></i><span id="sideStatus">Connecting…</span></div>
+  </div>
+</aside>
+
+<main>
+  <div class="top">
+    <div>
+      <div class="eyebrow">XAUUSD • APEXSTACK</div>
+      <div class="title">Trading command center</div>
+      <div class="subtitle">A clear view of account health, campaign progress, target protection and what Apex is doing right now.</div>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="refresh()">Refresh</button>
+      <button id="armBtn" class="btn primary" onclick="setArmed(true)">Arm Apex</button>
+      <button class="btn danger" onclick="setArmed(false)">Disarm</button>
+    </div>
+  </div>
+
+  <section id="dashboard" class="page active">
+    <div class="grid cards">
+      <div class="card metric"><div class="label">Balance</div><div id="balance" class="value">—</div><div class="sub">Broker account balance</div></div>
+      <div class="card metric"><div class="label">Equity</div><div id="equity" class="value">—</div><div class="sub">Live account equity</div></div>
+      <div class="card metric"><div class="label">Free margin</div><div id="freeMargin" class="value">—</div><div class="sub">Available margin capacity</div></div>
+      <div class="card metric"><div class="label">Current P/L</div><div id="profit" class="value">—</div><div id="profitPct" class="sub">—</div></div>
+    </div>
+
+    <div class="grid heroGrid">
+      <div class="card">
+        <div class="sectionTitle"><h2>Target progress</h2><span id="profileBadge" class="badge">NORMAL</span></div>
+        <div class="progressWrap">
+          <div class="progressLabels"><span id="progressText">Waiting for account data</span><span id="progressPct">—</span></div>
+          <div class="bar"><i id="progressBar"></i></div>
+        </div>
+        <div class="targetNums">
+          <div><small>Start</small><b id="startEq">—</b></div>
+          <div><small>Current</small><b id="currentEq">—</b></div>
+          <div><small>Target</small><b id="targetEq">—</b></div>
+        </div>
+        <div class="targetNums">
+          <div><small>Peak campaign profit</small><b id="peakPct">—</b></div>
+          <div><small>Protected profit</small><b id="floorPct">—</b></div>
+          <div><small>Next protection level</small><b id="nextFloor">—</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="sectionTitle"><h2>Active campaign</h2><span id="campaignBadge" class="badge">NO ACTIVE CAMPAIGN</span></div>
+        <div id="watching" class="empty">
+          <b style="color:#fff">Apex is watching</b><br>
+          Waiting for a high-quality setup.
+        </div>
+        <div id="campaignInfo" class="campaign hidden">
+          <div class="kv"><small>Direction</small><b id="direction">—</b></div>
+          <div class="kv"><small>Layers</small><b id="layers">—</b></div>
+          <div class="kv"><small>Total floating P/L</small><b id="basketPnl">—</b></div>
+          <div class="kv"><small>Campaign ID</small><b id="campaignId">—</b></div>
+        </div>
+        <div class="stage">
+          <div id="st0">Scanning</div><div id="st1">Impulse</div><div id="st2">Liquidity</div>
+          <div id="st3">Rejection</div><div id="st4">Confirmation</div><div id="st5">Entry</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="sectionTitle"><h2>Recent Apex activity</h2><span id="updated" class="badge">—</span></div>
+      <div id="timeline" class="timeline"><div class="empty">No activity loaded yet.</div></div>
+    </div>
+  </section>
+
+  <section id="campaigns" class="page">
+    <div class="card"><div class="sectionTitle"><h2>Current campaign</h2><span class="badge">LIVE</span></div><div id="campaignDetail" class="empty">No active campaign.</div></div>
+  </section>
+
+  <section id="history" class="page">
+    <div class="card"><div class="sectionTitle"><h2>Campaign history</h2><span class="badge">RECENT</span></div>
+      <div style="overflow:auto"><table class="table"><thead><tr><th>Time</th><th>Direction</th><th>Outcome</th><th>Layers</th><th>Peak</th><th>Result</th></tr></thead><tbody id="historyRows"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="learning" class="page">
+    <div class="grid cards">
+      <div class="card metric"><div class="label">Learning status</div><div id="learnAuthority" class="value" style="font-size:21px">—</div><div class="sub">Observation becomes bounded adaptation after enough campaigns</div></div>
+      <div class="card metric"><div class="label">Completed campaigns</div><div id="learnCompleted" class="value">—</div></div>
+      <div class="card metric"><div class="label">Target hits</div><div id="learnTargets" class="value">—</div></div>
+      <div class="card metric"><div class="label">Protected exits</div><div id="learnProtected" class="value">—</div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div class="sectionTitle"><h2>What Apex is learning</h2><span class="badge">BOUNDED</span></div><div id="learningText" class="subtitle">No completed learning data yet.</div></div>
+  </section>
+
+  <section id="settings" class="page">
+    <div class="grid two">
+      <div class="card">
+        <div class="sectionTitle"><h2>Campaign target</h2><span class="badge">NORMAL PROFILE</span></div>
+        <div class="formgrid">
+          <div class="field"><label>Account profile</label><select id="accountProfile"><option>NORMAL</option><option>UNLIMITED</option></select><div class="help">NORMAL uses profit targets + protection. UNLIMITED keeps multiplier-style targeting.</div></div>
+          <div class="field"><label>Broker account binding</label><input id="account" placeholder="0 = current EA account"></div>
+          <div class="field"><label>Normal target profit %</label><input id="normalTargetProfitPct" type="number" min="100" max="1000"></div>
+          <div class="field"><label>Unlimited target multiplier</label><input id="targetMultiplier" type="number"></div>
+        </div>
+        <div class="quick" style="margin-top:15px">
+          <button class="chip" onclick="setTarget(100)">+100%</button><button class="chip" onclick="setTarget(200)">+200%</button>
+          <button class="chip" onclick="setTarget(300)">+300%</button><button class="chip" onclick="setTarget(500)">+500%</button>
+          <button class="chip" onclick="setTarget(1000)">+1000%</button>
+        </div>
+        <div id="targetHelp" class="help" style="margin-top:14px"></div>
+      </div>
+
+      <div class="card">
+        <div class="sectionTitle"><h2>Aggression</h2><span class="badge good">TRADERSYNC 2.2</span></div>
+        <div class="formgrid">
+          <div class="field"><label>Starting margin allocation</label><input id="baseMarginPct" type="number" min=".1" max="100"><div class="help">Default: 30% of current free-margin capacity.</div></div>
+          <div class="field"><label>Pyramiding multiplier</label><input id="layerMultiplier" type="number" min="1" max="10" step=".1"><div class="help">Default: 2× after fresh favorable confirmation.</div></div>
+          <div class="field"><label>Max layers</label><input id="maxLayers" type="number" min="0" max="50"><div class="help">0 = no software layer ceiling.</div></div>
+          <div class="field"><label>Profit protection</label><select id="normalProfitFloorEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+        </div>
+        <div class="help" style="margin-top:14px">This is margin allocation, not classical risk-to-stop. Apex has no broker SL. Exposure only increases after the existing confirmation logic permits another layer.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="sectionTitle"><h2>Advanced strategy</h2><span class="badge">EXPERT SETTINGS</span></div>
+      <div class="formgrid">
+        <div class="field"><label>Entry score</label><input id="entryScore" type="number"></div>
+        <div class="field"><label>Add score</label><input id="addScore" type="number"></div>
+        <div class="field"><label>Impulse ATR</label><input id="impulseAtr" type="number" step=".1"></div>
+        <div class="field"><label>Sweep ATR</label><input id="sweepAtr" type="number" step=".01"></div>
+        <div class="field"><label>Rejection bars</label><input id="rejectionBars" type="number"></div>
+        <div class="field"><label>Watch expiry (minutes)</label><input id="watchExpiryMinutes" type="number"></div>
+        <div class="field"><label>Rejection zone ATR</label><input id="rejectionZoneAtr" type="number" step=".01"></div>
+        <div class="field"><label>Add spacing ATR</label><input id="addSpacingAtr" type="number" step=".01"></div>
+      </div>
+      <div class="help" style="margin-top:14px">Advanced parameters affect Apex setup recognition. The redesign does not alter the proven entry/setup logic.</div>
+      <button class="btn primary" style="margin-top:16px" onclick="saveSettings()">Save settings</button>
+      <span id="saveMsg" class="help" style="margin-left:10px"></span>
+    </div>
+  </section>
+</main>
+</div>
+
+<div class="mobileNav">
+  <button class="active" data-page="dashboard">Home</button><button data-page="campaigns">Campaign</button><button data-page="history">History</button><button data-page="learning">Learning</button><button data-page="settings">Settings</button>
+</div>
+
+<script>
+let TOKEN=sessionStorage.getItem('apex_admin_token')||'',DATA=null;
+const $=id=>document.getElementById(id);
+const money=v=>Number.isFinite(Number(v))?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(Number(v)):'—';
+const pct=v=>Number.isFinite(Number(v))?`${Number(v)>=0?'+':''}${Number(v).toFixed(1)}%`:'—';
+const h=()=>({'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'});
+async function login(){
+  TOKEN=$('loginToken').value.trim(); if(!TOKEN)return;
+  const r=await fetch('/api/admin/status',{headers:h()});
+  if(!r.ok){$('loginErr').textContent='Access denied. Check the token and try again.';TOKEN='';return}
+  sessionStorage.setItem('apex_admin_token',TOKEN); DATA=await r.json(); $('lock').classList.add('hidden'); render();
+}
+async function refresh(){
+  if(!TOKEN){$('lock').classList.remove('hidden');return}
+  const r=await fetch('/api/admin/status',{headers:h()});
+  if(r.status===401){sessionStorage.removeItem('apex_admin_token');TOKEN='';$('lock').classList.remove('hidden');return}
+  if(!r.ok)return;
+  DATA=await r.json();render();
+}
+function eventName(e){
+  const map={WATCH_ARMED:'Liquidity setup detected',CAMPAIGN_START:'Campaign started',LAYER_ADD:'New layer added',CAMPAIGN_END:'Campaign completed',TARGET_HIT:'Target reached'};
+  if(e.type==='CAMPAIGN_END'&&e.outcome==='PROFIT_FLOOR_HIT')return'Protected profit secured';
+  return map[e.type]||String(e.type||'Apex update').replaceAll('_',' ').toLowerCase().replace(/^\w/,c=>c.toUpperCase());
+}
+function render(){
+  if(!DATA)return;
+  const c=DATA.config||{},s=DATA.state||{},e=s.lastEA||{},l=DATA.learning||{},recent=DATA.recent||[];
+  const bal=Number(e.balance),eq=Number(e.equity),fm=Number(e.freeMargin),pl=(Number.isFinite(eq)&&Number.isFinite(bal))?eq-bal:null,pp=(Number.isFinite(pl)&&bal)?pl/bal*100:null;
+  $('balance').textContent=money(bal);$('equity').textContent=money(eq);$('freeMargin').textContent=money(fm);$('profit').textContent=money(pl);$('profitPct').textContent=pct(pp);
+  $('profileBadge').textContent=c.accountProfile||'NORMAL';
+  const start=Number(e.cycleStart||e.startEquity||bal), target=c.accountProfile==='NORMAL'&&Number.isFinite(start)?start*(1+Number(c.normalTargetProfitPct||1000)/100):Number(e.targetEq||0);
+  const prog=(Number.isFinite(eq)&&Number.isFinite(start)&&target>start)?Math.max(0,Math.min(100,(eq-start)/(target-start)*100)):0;
+  $('progressBar').style.width=prog+'%';$('progressPct').textContent=prog.toFixed(1)+'%';$('progressText').textContent=Number.isFinite(eq)?`${money(eq)} current equity`:'Waiting for MT5 account data';
+  $('startEq').textContent=money(start);$('currentEq').textContent=money(eq);$('targetEq').textContent=money(target);
+  $('peakPct').textContent=pct(e.peakProfitPct);$('floorPct').textContent=pct(e.floorProfitPct);
+  const peak=Number(e.peakProfitPct||0),next=peak<200?200:(Math.floor(peak/100)+1)*100;$('nextFloor').textContent='+'+next.toFixed(0)+'%';
+  const active=Boolean(s.campaignActive)||Boolean(e.campaignId&&Number(e.layers)>0);
+  $('campaignBadge').textContent=active?'ACTIVE CAMPAIGN':'NO ACTIVE CAMPAIGN';$('campaignBadge').classList.toggle('good',active);
+  $('watching').classList.toggle('hidden',active);$('campaignInfo').classList.toggle('hidden',!active);
+  if(active){$('direction').textContent=Number(e.direction||0)>0?'BUY':'SELL';$('layers').textContent=e.layers??'—';$('basketPnl').textContent=money(e.basketProfit);$('campaignId').textContent=e.campaignId||'—';$('campaignDetail').innerHTML=`<div class="campaign"><div class="kv"><small>Direction</small><b>${$('direction').textContent}</b></div><div class="kv"><small>Layers</small><b>${e.layers??'—'}</b></div><div class="kv"><small>Floating P/L</small><b>${money(e.basketProfit)}</b></div><div class="kv"><small>Campaign</small><b>${e.campaignId||'—'}</b></div></div>`}else{$('campaignDetail').textContent='No active campaign. Apex is waiting for the next confirmed setup.'}
+  [...Array(6)].forEach((_,i)=>$('st'+i).classList.remove('on')); let stage=0;if(recent.some(x=>x.type==='WATCH_ARMED'))stage=2;if(active)stage=5;for(let i=0;i<=stage;i++)$('st'+i).classList.add('on');
+  $('updated').textContent=s.updatedAt?`Updated ${new Date(s.updatedAt).toLocaleTimeString()}`:'MT5 not connected yet';
+  $('sideDot').className='dot '+(s.updatedAt?'ok':'bad');$('sideStatus').textContent=s.updatedAt?(c.armed?'Apex armed • backend online':'Apex disarmed • backend online'):'Waiting for MT5';
+  $('armBtn').textContent=c.armed?'Apex Armed':'Arm Apex';
+  $('timeline').innerHTML=recent.length?recent.slice(0,12).map(x=>`<div class="event"><time>${x.ts?new Date(x.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'—'}</time><div><b>${eventName(x)}</b><span>${x.outcome?String(x.outcome).replaceAll('_',' '):x.campaignId?`Campaign ${x.campaignId}`:'Apex system event'}</span></div></div>`).join(''):'<div class="empty">No Apex activity recorded yet.</div>';
+  const ends=recent.filter(x=>x.type==='CAMPAIGN_END').slice(0,30);$('historyRows').innerHTML=ends.length?ends.map(x=>`<tr><td>${x.ts?new Date(x.ts).toLocaleString():'—'}</td><td>${Number(x.direction)>0?'BUY':'SELL'}</td><td>${String(x.outcome||'—').replaceAll('_',' ')}</td><td>${x.layers??'—'}</td><td>${pct(x.mfe)}</td><td>${money(x.profit)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">No completed campaigns yet.</td></tr>';
+  $('learnAuthority').textContent=l.authority||'OBSERVATION_ONLY';$('learnCompleted').textContent=l.completedCampaigns??0;$('learnTargets').textContent=l.targetHits??0;$('learnProtected').textContent=l.protectedExits??0;
+  $('learningText').textContent=`Apex currently has ${l.completedCampaigns??0} completed campaigns. Target hits and profitable protection exits are treated as positive outcomes; genuine failures remain separate.`;
+  const ids=['accountProfile','account','normalTargetProfitPct','targetMultiplier','baseMarginPct','layerMultiplier','maxLayers','entryScore','addScore','impulseAtr','sweepAtr','rejectionBars','watchExpiryMinutes','rejectionZoneAtr','addSpacingAtr'];for(const id of ids)if($(id)&&c[id]!==undefined)$(id).value=c[id];
+  $('normalProfitFloorEnabled').value=String(c.normalProfitFloorEnabled!==false);updateTargetHelp();
+}
+function updateTargetHelp(){const v=Number($('normalTargetProfitPct').value||1000),s=Number(DATA?.state?.lastEA?.balance||0);$('targetHelp').textContent=s?`At ${money(s)} starting equity, +${v}% targets approximately ${money(s*(1+v/100))}.`:`+${v}% profit means ${(1+v/100).toFixed(1)}× starting equity.`}
+function setTarget(v){$('normalTargetProfitPct').value=v;updateTargetHelp()}
+async function setArmed(v){if(!DATA)return;const c={...DATA.config,armed:v};const r=await fetch('/api/admin/config',{method:'POST',headers:h(),body:JSON.stringify(c)});if(r.ok)await refresh()}
+async function saveSettings(){
+  if(!DATA)return;const c={...DATA.config};
+  const str=['accountProfile','account'];const bool=['normalProfitFloorEnabled'];
+  const ids=['accountProfile','account','normalTargetProfitPct','targetMultiplier','baseMarginPct','layerMultiplier','maxLayers','entryScore','addScore','impulseAtr','sweepAtr','rejectionBars','watchExpiryMinutes','rejectionZoneAtr','addSpacingAtr','normalProfitFloorEnabled'];
+  for(const id of ids){let v=$(id).value;c[id]=str.includes(id)?v:bool.includes(id)?v==='true':Number(v)}
+  const r=await fetch('/api/admin/config',{method:'POST',headers:h(),body:JSON.stringify(c)});$('saveMsg').textContent=r.ok?'Saved. EA will pick up the new config.':'Save failed.';if(r.ok)await refresh()
+}
+document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===b.dataset.page));document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===b.dataset.page))});
+$('normalTargetProfitPct').addEventListener('input',updateTargetHelp);
+if(TOKEN)refresh().then(()=>{if(DATA)$('lock').classList.add('hidden')}); setInterval(()=>{if(TOKEN)refresh()},10000);
 </script>
+</body>
+</html>

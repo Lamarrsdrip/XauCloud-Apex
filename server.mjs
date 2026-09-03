@@ -40,5 +40,8 @@ const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url,'htt
  if(req.method==='POST'&&u.pathname==='/api/admin/config'){if(!auth(req,ADMIN_TOKEN))return json(res,401,{error:'unauthorized'});const cfg=clean(await body(req));await atomic(CONFIG,cfg);await event({type:'CONFIG',config:cfg});return json(res,200,{ok:true,config:cfg});}
  if(req.method==='GET'&&u.pathname==='/'){const html=await fs.readFile(path.join(__dirname,'public','index.html'));res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html)}
  return json(res,404,{error:'not_found'});}catch(e){console.error(e);return json(res,500,{error:'internal_error'});}});
-if(process.argv[1]&&import.meta.url===`file://${process.argv[1]}`){await ensure();server.listen(PORT,()=>console.log(`XauCloud Apex :${PORT}`));}
+if(process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])){
+  await ensure();
+  server.listen(PORT, '0.0.0.0', ()=>console.log(`XauCloud Apex listening on 0.0.0.0:${PORT}`));
+}
 export{server};

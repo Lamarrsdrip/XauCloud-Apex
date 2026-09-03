@@ -15,6 +15,7 @@
   "rejectionBars": 5,
   "watchExpiryMinutes": 12,
   "addSpacingAtr": 0.22,
+  "rejectionZoneAtr": 0.12,
   "requireM3Confirm": true,
   "requireM5Context": false,
   "cooldownMinutes": 0,

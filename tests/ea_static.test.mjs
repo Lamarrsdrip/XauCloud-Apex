@@ -3,5 +3,9 @@ test('no broker SL',()=>{assert.doesNotMatch(s,/trade\.(Buy|Sell)\([^\n]*,[^\n]*
 test('15 percent then double margin ladder',()=>{assert.match(s,/baseMarginPct=15/);assert.match(s,/layerMultiplier=2/);assert.match(s,/MathPow\(C\.layerMultiplier,layers\)/)});
 test('setup is multi-stage not blind fade',()=>{for(const x of ['WATCH_ARMED','rejected','microBreak','CONFIRMED_EXHAUSTION_REVERSAL'])assert.match(s,new RegExp(x))});
 test('adds require profit and confirmation',()=>{assert.match(s,/if\(p<=0\)return/);assert.match(s,/continuation\|\|s\.pullbackFail\|\|s\.microBreak/);assert.match(s,/spaced&&earned/)});
-test('equity target basket close',()=>{assert.match(s,/eq>=targetEq/);assert.match(s,/BASKET_EQUITY_TARGET/)});
+test('equity target basket close uses campaign-scoped equity, not raw account equity',()=>{assert.match(s,/campEq>=targetEq/);assert.match(s,/campEq=cycleStart\+p/);assert.match(s,/BASKET_EQUITY_TARGET/)});
 test('learning adjustments consumed',()=>{assert.match(s,/learnEntryAdj/);assert.match(s,/learnAddAdj/)});
+test('campaign start emits the real feature vector the learning brain needs, not just the score',()=>{assert.match(s,/\\"impulseMult\\":%\.3f/);assert.match(s,/\\"wickRatio\\":%\.3f/);assert.match(s,/\\"m3\\":%s/);assert.match(s,/\\"m5\\":%s/)});
+test('rejection zone width is configurable, not a silent magic number',()=>{assert.match(s,/rejectionZoneAtr=\.12/);assert.match(s,/C\.rejectionZoneAtr\*s\.atr/);assert.doesNotMatch(s,/-\.12\*s\.atr/)});
+test('restart recovery is magic-number scoped, not a blind PositionSelect guess',()=>{assert.match(s,/NewestMagicPosition/);assert.match(s,/PositionGetInteger\(POSITION_MAGIC\)!=InpMagic/);assert.doesNotMatch(s,/PositionSelect\(_Symbol\)&&PositionGetInteger\(POSITION_TYPE\)/)});
+test('restart recovery persists and reloads local state so pyramiding does not silently freeze',()=>{assert.match(s,/SaveState/);assert.match(s,/LoadState/);assert.match(s,/ClearState/)});

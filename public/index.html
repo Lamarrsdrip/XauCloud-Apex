@@ -316,6 +316,17 @@ function showApp(){
   route();
 }
 
+function licenseErrorMessage(errMsg){
+  var msgs = {
+    LICENSE_NOT_FOUND: 'License not found. Check the key and try again.',
+    LICENSE_EXPIRED: 'This license has expired.',
+    LICENSE_DISABLED: 'This license has been disabled.',
+    too_many_attempts: 'Too many attempts. Please wait a few minutes and try again.',
+    license_required: 'Enter your Apex license key.'
+  };
+  return msgs[errMsg] || 'Unable to verify license. Please try again.';
+}
+
 document.getElementById('login-form').addEventListener('submit', function(e){
   e.preventDefault();
   var key = document.getElementById('license-input').value.trim().toUpperCase();
@@ -329,14 +340,7 @@ document.getElementById('login-form').addEventListener('submit', function(e){
     boot();
   }).catch(function(e){
     btn.disabled=false; btn.textContent='Continue';
-    var msgs = {
-      LICENSE_NOT_FOUND: 'License not found. Check the key and try again.',
-      LICENSE_EXPIRED: 'This license has expired.',
-      LICENSE_DISABLED: 'This license has been disabled.',
-      too_many_attempts: 'Too many attempts. Please wait a few minutes and try again.',
-      license_required: 'Enter your Apex license key.'
-    };
-    errBox.textContent = msgs[e.message] || 'Unable to verify license. Please try again.';
+    errBox.textContent = licenseErrorMessage(e.message);
     errBox.style.display='block';
   });
 });
@@ -627,7 +631,16 @@ function pageSettings(me){
   var s = me.settings || {};
   var adv = s.advanced || {};
   var disabled = !me.dataAvailable;
+  var lic = me.license || {};
   var html = '<h1 class="page-title">Settings</h1><p class="page-sub">How Apex trades your account</p>';
+  html += '<div class="card"><h3>License</h3>'
+    + '<div class="row"><span class="k">Current License</span><span class="v" style="font-size:12px">'+esc(lic.key||'—')+'</span></div>'
+    + '<div class="field" style="margin-top:14px"><label>Change License</label>'
+    + '<input id="f-change-license" class="license-input" placeholder="APEX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">'
+    + '<div class="hint">Switch this device to a different Apex license. You will immediately see that license\'s own data.</div></div>'
+    + '<div id="change-license-err" class="err-box" style="margin-top:0;margin-bottom:12px"></div>'
+    + '<button class="btn btn-ghost" id="change-license-btn">Change License</button>'
+    + '</div>';
   html += armDisarmCard(me);
   html += '<div class="card"><h3>Account</h3>'
     + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
@@ -669,6 +682,27 @@ function advField(label, id, value, disabled){
 }
 function wireSettings(me){
   wireDashboardControls();
+  var changeBtn = document.getElementById('change-license-btn');
+  if (changeBtn) changeBtn.addEventListener('click', function(){
+    var key = document.getElementById('f-change-license').value.trim().toUpperCase();
+    var errBox = document.getElementById('change-license-err');
+    errBox.style.display='none';
+    if (!key){ errBox.textContent='Enter an Apex license key.'; errBox.style.display='block'; return; }
+    changeBtn.disabled = true; changeBtn.textContent='Checking...';
+    api('/api/auth/login', {method:'POST', body:{license:key}}).then(function(){
+      changeBtn.disabled=false; changeBtn.textContent='Change License';
+      toast('License changed');
+      return api('/api/auth/me');
+    }).then(function(newMe){
+      STATE.me = newMe;
+      renderStatusPills();
+      if (STATE.page==='settings') renderPage();
+    }).catch(function(e){
+      changeBtn.disabled=false; changeBtn.textContent='Change License';
+      errBox.textContent = licenseErrorMessage(e.message);
+      errBox.style.display='block';
+    });
+  });
   var advToggle = document.getElementById('advanced-toggle');
   if (advToggle) advToggle.addEventListener('click', function(){
     document.getElementById('advanced-body').classList.toggle('open');

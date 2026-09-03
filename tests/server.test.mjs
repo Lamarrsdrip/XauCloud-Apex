@@ -265,3 +265,23 @@ test('logout clears the session cookie',async()=>{
   assert.match(r.headers['set-cookie'][0],/Max-Age=0/);
  });
 });
+
+test('the correct admin token succeeds when there is no prior lockout',async()=>{
+ await withServer(async base=>{
+  const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
+  const r=await req(base,'/api/admin/status',{headers:{authorization:`Bearer ${ADMIN_TOKEN}`}});
+  assert.equal(r.status,200);
+ });
+});
+
+test('repeated wrong admin tokens lock out that client, and a correct token during the lockout still fails',async()=>{
+ await withServer(async base=>{
+  for(let i=0;i<8;i++){
+   const r=await req(base,'/api/admin/status',{headers:{authorization:'Bearer wrong-token'}});
+   assert.equal(r.status,401);
+  }
+  const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
+  const stillLocked=await req(base,'/api/admin/status',{headers:{authorization:`Bearer ${ADMIN_TOKEN}`}});
+  assert.equal(stillLocked.status,401);
+ });
+});

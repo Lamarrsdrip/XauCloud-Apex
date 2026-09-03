@@ -99,6 +99,20 @@ function clientIp(req){
   return req.socket.remoteAddress||'unknown';
 }
 
+// ---------- admin-token brute-force lockout ----------
+const adminFails=new Map();
+const ADMIN_FAIL_WINDOW_MS=10*60*1000,ADMIN_FAIL_MAX=8,ADMIN_LOCKOUT_MS=15*60*1000;
+function adminAuthOk(req){
+  const ip=clientIp(req),now=Date.now();
+  const rec=adminFails.get(ip);
+  if(rec&&rec.blockedUntil>now)return false;
+  const ok=auth(req,ADMIN_TOKEN);
+  if(ok){adminFails.delete(ip);return true}
+  const count=(rec&&rec.resetAt>now?rec.count:0)+1;
+  adminFails.set(ip,{count,resetAt:now+ADMIN_FAIL_WINDOW_MS,blockedUntil:count>=ADMIN_FAIL_MAX?now+ADMIN_LOCKOUT_MS:0});
+  return false;
+}
+
 // ---------- sessions (HMAC-signed, HttpOnly cookie) ----------
 function b64u(buf){return buf.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function fromB64u(s){return Buffer.from(s.replace(/-/g,'+').replace(/_/g,'/'),'base64')}
@@ -442,26 +456,26 @@ const server=http.createServer(async(req,res)=>{
 
     // ---------- admin (raw debug + license issuance) ----------
     if(req.method==='GET'&&u.pathname==='/api/admin/status'){
-      if(!auth(req,ADMIN_TOKEN))return json(res,401,{error:'unauthorized'});
+      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
       const cfg=clean(await read(CONFIG,DEFAULT)),events=await allEvents(),state=await read(STATE,{});
       return json(res,200,publicState(cfg,state,learn(events,cfg),events.slice().reverse()));
     }
 
     if(req.method==='POST'&&u.pathname==='/api/admin/config'){
-      if(!auth(req,ADMIN_TOKEN))return json(res,401,{error:'unauthorized'});
+      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
       const incoming=await body(req);
       const cfg=await writeConfigMerge(incoming);
       return json(res,200,{ok:true,config:cfg});
     }
 
     if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
-      if(!auth(req,ADMIN_TOKEN))return json(res,401,{error:'unauthorized'});
+      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
       const licenses=await readLicenses();
       return json(res,200,{licenses:Object.entries(licenses).map(([key,l])=>({key,...l,status:licenseStatusFor(l)}))});
     }
 
     if(req.method==='POST'&&u.pathname==='/api/admin/licenses'){
-      if(!auth(req,ADMIN_TOKEN))return json(res,401,{error:'unauthorized'});
+      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
       const b=await body(req);
       const licenses=await readLicenses();
       const key=b.key&&licenses[b.key]?b.key:(b.key||genLicenseKey());

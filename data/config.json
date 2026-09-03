@@ -6,7 +6,7 @@
   "accountProfile": "NORMAL",
   "targetEquity": 1000,
   "targetMultiplier": 100,
-  "normalTargetProfitPct": 1000,
+  "normalTargetProfitPct": 100,
   "normalProfitFloorEnabled": true,
   "baseMarginPct": 30,
   "layerMultiplier": 2,

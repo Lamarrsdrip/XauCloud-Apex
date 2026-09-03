@@ -2,5 +2,7 @@ node_modules/
 .env
 data/events.ndjson
 data/state.json
+data/licenses.json
+.test-data/
 *.log
 .DS_Store

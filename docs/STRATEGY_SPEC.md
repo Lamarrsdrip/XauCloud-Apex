@@ -338,3 +338,43 @@ logic per the explicit no-risk-management instruction.
   re-entries, but requiring real price movement between adds is what prevents the
   documented failure mode of firing duplicate orders off a single stale signal (spec's
   own test case for this), and it's not a risk-limiting change, it's a correctness one.
+
+### Fourth pass (2026-09-03): the "loses immediately" bug
+
+The account owner tested Apex and it lost immediately on the very first entry. Working
+through his own detailed breakdown of the trader's decision process side-by-side with
+the actual `Observe()` code surfaced the cause: **the sweep candle and the
+rejection/structure-break confirmation could be the same candle.**
+
+`watch` gets armed off the most recently closed M1 bar (the sweep bar). In the same
+function call, on the same tick, the rejection-wick and micro-BOS checks scan the last
+`rejectionBars` candles — which still includes that same sweep bar. A single volatile
+candle that spikes through a prior level *and* closes back sharply enough can satisfy
+sweep + rejection + structure-break all at once, with zero bars of real separation. The
+trader's own description is explicit that these are sequential, separate pieces of
+evidence unfolding *after* the sweep, not one candle doing everything — "the sweep
+itself still isn't enough... he watches what price does AFTER taking the level." The
+code didn't enforce that separation.
+
+**Fixed**: the bar time of the sweep candle is now recorded (`watchSweepBarTime`), and
+the rejection scan and the micro-BOS check both skip any candle at or before it —
+confirmation can now only come from a candle that closed strictly after the sweep. This
+should substantially reduce (not necessarily eliminate) single-candle false triggers,
+which is the most likely explanation for an immediate stop-out on first entry — a low
+one-candle-quality "confirmation" is a much weaker setup than the intended multi-stage
+one, and weaker setups fail faster and more often, consistent with "loses immediately."
+
+**Two gaps surfaced by the same discussion, genuinely unresolved, not fixed this pass:**
+- **No predefined-zone concept.** The trader's public material references pre-marked
+  buy/sell zones from his own indicator ("zone = attention, price action = permission");
+  Apex instead treats *any* sufficiently large recent swing high/low (a generic rolling
+  70-bar lookback) as a valid liquidity location. This could mean Apex reacts to level
+  breaks that wouldn't actually be significant to him. Not fixed — we don't have access
+  to his indicator's actual zone logic, and inventing one would be a guess dressed up as
+  a fix.
+- **No market-regime/"standby" filter.** His own public posts describe explicitly
+  standing aside in slow or manipulated conditions rather than trading every qualifying
+  setup. Apex has no equivalent — it will arm a watch and act on any impulse+sweep that
+  meets the numeric thresholds, regardless of broader session/regime context. Flagged as
+  a real gap, not built — "market feels choppy/manipulated" isn't something available
+  evidence gives a measurable definition for yet.

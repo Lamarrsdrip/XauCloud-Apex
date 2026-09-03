@@ -20,8 +20,10 @@ const DEFAULT={
   armed:false,account:'0',symbolContains:'XAUUSD',
   targetMode:'MULTIPLIER',accountProfile:'NORMAL',
   targetEquity:1000,targetMultiplier:100,
-  normalTargetProfitPct:100,normalProfitFloorEnabled:true,
-  baseMarginPct:30,layerMultiplier:2,maxLayers:0,
+  normalTargetProfitPct:0,
+  baseMarginPct:100,layerMultiplier:2,maxLayers:0,
+  normalFixedSLGoldMove:10,
+  profitRatchetEnabled:true,ratchetTriggerPct:200,ratchetLockPct:100,ratchetStepPct:100,ratchetLockStepPct:100,
   entryScore:76,addScore:70,impulseAtr:1.8,sweepAtr:.05,
   rejectionBars:5,watchExpiryMinutes:12,addSpacingAtr:.22,
   rejectionZoneAtr:.12,requireM3Confirm:true,requireM5Context:false,
@@ -29,7 +31,11 @@ const DEFAULT={
   learningMaxScoreAdjustment:5
 };
 
-const OBSOLETE_FIELDS=['normalAccountMaxMultiplier','enableInvalidationExit','invalidationGivebackPct'];
+const OBSOLETE_FIELDS=[
+  'normalAccountMaxMultiplier','enableInvalidationExit','invalidationGivebackPct',
+  'normalProfitFloorEnabled',
+  'ratchetTriggerMoney','ratchetLockMoney','ratchetStepMoney','ratchetLockStepMoney'
+];
 
 async function atomic(file,obj){const t=file+'.tmp'+process.pid;await fs.writeFile(t,JSON.stringify(obj,null,2));await fs.rename(t,file)}
 async function ensure(){
@@ -51,11 +57,16 @@ export function clean(x={}){
     accountProfile:['NORMAL','UNLIMITED'].includes(x.accountProfile)?x.accountProfile:'NORMAL',
     targetEquity:num(x.targetEquity,1000,.01,1e12),
     targetMultiplier:num(x.targetMultiplier,100,1.001,1e9),
-    normalTargetProfitPct:num(x.normalTargetProfitPct,100,10,1000),
-    normalProfitFloorEnabled:x.normalProfitFloorEnabled!==false,
-    baseMarginPct:num(x.baseMarginPct,30,.1,100),
+    normalTargetProfitPct:num(x.normalTargetProfitPct,0,0,1e6),
+    baseMarginPct:num(x.baseMarginPct,100,.01,100),
     layerMultiplier:num(x.layerMultiplier,2,1,10),
     maxLayers:Math.round(num(x.maxLayers,0,0,50)),
+    normalFixedSLGoldMove:num(x.normalFixedSLGoldMove,10,0,1e6),
+    profitRatchetEnabled:x.profitRatchetEnabled!==false,
+    ratchetTriggerPct:num(x.ratchetTriggerPct,200,.01,1e6),
+    ratchetLockPct:num(x.ratchetLockPct,100,0,1e6),
+    ratchetStepPct:num(x.ratchetStepPct,100,.01,1e6),
+    ratchetLockStepPct:num(x.ratchetLockStepPct,100,0,1e6),
     entryScore:num(x.entryScore,76,40,100),
     addScore:num(x.addScore,70,40,100),
     impulseAtr:num(x.impulseAtr,1.8,.5,10),
@@ -288,14 +299,19 @@ function humanEvent(e){
     case 'WATCH_ARMED': return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
     case 'CAMPAIGN_START': return `${dir} campaign started`;
     case 'LAYER_OPEN': return `Market confirmed continuation — added position ${e.layer}`;
-    case 'PROFIT_FLOOR_RAISED': return `Protected-profit floor raised to ${Number(e.floorProfitPct||0).toFixed(0)}%`;
+    case 'PROFIT_RATCHET_EXIT': return `Protected profit secured at ${Number(e.protectedPct||0).toFixed(0)}% — closing campaign`;
+    case 'MASTER_SL_MOVED': return 'Master position stop-loss updated';
     case 'CAMPAIGN_END':
       if(e.outcome==='TARGET_HIT')return `${dir} campaign complete — target reached`;
       if(e.outcome==='PROFIT_FLOOR_HIT')return 'Protected profit secured — campaign closed';
+      if(e.outcome==='MASTER_SL_BASKET_EXIT')return `${dir} campaign closed — stop loss hit`;
+      if(e.outcome==='MASTER_LEG_CLOSED')return `${dir} campaign closed — master position closed`;
       return `${dir} campaign ended — broker/margin stop-out`;
     case 'CAMPAIGN_RECOVERED': return 'Apex reconnected to an in-progress campaign after a restart';
     case 'ADD_BLOCKED': return 'Add skipped — no available margin capacity';
     case 'ORDER_FAIL': return `Order failed (broker rejected, code ${e.retcode})`;
+    case 'MASTER_SL_MOVE_FAIL': return 'Master stop-loss update failed';
+    case 'CONFIG_SYNC': case 'MARGIN_CALC': return null;
     default: return e.type;
   }
 }
@@ -348,7 +364,7 @@ function buildHistory(events){
       startEquity,endEquity,profitPct,
       layers:e.layers,
       outcome:e.outcome,
-      outcomeLabel:e.outcome==='TARGET_HIT'?'TARGET HIT':e.outcome==='PROFIT_FLOOR_HIT'?'PROFIT PROTECTED':'BROKER/MARGIN STOP-OUT',
+      outcomeLabel:e.outcome==='TARGET_HIT'?'TARGET HIT':e.outcome==='PROFIT_FLOOR_HIT'?'PROFIT PROTECTED':e.outcome==='MASTER_SL_BASKET_EXIT'?'STOP LOSS HIT':e.outcome==='MASTER_LEG_CLOSED'?'MASTER POSITION CLOSED':'BROKER/MARGIN STOP-OUT',
       reason:e.reason||null,
       mfe:e.mfe,mae:e.mae,durationSec:e.durationSec
     };
@@ -378,7 +394,7 @@ async function buildMe(licenseKey){
   const campaign=findActiveCampaign(events);
   const history=buildHistory(events).slice(0,50);
   const learning=learn(events,cfg);
-  const recentHuman=events.slice(-30).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)}));
+  const recentHuman=events.slice(-60).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(e=>e.text!==null).slice(0,30);
 
   return {
     license:baseLicense,
@@ -391,13 +407,31 @@ async function buildMe(licenseKey){
     history,
     learning,
     recentHuman,
+    effectiveConfig:latest?{
+      marginPct:latest.marginPct,
+      takeProfitPct:latest.takeProfitPct,
+      fixedSLGoldMove:latest.fixedSLGoldMove,
+      ratchetEnabled:latest.ratchetEnabled,
+      ratchetTriggerPct:latest.ratchetTriggerPct,
+      ratchetLockPct:latest.ratchetLockPct,
+      ratchetStepPct:latest.ratchetStepPct,
+      ratchetLockStepPct:latest.ratchetLockStepPct,
+      configSource:latest.configSource||null,
+      eaVersion:latest.eaVersion||null,
+      asOf:latest.ts
+    }:null,
     settings:{
       accountProfile:cfg.accountProfile,
       normalTargetProfitPct:cfg.normalTargetProfitPct,
       baseMarginPct:cfg.baseMarginPct,
       layerMultiplier:cfg.layerMultiplier,
       maxLayers:cfg.maxLayers,
-      normalProfitFloorEnabled:cfg.normalProfitFloorEnabled,
+      normalFixedSLGoldMove:cfg.normalFixedSLGoldMove,
+      profitRatchetEnabled:cfg.profitRatchetEnabled,
+      ratchetTriggerPct:cfg.ratchetTriggerPct,
+      ratchetLockPct:cfg.ratchetLockPct,
+      ratchetStepPct:cfg.ratchetStepPct,
+      ratchetLockStepPct:cfg.ratchetLockStepPct,
       advanced:{
         entryScore:cfg.entryScore,addScore:cfg.addScore,impulseAtr:cfg.impulseAtr,sweepAtr:cfg.sweepAtr,
         rejectionBars:cfg.rejectionBars,watchExpiryMinutes:cfg.watchExpiryMinutes,rejectionZoneAtr:cfg.rejectionZoneAtr,
@@ -424,7 +458,7 @@ const server=http.createServer(async(req,res)=>{
     const u=new URL(req.url,'http://localhost');
 
     if(u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'2.2.0'});
+      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.1.1'});
 
     // ---------- EA contract ----------
     if(req.method==='GET'&&u.pathname==='/api/ea/config'){

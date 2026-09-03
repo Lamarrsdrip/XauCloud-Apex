@@ -1,36 +1,81 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {clean,learn} from '../server.mjs';
 
-test('defaults match the current NORMAL plan: 30% base margin, 2x layering, +100% target',()=>{
+test('defaults match the v3.1 NORMAL plan: 100% margin, 2x layering, hard TP disabled, percentage ratchet on',()=>{
  const c=JSON.parse(fs.readFileSync(new URL('../data/config.json',import.meta.url)));
- assert.equal(c.baseMarginPct,30);
+ assert.equal(c.baseMarginPct,100);
  assert.equal(c.layerMultiplier,2);
  assert.equal(c.maxLayers,0);
  assert.equal(c.cooldownMinutes,0);
- assert.equal(c.normalTargetProfitPct,100);
+ assert.equal(c.normalTargetProfitPct,0);
  assert.equal(c.accountProfile,'NORMAL');
+ assert.equal(c.normalFixedSLGoldMove,10);
+ assert.equal(c.profitRatchetEnabled,true);
+ assert.equal(c.ratchetTriggerPct,200);
+ assert.equal(c.ratchetLockPct,100);
+ assert.equal(c.ratchetStepPct,100);
+ assert.equal(c.ratchetLockStepPct,100);
 });
 
 test('clean() bounds and defaults untrusted input',()=>{
  const c=clean({baseMarginPct:'not a number',layerMultiplier:999,maxLayers:-5,targetMode:'BOGUS'});
- assert.equal(c.baseMarginPct,30);
+ assert.equal(c.baseMarginPct,100);
  assert.equal(c.layerMultiplier,10);
  assert.equal(c.maxLayers,0);
  assert.equal(c.targetMode,'MULTIPLIER');
 });
 
-test('clean() defaults normalTargetProfitPct to +100% for NORMAL accounts, not the old +1000%',()=>{
+test('clean() defaults normalTargetProfitPct to 0 (hard TP disabled) so the percentage ratchet is the intended default exit',()=>{
  const c=clean({});
- assert.equal(c.normalTargetProfitPct,100);
+ assert.equal(c.normalTargetProfitPct,0);
  assert.equal(c.accountProfile,'NORMAL');
 });
 
-test('clean() strips obsolete removed fields (normalAccountMaxMultiplier, enableInvalidationExit, invalidationGivebackPct) instead of persisting them',()=>{
- const c=clean({normalAccountMaxMultiplier:3,enableInvalidationExit:true,invalidationGivebackPct:.5,baseMarginPct:30});
+test('clean() allows 0 as a valid normalTargetProfitPct (does not clamp it away as if invalid)',()=>{
+ assert.equal(clean({normalTargetProfitPct:0}).normalTargetProfitPct,0);
+});
+
+test('clean() bounds margin to (0,100]: in-range values pass through, out-of-range clamp to the nearest bound, and only non-finite input falls back to the default',()=>{
+ assert.equal(clean({baseMarginPct:150}).baseMarginPct,100);
+ assert.equal(clean({baseMarginPct:-5}).baseMarginPct,.01);
+ assert.equal(clean({baseMarginPct:'abc'}).baseMarginPct,100);
+ assert.equal(clean({baseMarginPct:Infinity}).baseMarginPct,100);
+ assert.equal(clean({baseMarginPct:NaN}).baseMarginPct,100);
+});
+
+test('clean() fixed SL: 0 is a valid disabled value, negative clamps up to 0 (never goes negative), non-finite falls back to default',()=>{
+ assert.equal(clean({normalFixedSLGoldMove:0}).normalFixedSLGoldMove,0);
+ assert.equal(clean({normalFixedSLGoldMove:25}).normalFixedSLGoldMove,25);
+ assert.equal(clean({normalFixedSLGoldMove:-5}).normalFixedSLGoldMove,0);
+ assert.equal(clean({normalFixedSLGoldMove:'abc'}).normalFixedSLGoldMove,10);
+});
+
+test('clean() ratchet fields: trigger/step are held just above 0 (never 0 or negative), lock/lockStep allow exactly 0, non-finite falls back to default',()=>{
+ assert.equal(clean({ratchetTriggerPct:0}).ratchetTriggerPct,.01);
+ assert.equal(clean({ratchetTriggerPct:-10}).ratchetTriggerPct,.01);
+ assert.equal(clean({ratchetTriggerPct:'abc'}).ratchetTriggerPct,200);
+ assert.equal(clean({ratchetStepPct:0}).ratchetStepPct,.01);
+ assert.equal(clean({ratchetLockPct:0}).ratchetLockPct,0);
+ assert.equal(clean({ratchetLockStepPct:0}).ratchetLockStepPct,0);
+ assert.equal(clean({profitRatchetEnabled:false}).profitRatchetEnabled,false);
+});
+
+test('clean() strips obsolete removed fields (normalAccountMaxMultiplier, enableInvalidationExit, invalidationGivebackPct, normalProfitFloorEnabled) instead of persisting them',()=>{
+ const c=clean({normalAccountMaxMultiplier:3,enableInvalidationExit:true,invalidationGivebackPct:.5,normalProfitFloorEnabled:true,baseMarginPct:100});
  assert.equal(c.normalAccountMaxMultiplier,undefined);
  assert.equal(c.enableInvalidationExit,undefined);
  assert.equal(c.invalidationGivebackPct,undefined);
+ assert.equal(c.normalProfitFloorEnabled,undefined);
  assert.equal(Object.keys(c).includes('normalAccountMaxMultiplier'),false);
+ assert.equal(Object.keys(c).includes('normalProfitFloorEnabled'),false);
+});
+
+test('clean() strips the old money-based ratchet fields from the wrong v3.0.0 build — must never reach the current config schema',()=>{
+ const c=clean({ratchetTriggerMoney:200,ratchetLockMoney:100,ratchetStepMoney:100,ratchetLockStepMoney:100});
+ assert.equal(Object.keys(c).includes('ratchetTriggerMoney'),false);
+ assert.equal(Object.keys(c).includes('ratchetLockMoney'),false);
+ assert.equal(Object.keys(c).includes('ratchetStepMoney'),false);
+ assert.equal(Object.keys(c).includes('ratchetLockStepMoney'),false);
 });
 
 test('clean() validates accountProfile is NORMAL or UNLIMITED only',()=>{

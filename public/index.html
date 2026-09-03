@@ -537,6 +537,43 @@ function armDisarmCard(me){
   return '<div class="card"><div class="toggle-row"><div><div class="lbl">Apex Armed</div><div class="hint">When disarmed, Apex will not start new campaigns or add new layers. Active positions are still managed.</div></div>'
     + '<label class="switch"><input type="checkbox" id="arm-toggle" '+(me.armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div></div>';
 }
+function configSyncCard(me){
+  var ec = me.effectiveConfig;
+  if (!ec) return '<div class="card"><h3>Config &amp; Sync</h3><div class="row"><span class="k">Status</span><span class="v">No EA contact yet</span></div></div>';
+  var sourceTone = ec.configSource==='REMOTE' ? 'green' : 'amber';
+  var sourceLabel = ec.configSource==='REMOTE' ? 'Remote (website)' : (ec.configSource==='LOCAL_INPUT' ? 'Local MT5 Inputs' : '—');
+  return '<div class="card"><h3>Config &amp; Sync</h3>'
+    + '<div class="row"><span class="k">Config Source</span><span class="v">'+pill(sourceLabel, sourceTone)+'</span></div>'
+    + '<div class="row"><span class="k">EA Version</span><span class="v" style="font-size:12px">'+esc(ec.eaVersion||'—')+'</span></div>'
+    + '<div class="row"><span class="k">EA Last Synced</span><span class="v">'+esc(fmtAgo(ec.asOf))+'</span></div>'
+    + '<div class="row"><span class="k">Effective Margin</span><span class="v">'+esc(ec.marginPct)+'%</span></div>'
+    + '<div class="row"><span class="k">Effective TP</span><span class="v">'+(ec.takeProfitPct>0? esc(ec.takeProfitPct)+'%' : 'Disabled')+'</span></div>'
+    + '<div class="row"><span class="k">Effective Fixed SL</span><span class="v">'+(ec.fixedSLGoldMove>0? esc(ec.fixedSLGoldMove)+' XAU move' : 'Disabled')+'</span></div>'
+    + '<div class="row"><span class="k">Effective Ratchet</span><span class="v">'+(ec.ratchetEnabled? ('+' +esc(ec.ratchetTriggerPct)+'% → +'+esc(ec.ratchetLockPct)+'%') : 'Off')+'</span></div>'
+    + '</div>';
+}
+function ratchetLadderHtml(trigger, lock, step, lockStep, enabled){
+  if (!enabled) return '<div class="empty-state" style="padding:14px"><p>Profit Ratchet is off. The basket will only exit via the hard Take Profit (if set above 0) or the fixed master stop-loss.</p></div>';
+  trigger = Number(trigger)||0; lock = Number(lock)||0; step = Number(step)||0; lockStep = Number(lockStep)||0;
+  if (trigger<=0 || step<=0) return '<div class="empty-state" style="padding:14px"><p>Enter a trigger % and step % above 0 to preview the ladder.</p></div>';
+  var rows = '';
+  for (var i=0;i<4;i++){
+    var peak = trigger + step*i;
+    var protectedPct = lock + lockStep*i;
+    rows += '<div class="row"><span class="k">+'+peak.toFixed(0)+'% peak</span><span class="v">+'+protectedPct.toFixed(0)+'% protected</span></div>';
+  }
+  return '<h3 style="margin-bottom:6px">Preview</h3>' + rows + '<div class="hint" style="margin-top:8px">...and so on, ratcheting forward. Never decreases when profit retraces.</div>';
+}
+function updateRatchetPreview(){
+  var box = document.getElementById('ratchet-preview');
+  if (!box) return;
+  var enabled = document.getElementById('f-profitRatchetEnabled').checked;
+  var trigger = document.getElementById('f-ratchetTriggerPct').value;
+  var lock = document.getElementById('f-ratchetLockPct').value;
+  var step = document.getElementById('f-ratchetStepPct').value;
+  var lockStep = document.getElementById('f-ratchetLockStepPct').value;
+  box.innerHTML = ratchetLadderHtml(trigger, lock, step, lockStep, enabled);
+}
 
 function wireDashboardControls(){
   var t = document.getElementById('arm-toggle');
@@ -642,20 +679,33 @@ function pageSettings(me){
     + '<button class="btn btn-ghost" id="change-license-btn">Change License</button>'
     + '</div>';
   html += armDisarmCard(me);
+  html += configSyncCard(me);
   html += '<div class="card"><h3>Account</h3>'
     + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
     + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>NORMAL</option>'
     + '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>UNLIMITED</option>'
     + '</select><div class="hint">NORMAL accounts close the whole basket at a fixed target and start fresh. UNLIMITED accounts use a multiplier-style target.</div></div>'
     + '<div class="field-grid">'
-    + '<div class="field"><label>Target Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Default +100%. Once reached, the basket closes and Apex resets.</div></div>'
-    + '<div class="field"><label>Starting Margin Allocation (%)</label><input type="number" id="f-baseMarginPct" value="'+esc(s.baseMarginPct)+'" '+(disabled?'disabled':'')+'></div>'
+    + '<div class="field"><label>Margin Allocation (%)</label><input type="number" id="f-baseMarginPct" value="'+esc(s.baseMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">First-layer margin allocation. Must be &gt;0 and &le;100.</div></div>'
+    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). The Profit Ratchet below is the intended exit — a hard TP would close the basket before the ratchet can activate.</div></div>'
+    + '<div class="field"><label>Fixed Master SL — Gold Move ($)</label><input type="number" step="any" id="f-normalFixedSLGoldMove" value="'+esc(s.normalFixedSLGoldMove)+'" '+(disabled?'disabled':'')+'><div class="hint">XAU price distance from the first (master) entry, not pips or account money. 0 = no broker stop-loss on the master position.</div></div>'
     + '<div class="field"><label>Pyramiding Multiplier</label><input type="number" id="f-layerMultiplier" value="'+esc(s.layerMultiplier)+'" '+(disabled?'disabled':'')+'></div>'
     + '<div class="field"><label>Max Layers</label><input type="number" id="f-maxLayers" value="'+esc(s.maxLayers)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = broker/margin limited (no software cap)</div></div>'
     + '</div>'
-    + '<div class="toggle-row"><div><div class="lbl">Profit Protection</div><div class="hint">Locks in gains if a large floating profit gives back sharply on a NORMAL account.</div></div>'
-    + '<label class="switch"><input type="checkbox" id="f-normalProfitFloorEnabled" '+(s.normalProfitFloorEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save Settings</button></div>'
+    + '</div>';
+
+  html += '<div class="card"><h3>Profit Ratchet</h3>'
+    + '<div class="toggle-row"><div><div class="lbl">Profit Ratchet</div><div class="hint">Protects basket profit in stages as it grows. The floor only ever moves up — it never decreases when profit retraces.</div></div>'
+    + '<label class="switch"><input type="checkbox" id="f-profitRatchetEnabled" '+(s.profitRatchetEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
+    + '<div class="field-grid" style="margin-top:14px">'
+    + '<div class="field"><label>Start protecting profit at (%)</label><input type="number" step="any" id="f-ratchetTriggerPct" value="'+esc(s.ratchetTriggerPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Peak campaign profit, as % of campaign-start balance.</div></div>'
+    + '<div class="field"><label>Initial profit lock (%)</label><input type="number" step="any" id="f-ratchetLockPct" value="'+esc(s.ratchetLockPct)+'" '+(disabled?'disabled':'')+'></div>'
+    + '<div class="field"><label>For every additional peak (%)</label><input type="number" step="any" id="f-ratchetStepPct" value="'+esc(s.ratchetStepPct)+'" '+(disabled?'disabled':'')+'></div>'
+    + '<div class="field"><label>Increase protected profit by (%)</label><input type="number" step="any" id="f-ratchetLockStepPct" value="'+esc(s.ratchetLockStepPct)+'" '+(disabled?'disabled':'')+'></div>'
+    + '</div>'
+    + '<div id="ratchet-preview" class="card" style="background:var(--bg-elev-2);margin-top:4px;margin-bottom:0"></div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-ratchet" '+(disabled?'disabled':'')+'>Save Profit Ratchet</button></div>'
     + '</div>';
 
   html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Advanced Strategy</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
@@ -713,12 +763,28 @@ function wireSettings(me){
       accountProfile: document.getElementById('f-accountProfile').value,
       normalTargetProfitPct: Number(document.getElementById('f-normalTargetProfitPct').value),
       baseMarginPct: Number(document.getElementById('f-baseMarginPct').value),
+      normalFixedSLGoldMove: Number(document.getElementById('f-normalFixedSLGoldMove').value),
       layerMultiplier: Number(document.getElementById('f-layerMultiplier').value),
-      maxLayers: Number(document.getElementById('f-maxLayers').value),
-      normalProfitFloorEnabled: document.getElementById('f-normalProfitFloorEnabled').checked
+      maxLayers: Number(document.getElementById('f-maxLayers').value)
     };
-    saveConfig(payload);
+    saveConfig(payload, 'save-settings', 'Save Settings');
   });
+  var saveRatchet = document.getElementById('save-ratchet');
+  if (saveRatchet) saveRatchet.addEventListener('click', function(){
+    var payload = {
+      profitRatchetEnabled: document.getElementById('f-profitRatchetEnabled').checked,
+      ratchetTriggerPct: Number(document.getElementById('f-ratchetTriggerPct').value),
+      ratchetLockPct: Number(document.getElementById('f-ratchetLockPct').value),
+      ratchetStepPct: Number(document.getElementById('f-ratchetStepPct').value),
+      ratchetLockStepPct: Number(document.getElementById('f-ratchetLockStepPct').value)
+    };
+    saveConfig(payload, 'save-ratchet', 'Save Profit Ratchet');
+  });
+  ['f-profitRatchetEnabled','f-ratchetTriggerPct','f-ratchetLockPct','f-ratchetStepPct','f-ratchetLockStepPct'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateRatchetPreview);
+  });
+  updateRatchetPreview();
   var save2 = document.getElementById('save-advanced');
   if (save2) save2.addEventListener('click', function(){
     var payload = {
@@ -733,15 +799,24 @@ function wireSettings(me){
       requireM3Confirm: document.getElementById('f-requireM3Confirm').checked,
       requireM5Context: document.getElementById('f-requireM5Context').checked
     };
-    saveConfig(payload);
+    saveConfig(payload, 'save-advanced', 'Save Advanced Settings');
   });
 }
-function saveConfig(payload){
+function saveConfig(payload, btnId, btnLabel){
+  var btn = btnId ? document.getElementById(btnId) : null;
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
   api('/api/session/config', {method:'POST', body:payload}).then(function(){
     toast('Settings saved');
     return api('/api/auth/me');
-  }).then(function(me){ STATE.me=me; if (STATE.page==='settings') renderPage(); })
-  .catch(function(){ toast('Could not save settings', true); });
+  }).then(function(me){
+    STATE.me=me;
+    if (btn){ btn.disabled=false; btn.textContent=btnLabel||'Save'; }
+    if (STATE.page==='settings') renderPage();
+  }).catch(function(e){
+    if (btn){ btn.disabled=false; btn.textContent=btnLabel||'Save'; }
+    var msg = (e && e.data && e.data.error==='invalid_json') ? 'Could not save — try again' : 'Could not save settings';
+    toast(msg, true);
+  });
 }
 
 // ---------- Account ----------

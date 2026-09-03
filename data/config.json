@@ -3,8 +3,10 @@
   "account": "0",
   "symbolContains": "XAUUSD",
   "targetMode": "MULTIPLIER",
+  "accountProfile": "NORMAL",
   "targetEquity": 1000,
   "targetMultiplier": 100,
+  "normalAccountMaxMultiplier": 3,
   "baseMarginPct": 15,
   "layerMultiplier": 2,
   "maxLayers": 0,
@@ -20,6 +22,8 @@
   "requireM5Context": false,
   "cooldownMinutes": 0,
   "learningEnabled": true,
+  "enableInvalidationExit": true,
+  "invalidationGivebackPct": 0.5,
   "learningMinCampaigns": 8,
   "learningMaxScoreAdjustment": 5
 }

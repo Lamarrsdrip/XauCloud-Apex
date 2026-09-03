@@ -339,6 +339,47 @@ logic per the explicit no-risk-management instruction.
   documented failure mode of firing duplicate orders off a single stale signal (spec's
   own test case for this), and it's not a risk-limiting change, it's a correctness one.
 
+### Fifth pass (2026-09-03): watched a real 2-day visual backtest end to end
+
+Ran `XauCloud-Apex` in the MT5 Strategy Tester in visual mode, "every tick based on
+real ticks", `XAUUSDm` M10, 2026.09.01→2026.09.03, $1,000 deposit, 1:100 leverage (a
+normal, not unlimited-leverage, account — the actual demo account this gets tested on).
+
+**Result: $1,000 → $7,465.11. Net profit $6,465.11, profit factor 16.71.** A real win on
+real tick data, not a coarse-model artifact like the earlier immediate-stop-out run.
+
+**But: Equity Drawdown Maximal was 72.82% ($7,287.46) and Margin Level bottomed at
+27.26%.** The campaign stacked past 35 layers (mostly 0.01 lots with occasional larger
+jumps) and came right up to the edge of a real margin call before the market turned
+back in its favor and it recovered into a large win. This is the same shape as the
+trader's own "$4,000 gone" story and his "R.I.P $2,500,000" post — sometimes it recovers,
+sometimes it doesn't, and there was nothing in the system at the time that would have
+done anything differently between those two outcomes.
+
+This, plus the account owner's explicit direction, motivated two further changes:
+
+1. **Leverage-aware target cap.** The default `targetMultiplier=100` (+9900%) makes
+   sense on the trader's real unlimited-leverage cent accounts, not on a standard
+   1:100 account being used for testing — chasing an unreachable target is exactly what
+   drives a normal account to stack 35+ layers instead of banking a reasonable win.
+   Added `accountProfile` (`NORMAL` default / `UNLIMITED`) and
+   `normalAccountMaxMultiplier` (default 3 = +200%): on `NORMAL`, the effective target
+   is capped at this multiplier regardless of the raw configured value; on `UNLIMITED`,
+   the configured target is used exactly as before. This is a target-realism fix, not a
+   risk-management cap on sizing or aggression — the ladder still doubles exactly the
+   same way, it just stops requesting an unreachable target.
+2. **Setup-invalidation exit.** Previously the only ways a campaign ended were the
+   target being hit or the broker force-closing everything at a stop-out — nothing
+   in between. Added `Invalidated()`: if the basket has given back at least
+   `invalidationGivebackPct` (default 50%) of its peak floating profit (`mfe`) *and*
+   fresh M1 structure has broken against the campaign's direction (the same micro-BOS
+   check used for entries, mirrored), the whole basket closes as `INVALIDATED_PROFIT`
+   or `INVALIDATED_LOSS`. This targets the exact failure mode from the loss video and
+   from this backtest — holding a campaign that's actively reversing instead of banking
+   what's there or cutting it — without adding anything resembling a stop-loss or fixed
+   drawdown cap; it requires both a giveback *and* real structural evidence, mirroring
+   the same ICT-style logic already used to get in.
+
 ### Fourth pass (2026-09-03): the "loses immediately" bug
 
 The account owner tested Apex and it lost immediately on the very first entry. Working

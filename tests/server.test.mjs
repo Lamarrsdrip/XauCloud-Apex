@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
+test('project contains learning implementation',()=>{const s=fs.readFileSync(new URL('../server.mjs',import.meta.url),'utf8');assert.match(s,/function learn\(/);assert.match(s,/BOUNDED_ADAPTIVE/);assert.match(s,/learningMinCampaigns/)});
+test('defaults match aggressive requested ladder',()=>{const c=JSON.parse(fs.readFileSync(new URL('../data/config.json',import.meta.url)));assert.equal(c.baseMarginPct,15);assert.equal(c.layerMultiplier,2);assert.equal(c.maxLayers,0);assert.equal(c.cooldownMinutes,0)});

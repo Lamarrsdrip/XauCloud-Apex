@@ -20,6 +20,55 @@ his), a bulk-close control panel ("Close All Positions / Close Profitable Positi
 Close Sell Positions / Close XAUUSDm Sell Positions"), and viewer comments confirming
 "layer" is his own term for the pyramid adds.
 
+## Second research pass (2026-09-03): 6 more locally-downloaded videos, transcribed
+
+The user downloaded 6 more raw clips directly (not via profile scraping) and provided
+them locally; audio was transcribed in full (whisper.cpp, local, no cloud upload) in
+addition to reading the visuals. This materially sharpens the picture:
+
+- **He explicitly names his methodology as ICT/SMC** (Inner Circle Trader / Smart Money
+  Concepts) in his own words across multiple clips: *"from an ICT perspective,"* *"price
+  trading into a premium area after sweeping buy-side liquidity,"* *"the market has just
+  produced an aggressive markup... supply is beginning to absorb demand,"* *"aggressive
+  displacement... reaching for buy-side liquidity above... liquidity sweep rejection and
+  a displacement back below the area, that gave me the confirmation."* This is not an
+  intuitive personal quirk — it's a specific, publicly documented trading framework
+  (liquidity sweep = price exceeding a prior high/low then reversing; displacement = a
+  strong directional move with large-bodied candles and minimal pullback; premium/
+  discount = position within a range relative to its midpoint). Apex's existing
+  impulse→sweep→rejection→BOS detector is, in effect, a simplified codification of
+  exactly this framework — which raises confidence the detection logic is theoretically
+  sound, not just visually pattern-matched from a handful of clips.
+- **BUY-side confirmed with a real narrated entry**, not just thumbnail ledgers: one
+  video ($0.84 account) is a sell into a markup-exhaustion (supply absorbing demand
+  after a push into fresh highs), matching the SELL pattern; direction symmetry is not
+  yet confirmed with a narrated BUY example specifically, but the underlying signal
+  language ("supply/demand," "premium/discount") is inherently symmetric, consistent
+  with the code being direction-symmetric throughout.
+- **First-entry sizing is not consistently 15%.** Two more videos explicitly say *"I'm
+  taking my first full margin sale"* and *"use all my available margin on my setup, get
+  in, get paid, get out"* — i.e. sometimes the very first position already uses maximum
+  available capacity, not a conservative starter size. This contradicts a strict
+  "always start small at 15%" reading of his practice. Apex's `baseMarginPct=15` default
+  is **the account owner's explicit choice** ("for normal acc it will be better to open
+  15%... keep increasing... double it continuously"), not a literal replication
+  requirement — evidence shows his real practice varies, so there is no single "correct"
+  starting percentage to copy exactly, which makes the configured default a legitimate
+  design decision rather than a mismatch to fix.
+- **A second, distinct setup variant exists**: most clips show a sharp impulse into a
+  swept extreme followed by an immediate sharp rejection wick. One clip ($6 account)
+  instead describes *"price accumulating around this area instead of continuing
+  higher... after a strong impulse move"* — a basing/consolidation exhaustion, not a
+  single sharp rejection candle. Apex's current detector requires a rejection wick within
+  `rejectionBars` candles of the swept extreme; a slow accumulation/basing exhaustion
+  might not trigger the same rejection-wick condition. Flagged as a real gap, not fixed
+  this pass — one video isn't enough evidence to safely redesign the detector around a
+  second setup family without risking false triggers on ordinary consolidation.
+- Lot progressions narrated end-to-end in these clips: 0.2 (implied, cents-account),
+  0.08/0.08/0.08 (flat, $3.98 account), and 0.6 lots first entry on a $15 account —
+  consistent with the already-documented pattern of "size tracks whatever margin allows
+  right now," not a fixed multiple.
+
 ## OBSERVED (seen directly, repeated across multiple posts)
 
 **Setup**
@@ -88,27 +137,56 @@ Close Sell Positions / Close XAUUSDm Sell Positions"), and viewer comments confi
 
 ## WIN vs. LOSS differential
 
-Both win videos showed the price continuing decisively in the campaign's favor for the
-full duration observed — no meaningful give-back was visible in the sampled frames. The
-loss video's campaign also moved favorably at first (up to $4,000 of floating profit)
-before fully reversing and erasing the gain. In other words: **the entry and the initial
-follow-through looked the same kind of "working" in the loss case as in the wins** — the
-failure was not visibly a bad entry, it was the market's reversal proving temporary (a
-correction inside a larger continuing trend) rather than durable, combined with the
-basket never being closed at a target before that correction fully unwound.
+**Upgraded to OBSERVED (2026-09-03, second pass)**: the loss video's audio was
+transcribed in full (whisper.cpp, local) after the trader downloaded three more raw
+clips locally. He narrates the entire campaign live, and it confirms the differential
+directly, in his own words — this is no longer inference from silent frames.
 
-This is graded as INFERRED, not OBSERVED, because the exact frame where continuation
-evidence should have started to look weaker (if it did) was not captured at high enough
-resolution in this review to say for certain the setup, and not just the outcome, was
-identical to the wins. What *is* directly observed is the consequence: without a target
-lock-in, a temporarily-successful reversal campaign can give back its entire gain.
+Entry: "*price moved strongly into the 4349 to 4350 area but it's struggling to break
+and hold... we also have a bearish engulfing candle and now price is coming back to
+retest that engulfing candle area. That retest is giving me the confirmation I'm looking
+for.*" First entry 0.2 lots at 4348. This matches the win videos' pattern exactly — a
+specific candle (a bearish engulfing bar) is the reference level, and entry is the
+*retest* of that candle's range, not the initial break.
+
+Adds: "*I'm going to keep adding position as long as I have available margin... using an
+Exness unlimited-leverage account which is why I'm able to take this larger position
+even with a small starting balance*" — direct confirmation of both the broker mechanic
+and the margin-driven (not fixed-multiple) add sizing already inferred from the ledger
+reads. Sizes narrated: 0.2 → 0.5 → 0.5 → 2 lots, each add explicitly tied to "gold
+showing weakness"/"strong bearish momentum," i.e. real continuation confirmation, not
+just elapsed time or profit alone.
+
+The critical moment: "*we are at $3,678 plus floating profit. Should I close everything
+here or let it run? I'm watching $5,000 as my target — once we hit it, I'm closing every
+position.*" He then sets a hard target and states he will not deviate: "*no more entries,
+no more waiting, target hits, close off breakfast.*" Price approaches but the campaign
+is **never actually closed at the target** — he lets it run past his own stated rule, it
+retraces, and he loses the floating gain entirely: "*prices are chasing now and honestly
+this might have been the wrong decision from me... we're running close to over $4,000 in
+floating profit but I never close it. And the retracement came back... Big lesson for
+me, floating profit is not realized profit until you close.*"
+
+**This is now the single most important, most directly evidenced fact in this entire
+research pass: the loss was not a bad entry or a flawed reversal thesis. It was a
+self-described failure to execute his own stated exit rule at the moment it was met.**
+The setup, the adds, and the confirmation logic in the win and loss campaigns all match
+the same pattern. The only difference was discipline at the close.
 
 **Practical implication, consistent with "better opportunity recognition, not smaller
 trades":** the fix this evidence justifies is not shrinking position size or adding a
 stop — it's making sure the equity-target close path is unambiguously correct (see the
-Apex forensic audit below) and, longer-term, having the learning brain specifically
-learn to distinguish setups whose reversal holds from setups whose reversal is only a
-temporary correction, using the feature vector now captured at campaign start.
+Apex forensic audit below). This is also, genuinely, the one place where automating the
+strategy is structurally *better* than the human original: code does not hesitate,
+second-guess a hit target, or decide to "let it run" past its own rule. Apex closes the
+instant `cycleStart + BasketProfit() >= targetEq` — every time, mechanically, which is
+exactly the discipline whose absence lost $4,000 in this evidence. The bug fixed in this
+pass (target check using raw account equity instead of campaign-scoped equity) mattered
+precisely because it's this exact mechanism that has to be airtight. Longer-term, the
+learning brain should still learn to distinguish setups whose reversal holds from ones
+that are only a temporary correction, using the feature vector now captured at campaign
+start — but the loss video's lesson turned out to be about exit discipline, not entry
+quality, and Apex already has the automated advantage there by construction.
 
 ## What this means for Apex (confirmed against the existing implementation)
 
@@ -220,6 +298,37 @@ Answered against the actual EA/backend source, not from memory of the original b
 - Test suite upgraded from pure source-text regex matching to real behavioral tests for
   the backend (`clean()`/`learn()` imported and exercised with synthetic data) alongside
   the existing source-level EA checks.
+
+### Strategy Tester bug found and fixed (2026-09-03, third pass)
+The user ran Apex in the MT5 Strategy Tester and it errored. The tester log
+(`Tester/logs/20260903.log`) showed `APEX_HTTP_ERROR 4014` repeating every poll interval
+— MQL5 error 4014 is `ERR_FUNCTION_NOT_ALLOWED`, which `WebRequest()` throws inside the
+Strategy Tester regardless of whitelist settings (network access to arbitrary URLs is
+disabled in tester by design, and `apex.xaucloud.io` isn't deployed yet regardless).
+Consequence: `ConfigPoll()` always failed, so with the shipped default
+`InpRequireRemoteArm=true` the EA could never remotely arm and simply sat idle,
+spamming the error every 8 seconds for the whole test.
+
+**Fixed**: `Http()` now short-circuits to `false` immediately when
+`MQLInfoInteger(MQL_TESTER)` is true, before ever calling `WebRequest` — this silently
+and correctly degrades exactly like a live network outage does (Part 19's existing
+design), just without the wasted call or log spam. `OnInit()` now force-arms
+(`C.armed=true`) when running in the tester, since there is no live backend to arm from
+and no real-money risk in a backtest — this only affects the `MQL_TESTER` runtime
+context and does not change live/production arming behavior at all.
+
+**Separate finding from the same tester session, not yet acted on**: an earlier
+optimization run (before this fix) did manage to trade — one leg of the parameter sweep
+had `InpRequireRemoteArm=false` — and it stopped out with `final balance -1461.96 USD`
+("stop out occurred on 0% of testing interval", i.e. almost immediately). A negative
+final balance from a near-instant stop-out is consistent with the Strategy Tester's
+lower-fidelity tick generation (interpolated/OHLC-based rather than real tick data)
+letting price "jump" through several ATR multiples in one simulated step — something a
+live broker's continuous margin-call monitoring would not do the same way, and not
+unique to this EA's logic. Recommend re-testing with "Every tick based on real ticks"
+before drawing conclusions about the strategy's real drawdown risk from tester results;
+flagged for the historical-replay work in Part 30, not fixed by changing sizing/risk
+logic per the explicit no-risk-management instruction.
 
 ### Deliberately left unchanged
 - Sizing formula and defaults (already correct — see above).

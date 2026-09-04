@@ -552,7 +552,7 @@ const server=http.createServer(async(req,res)=>{
     const u=new URL(req.url,'http://localhost');
 
     if(u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.5.2'});
+      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.5.3'});
 
     // ---------- EA contract ----------
     // Customer-facing auth is the Apex license alone — no separate infrastructure token.

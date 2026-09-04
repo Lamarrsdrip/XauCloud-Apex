@@ -1,12 +1,15 @@
 #property copyright "XauCloud Apex"
-#property version   "3.520"
+#property version   "3.530"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
 // Internal build lineage: v3.5.1 (dev codename RecoveryExit40) adds the Recovery-To-Entry exit;
-// v3.5.2 removes the separate infrastructure EA token — the Apex license alone now authenticates.
+// v3.5.2 removes the separate infrastructure EA token — the Apex license alone now authenticates;
+// v3.5.3 fixes a real regression where Strategy Tester was permanently blocked by the live-only
+// license scan-gate, adds transport-vs-license failure diagnostics, and a browser User-Agent on
+// outbound requests (auth/telemetry/diagnostics only — no trading-strategy change in v3.5.2/3.5.3).
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.5.2"
+#define APEX_VERSION "XauCloud-Apex_v3.5.3"
 #define APEX_MAGIC 8620260903
 input string InpApiBase="https://apex.xaucloud.io";
 input string InpApexLicense="";

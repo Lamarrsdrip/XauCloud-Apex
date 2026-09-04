@@ -151,8 +151,8 @@ test('no setup-invalidation exit and no old money-ratchet — only target hit, p
 test('EA license is wired into event telemetry for backend/EA enforcement, without touching strategy logic',()=>{assert.match(s,/input string InpApexLicense=""/);assert.match(s,/\\"license\\":\\"%s\\".*InpApexLicense/)});
 test('customer-facing identity is clean (XauCloud Apex), internal version metadata retained for traceability as v3.5.x, and no internal dev codenames leak into customer-facing constants',()=>{
  assert.match(s,/#property copyright "XauCloud Apex"/);
- assert.match(s,/#property version   "3\.520"/);
- assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.2"/);
+ assert.match(s,/#property version   "3\.530"/);
+ assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.3"/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.1-RecoveryExit40"/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.0/);
  assert.doesNotMatch(s,/Default180-BE50|15-50-100-MarginLadder|TraderSync/);

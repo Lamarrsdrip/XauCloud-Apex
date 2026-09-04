@@ -540,12 +540,18 @@ function armDisarmCard(me){
 function configSyncCard(me){
   var ec = me.effectiveConfig;
   var acc = me.account || {};
-  if (!ec) return '<div class="card"><h3>Effective EA Configuration</h3><div class="row"><span class="k">Status</span><span class="v">No EA contact yet</span></div></div>';
+  var mt5 = me.mt5 || {};
+  var mt5Label = mt5.status==='CONNECTED'?'Connected':mt5.status==='STALE'?'Stale':'Disconnected';
+  var mt5Tone = mt5.status==='CONNECTED'?'green':mt5.status==='STALE'?'amber':'red';
+  var header = '<div class="card"><h3>Effective EA Configuration</h3>'
+    + '<div class="row"><span class="k">MT5 Status</span><span class="v">'+pill(mt5Label, mt5Tone)+'</span></div>'
+    + '<div class="row"><span class="k">Account</span><span class="v">'+esc(acc.account||'—')+'</span></div>'
+    + '<div class="row"><span class="k">Last Contact</span><span class="v">'+esc(fmtAgo(mt5.lastSeen))+'</span></div>';
+  if (!ec) return header + '<div class="row"><span class="k">Config Sync</span><span class="v">'+(mt5.lastSeen? 'Connected — no config sync event yet' : 'No EA contact yet')+'</span></div></div>';
   var sourceTone = ec.configSource==='REMOTE' ? 'green' : 'amber';
   var sourceLabel = ec.configSource==='REMOTE' ? 'Remote (website)' : (ec.configSource==='LOCAL_INPUT' ? 'Local MT5 Inputs' : '—');
-  return '<div class="card"><h3>Effective EA Configuration</h3>'
+  return header
     + '<div class="row"><span class="k">EA Version</span><span class="v" style="font-size:12px">'+esc(ec.eaVersion||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Account</span><span class="v">'+esc(acc.account||'—')+'</span></div>'
     + '<div class="row"><span class="k">Profile</span><span class="v">'+esc(me.accountProfile||'—')+'</span></div>'
     + '<div class="row"><span class="k">L1 Margin</span><span class="v">'+esc(ec.l1MarginPct)+'%</span></div>'
     + '<div class="row"><span class="k">L2 Margin</span><span class="v">'+esc(ec.l2MarginPct)+'%</span></div>'

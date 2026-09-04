@@ -194,13 +194,26 @@ async function checkEaLicense(licenseKey,account){
   const status=licenseStatusFor(lic);
   if(status!=='ACTIVE')return {ok:false,code:status};
   if(lic.account&&lic.account!==account)return {ok:false,code:'ACCOUNT_MISMATCH'};
-  if(!lic.account){
-    lic.account=account;
-    lic.updatedAt=new Date().toISOString();
-    licenses[licenseKey]=lic;
-    await writeLicenses(licenses);
-  }
+  // Any successful, authenticated contact from a matching account is a valid EA heartbeat —
+  // stamped here so a config poll alone (no trade/event required) proves the EA is alive.
+  const now=new Date().toISOString();
+  if(!lic.account)lic.account=account;
+  lic.lastSeen=now;
+  lic.updatedAt=now;
+  licenses[licenseKey]=lic;
+  await writeLicenses(licenses);
   return {ok:true,license:lic};
+}
+async function touchLicenseTelemetry(licenseKey,fields){
+  const licenses=await readLicenses();
+  const lic=licenses[licenseKey];
+  if(!lic)return;
+  let changed=false;
+  for(const k of ['eaVersion','broker','currency','configSource']){
+    const v=fields[k];
+    if(v!==undefined&&v!==null&&v!==''&&lic[k]!==v){lic[k]=v;changed=true;}
+  }
+  if(changed){lic.updatedAt=new Date().toISOString();licenses[licenseKey]=lic;await writeLicenses(licenses);}
 }
 
 // ---------- learning ----------
@@ -296,7 +309,7 @@ function publicState(cfg,state,learning,recent){
 }
 
 // ---------- human-readable dashboard shaping ----------
-function classifyMt5(lastSeenIso){
+export function classifyMt5(lastSeenIso){
   if(!lastSeenIso)return 'DISCONNECTED';
   const ageSec=(Date.now()-Date.parse(lastSeenIso))/1000;
   if(ageSec<45)return 'CONNECTED';
@@ -422,19 +435,19 @@ async function buildMe(licenseKey){
   // the EA has ever made contact — settings must never depend on live EA data to render.
   const cfg=clean(await read(CONFIG,DEFAULT));
   const settings=settingsView(cfg);
-  const state=await read(STATE,{});
+
+  // A successful, authenticated /api/ea/config poll or /api/ea/event already proves the EA is
+  // alive — checkEaLicense() stamps lic.lastSeen on every valid contact for THIS license/account,
+  // independent of whether any trade/campaign event has ever fired. MT5 connectivity must be
+  // derived from that heartbeat alone, never from the presence of an event.
+  if(!lic.lastSeen){
+    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true,settings};
+  }
+
   const allEv=await allEvents();
   const events=lic.account?allEv.filter(e=>String(e.account)===String(lic.account)):allEv;
   const latest=events[events.length-1]||null;
-
-  if(lic.account&&!latest){
-    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true,settings};
-  }
-  if(!lic.account){
-    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true,settings};
-  }
-
-  const mt5Status=classifyMt5(state.lastSeen);
+  const mt5Status=classifyMt5(lic.lastSeen);
   const campaign=findActiveCampaign(events);
   const history=buildHistory(events).slice(0,50);
   const learning=learn(events,cfg);
@@ -445,8 +458,16 @@ async function buildMe(licenseKey){
     dataAvailable:true,
     armed:cfg.armed,
     accountProfile:cfg.accountProfile,
-    mt5:{status:mt5Status,lastSeen:state.lastSeen||null},
-    account:latest?{account:latest.account,broker:latest.broker||null,currency:latest.currency||null,balance:latest.balance,equity:latest.equity,freeMargin:latest.freeMargin,asOf:latest.ts}:null,
+    mt5:{status:mt5Status,lastSeen:lic.lastSeen},
+    account:{
+      account:lic.account||(latest?latest.account:null),
+      broker:(latest&&latest.broker)||lic.broker||null,
+      currency:(latest&&latest.currency)||lic.currency||null,
+      balance:latest?latest.balance:null,
+      equity:latest?latest.equity:null,
+      freeMargin:latest?latest.freeMargin:null,
+      asOf:latest?latest.ts:lic.lastSeen
+    },
     campaign,
     history,
     learning,
@@ -466,10 +487,10 @@ async function buildMe(licenseKey){
       ratchetLockPct:latest.ratchetLockPct,
       ratchetStepPct:latest.ratchetStepPct,
       ratchetLockStepPct:latest.ratchetLockStepPct,
-      configSource:latest.configSource||null,
-      eaVersion:latest.eaVersion||null,
+      configSource:latest.configSource||lic.configSource||null,
+      eaVersion:latest.eaVersion||lic.eaVersion||null,
       asOf:latest.ts
-    }:null,
+    }:(lic.eaVersion?{eaVersion:lic.eaVersion,configSource:lic.configSource||null,asOf:lic.lastSeen}:null),
     settings
   };
 }
@@ -512,6 +533,13 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&u.pathname==='/api/ea/event'){
       if(!auth(req,EA_TOKEN))return json(res,401,{error:'unauthorized'});
       const b=await body(req);
+      // Validate license/account the same way as a config poll — an event under an unknown,
+      // inactive, or mismatched license/account is not blindly accepted as this license's activity.
+      const licenseKey=String(b.license||'');
+      const account=String(b.account||'');
+      const lic=await checkEaLicense(licenseKey,account);
+      if(!lic.ok)return json(res,403,{error:lic.code});
+      await touchLicenseTelemetry(licenseKey,{eaVersion:b.eaVersion,broker:b.broker,currency:b.currency,configSource:b.configSource});
       await event({type:String(b.type||'EA_EVENT'),...b});
       const st=await read(STATE,{});
       st.updatedAt=new Date().toISOString();
@@ -554,6 +582,13 @@ const server=http.createServer(async(req,res)=>{
         accountProfile:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(existing.accountProfile||'NORMAL'),
         expiresAt:b.expiresAt!==undefined?(b.expiresAt||null):(existing.expiresAt||null),
         customer:b.customer!==undefined?String(b.customer||''):(existing.customer||''),
+        // preserve heartbeat/telemetry across admin edits — this endpoint must never silently
+        // wipe a license's live EA contact state when only e.g. accountProfile is being changed.
+        lastSeen:existing.lastSeen||null,
+        eaVersion:existing.eaVersion||null,
+        broker:existing.broker||null,
+        currency:existing.currency||null,
+        configSource:existing.configSource||null,
         createdAt:existing.createdAt||now,
         updatedAt:now
       };

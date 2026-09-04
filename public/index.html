@@ -903,6 +903,17 @@ function pageAccount(me){
     + '<div class="row"><span class="k">Account Profile</span><span class="v">'+esc(lic.accountProfile||'—')+'</span></div>'
     + '<div class="row"><span class="k">Expires</span><span class="v">'+(lic.expiresAt? esc(fmtDate(lic.expiresAt)) : 'No expiry')+'</span></div>'
     + '</div>';
+  html += '<div class="card"><h3>Set up XauCloud-Apex in MT5</h3>'
+    + '<ol style="margin:0;padding-left:20px;line-height:1.9">'
+    + '<li>Download XauCloud-Apex and add it to your MT5 Experts.</li>'
+    + '<li>Attach it to a XAUUSD/XAUUSDm chart.</li>'
+    + '<li>Enter your Apex License (shown above) in the EA\'s inputs.</li>'
+    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://apex.xaucloud.io</code>.</li>'
+    + '<li>Enable Algo Trading (the button in the MT5 toolbar).</li>'
+    + '<li>Arm Apex from the Dashboard or Settings page.</li>'
+    + '</ol>'
+    + '<div class="hint" style="margin-top:10px">That\'s it — no separate token or admin credential is ever needed in MT5. Your license alone authorizes the connection.</div>'
+    + '</div>';
   html += '<div class="card"><button class="btn btn-danger" id="logout-btn2">Sign Out</button></div>';
   setTimeout(function(){
     var b = document.getElementById('logout-btn2');

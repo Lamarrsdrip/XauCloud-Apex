@@ -1,6 +1,6 @@
 {
   "name":"xaucloud-apex",
-  "version":"3.5.1",
+  "version":"3.5.2",
   "private":true,
   "type":"module",
   "scripts":{"start":"node server.mjs","pretest":"rm -rf .test-data","test":"NODE_ENV=test DATA_DIR=$PWD/.test-data node --test tests/*.test.mjs"},

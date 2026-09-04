@@ -244,10 +244,12 @@ test('admin endpoints reject requests without ADMIN_TOKEN',async()=>{
  });
 });
 
-test('EA endpoints reject requests without EA_TOKEN',async()=>{
+test('EA endpoints require NO infrastructure token — a bare request (no Authorization header at all) is accepted and evaluated purely on the Apex license',async()=>{
  await withServer(async base=>{
   const r=await req(base,'/api/ea/config?account=1');
-  assert.equal(r.status,401);
+  assert.equal(r.status,200,'must not 401 for missing Bearer token — license-only auth');
+  assert.equal(r.body.licenseStatus,'LICENSE_NOT_FOUND','no X-Apex-License header supplied, so no license found');
+  assert.equal(r.body.armed,false);
  });
 });
 
@@ -273,10 +275,11 @@ test('/api/auth/me rejects requests with no session cookie',async()=>{
  });
 });
 
+function eaHeaders(license){return license===undefined?{}:{'x-apex-license':license}}
+
 test('full license lifecycle: admin issues a license, user logs in, session reads it back, and an unbound account auto-binds then rejects a mismatched account',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
 
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{accountProfile:'NORMAL'}});
   assert.equal(create.status,200);
@@ -310,8 +313,8 @@ test('full license lifecycle: admin issues a license, user logs in, session read
   assert.equal(meBeforeContact.body.settings.recoveryExitEnabled,true);
   assert.equal(meBeforeContact.body.settings.recoveryExitArmPctOfSL,40);
 
-  // EA contacts with this license and account 111 -> auto-binds
-  const eaConfig=await req(base,`/api/ea/config?account=111&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  // EA contacts with this license (via X-Apex-License header, no infrastructure token) and account 111 -> auto-binds
+  const eaConfig=await req(base,'/api/ea/config?account=111',{headers:eaHeaders(key)});
   assert.equal(eaConfig.status,200);
   assert.equal(eaConfig.body.licenseStatus,'ACTIVE');
 
@@ -336,7 +339,7 @@ test('full license lifecycle: admin issues a license, user logs in, session read
 
   // a different account with the same license is now a mismatch and cannot arm, and must not
   // disturb the already-bound account's heartbeat
-  const mismatch=await req(base,`/api/ea/config?account=999&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  const mismatch=await req(base,'/api/ea/config?account=999',{headers:eaHeaders(key)});
   assert.equal(mismatch.status,200);
   assert.equal(mismatch.body.licenseStatus,'ACCOUNT_MISMATCH');
   assert.equal(mismatch.body.armed,false);
@@ -348,15 +351,14 @@ test('full license lifecycle: admin issues a license, user logs in, session read
 test('an EA event (e.g. CONFIG_SYNC) also establishes first contact, even with zero config polls',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
   const key=create.body.license.key;
 
   const login=await req(base,'/api/auth/login',{method:'POST',body:{license:key}});
   const cookie=login.headers['set-cookie'][0].split(';')[0];
 
-  const ev=await req(base,'/api/ea/event',{method:'POST',headers:{authorization:`Bearer ${EA_TOKEN}`},body:{
-   type:'CONFIG_SYNC',account:'444',license:key,eaVersion:'XauCloud-Apex_v3.5.1',broker:'Exness',currency:'USD',configSource:'REMOTE'
+  const ev=await req(base,'/api/ea/event',{method:'POST',headers:eaHeaders(key),body:{
+   type:'CONFIG_SYNC',account:'444',eaVersion:'XauCloud-Apex_v3.5.2',broker:'Exness',currency:'USD',configSource:'REMOTE'
   }});
   assert.equal(ev.status,200);
 
@@ -366,7 +368,7 @@ test('an EA event (e.g. CONFIG_SYNC) also establishes first contact, even with z
   assert.equal(me.body.account.account,'444');
   assert.equal(me.body.account.broker,'Exness');
   assert.equal(me.body.account.currency,'USD');
-  assert.equal(me.body.effectiveConfig.eaVersion,'XauCloud-Apex_v3.5.1');
+  assert.equal(me.body.effectiveConfig.eaVersion,'XauCloud-Apex_v3.5.2');
   assert.equal(me.body.effectiveConfig.configSource,'REMOTE');
  });
 });
@@ -374,11 +376,10 @@ test('an EA event (e.g. CONFIG_SYNC) also establishes first contact, even with z
 test('an EA event under a mismatched account for an already-bound license is rejected (403) and does not update the heartbeat',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{account:'555'}});
   const key=create.body.license.key;
 
-  const bad=await req(base,'/api/ea/event',{method:'POST',headers:{authorization:`Bearer ${EA_TOKEN}`},body:{type:'CONFIG_SYNC',account:'999',license:key}});
+  const bad=await req(base,'/api/ea/event',{method:'POST',headers:eaHeaders(key),body:{type:'CONFIG_SYNC',account:'999'}});
   assert.equal(bad.status,403);
   assert.equal(bad.body.error,'ACCOUNT_MISMATCH');
 
@@ -390,8 +391,15 @@ test('an EA event under a mismatched account for an already-bound license is rej
 
 test('an EA event under an unknown license is rejected (403), not silently accepted',async()=>{
  await withServer(async base=>{
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
-  const bad=await req(base,'/api/ea/event',{method:'POST',headers:{authorization:`Bearer ${EA_TOKEN}`},body:{type:'CONFIG_SYNC',account:'1',license:'APEX-DOES-NOT-EXIST'}});
+  const bad=await req(base,'/api/ea/event',{method:'POST',headers:eaHeaders('APEX-DOES-NOT-EXIST'),body:{type:'CONFIG_SYNC',account:'1'}});
+  assert.equal(bad.status,403);
+  assert.equal(bad.body.error,'LICENSE_NOT_FOUND');
+ });
+});
+
+test('an EA event with a missing/empty license (no header, no legacy body field) is rejected (403), not silently accepted as anonymous',async()=>{
+ await withServer(async base=>{
+  const bad=await req(base,'/api/ea/event',{method:'POST',body:{type:'CONFIG_SYNC',account:'1'}});
   assert.equal(bad.status,403);
   assert.equal(bad.body.error,'LICENSE_NOT_FOUND');
  });
@@ -400,10 +408,9 @@ test('an EA event under an unknown license is rejected (403), not silently accep
 test('an EA event under a disabled license is rejected (403)',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{status:'DISABLED'}});
   const key=create.body.license.key;
-  const bad=await req(base,'/api/ea/event',{method:'POST',headers:{authorization:`Bearer ${EA_TOKEN}`},body:{type:'CONFIG_SYNC',account:'1',license:key}});
+  const bad=await req(base,'/api/ea/event',{method:'POST',headers:eaHeaders(key),body:{type:'CONFIG_SYNC',account:'1'}});
   assert.equal(bad.status,403);
   assert.equal(bad.body.error,'LICENSE_DISABLED');
  });
@@ -412,25 +419,37 @@ test('an EA event under a disabled license is rejected (403)',async()=>{
 test('an EA event under an expired license is rejected (403)',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{expiresAt:new Date(Date.now()-1000).toISOString()}});
   const key=create.body.license.key;
-  const bad=await req(base,'/api/ea/event',{method:'POST',headers:{authorization:`Bearer ${EA_TOKEN}`},body:{type:'CONFIG_SYNC',account:'1',license:key}});
+  const bad=await req(base,'/api/ea/event',{method:'POST',headers:eaHeaders(key),body:{type:'CONFIG_SYNC',account:'1'}});
   assert.equal(bad.status,403);
   assert.equal(bad.body.error,'LICENSE_EXPIRED');
+ });
+});
+
+test('legacy transport still works during migration: license in the config-poll query string / event body (no header) still authenticates, for an EA build that has not yet been updated',async()=>{
+ await withServer(async base=>{
+  const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
+  const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
+  const key=create.body.license.key;
+
+  const cfg=await req(base,`/api/ea/config?account=666&license=${key}`);
+  assert.equal(cfg.body.licenseStatus,'ACTIVE');
+
+  const ev=await req(base,'/api/ea/event',{method:'POST',body:{type:'CONFIG_SYNC',account:'666',license:key}});
+  assert.equal(ev.status,200);
  });
 });
 
 test('license/account isolation: two different licenses never share a heartbeat, account, or dashboard data',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const a=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
   const b=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
   const keyA=a.body.license.key,keyB=b.body.license.key;
 
   // only license A's EA ever contacts the backend
-  await req(base,`/api/ea/config?account=AAA&license=${keyA}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  await req(base,`/api/ea/config?account=AAA`,{headers:eaHeaders(keyA)});
 
   const loginA=await req(base,'/api/auth/login',{method:'POST',body:{license:keyA}});
   const cookieA=loginA.headers['set-cookie'][0].split(';')[0];
@@ -453,10 +472,9 @@ test('license/account isolation: two different licenses never share a heartbeat,
 test('arm/disarm: toggling Apex Armed persists to config and is reflected in both /api/auth/me and the next /api/ea/config poll',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
   const key=create.body.license.key;
-  await req(base,`/api/ea/config?account=777&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  await req(base,`/api/ea/config?account=777`,{headers:eaHeaders(key)});
   const login=await req(base,'/api/auth/login',{method:'POST',body:{license:key}});
   const cookie=login.headers['set-cookie'][0].split(';')[0];
 
@@ -470,7 +488,7 @@ test('arm/disarm: toggling Apex Armed persists to config and is reflected in bot
   const meAfter=await req(base,'/api/auth/me',{cookie});
   assert.equal(meAfter.body.armed,true);
 
-  const eaPoll=await req(base,`/api/ea/config?account=777&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  const eaPoll=await req(base,`/api/ea/config?account=777`,{headers:eaHeaders(key)});
   assert.equal(eaPoll.body.armed,true);
   assert.equal(eaPoll.body.licenseStatus,'ACTIVE');
  });
@@ -479,10 +497,9 @@ test('arm/disarm: toggling Apex Armed persists to config and is reflected in bot
 test('admin editing a license (e.g. accountProfile) preserves its existing heartbeat/telemetry instead of wiping it',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
   const key=create.body.license.key;
-  await req(base,`/api/ea/config?account=888&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  await req(base,`/api/ea/config?account=888`,{headers:eaHeaders(key)});
 
   const beforeEdit=await req(base,'/api/admin/licenses',{headers:{authorization:`Bearer ${ADMIN_TOKEN}`}});
   const lastSeenBefore=beforeEdit.body.licenses.find(l=>l.key===key).lastSeen;
@@ -498,10 +515,9 @@ test('admin editing a license (e.g. accountProfile) preserves its existing heart
 test('EA cannot arm with a disabled license even if the stored config has armed:true',async()=>{
  await withServer(async base=>{
   const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
   const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{status:'DISABLED'}});
   const key=create.body.license.key;
-  const eaConfig=await req(base,`/api/ea/config?account=222&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  const eaConfig=await req(base,`/api/ea/config?account=222`,{headers:eaHeaders(key)});
   assert.equal(eaConfig.status,200);
   assert.equal(eaConfig.body.licenseStatus,'LICENSE_DISABLED');
   assert.equal(eaConfig.body.armed,false);
@@ -510,8 +526,7 @@ test('EA cannot arm with a disabled license even if the stored config has armed:
 
 test('EA config poll with no license param at all is treated as LICENSE_NOT_FOUND, not a crash',async()=>{
  await withServer(async base=>{
-  const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
-  const eaConfig=await req(base,'/api/ea/config?account=333',{headers:{authorization:`Bearer ${EA_TOKEN}`}});
+  const eaConfig=await req(base,'/api/ea/config?account=333');
   assert.equal(eaConfig.status,200);
   assert.equal(eaConfig.body.licenseStatus,'LICENSE_NOT_FOUND');
   assert.equal(eaConfig.body.armed,false);
@@ -530,6 +545,29 @@ test('malformed JSON body returns 400, not a 500 crash',async()=>{
    rq.end();
   });
   assert.equal(r.status,400);
+ });
+});
+
+test('EA auth rate limiting: many failed license attempts from one IP get 429ed, but this never fires for a legitimate EA polling its own valid license repeatedly',async()=>{
+ await withServer(async base=>{
+  const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
+  const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
+  const key=create.body.license.key;
+
+  // 40 real polls with the CORRECT license must never trip the limiter
+  for(let i=0;i<40;i++){
+   const ok=await req(base,'/api/ea/config?account=1',{headers:eaHeaders(key)});
+   assert.equal(ok.status,200);
+   assert.equal(ok.body.licenseStatus,'ACTIVE');
+  }
+
+  // now spam WRONG license guesses from the same IP
+  let sawRateLimited=false;
+  for(let i=0;i<40;i++){
+   const bad=await req(base,'/api/ea/config?account=1',{headers:eaHeaders('APEX-GUESS-'+i+'-XXXXXX-XXXXXX')});
+   if(bad.status===429){sawRateLimited=true;break}
+  }
+  assert.equal(sawRateLimited,true,'sustained wrong-license guessing from one IP must eventually be rate-limited');
  });
 });
 
@@ -560,3 +598,4 @@ test('repeated wrong admin tokens lock out that client, and a correct token duri
   assert.equal(stillLocked.status,401);
  });
 });
+

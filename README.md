@@ -1,4 +1,4 @@
-# XauCloud Apex v3.5.1
+# XauCloud Apex v3.5.2
 
 Private XAUUSD campaign EA and control plane built around a repeated pattern: strong impulse into a recent liquidity extreme, sweep/failure, rejection, micro-structure break, initial entry, then increasingly large additions only while the basket is profitable and fresh continuation or failed-pullback confirmation appears. Setup/entry/pyramid detection logic is unchanged from earlier versions — see `docs/STRATEGY_SPEC.md` for the full forensic history and evidence this build is based on.
 
@@ -39,9 +39,15 @@ Node 22+:
 
 ```bash
 cp .env.example .env
-ADMIN_TOKEN=... EA_TOKEN=... SESSION_SECRET=... node server.mjs
+ADMIN_TOKEN=... SESSION_SECRET=... node server.mjs
 ```
 
-Set MT5 WebRequest whitelist to the deployed Apex URL. Compile `ea/XauCloud-Apex.mq5` in MetaEditor and require zero errors before attaching it. `InpApexLicense` must be set to a license key issued via the website's `/#admin` panel for remote arm/config sync and license enforcement to work.
+`EA_TOKEN` may remain set in the environment but is no longer read by the server — as of v3.5.2 the customer-facing EA authenticates with the Apex license alone (sent via the `X-Apex-License` header on `/api/ea/config` and `/api/ea/event`; the older `?license=` query-string / JSON-body transport is still accepted server-side so an already-attached older EA doesn't go dark mid-migration, but the current canonical EA no longer sends it that way).
+
+EA setup:
+1. Download XauCloud-Apex, compile `ea/XauCloud-Apex.mq5` in MetaEditor (require zero errors), and attach it to a XAUUSD/XAUUSDm chart.
+2. Enter your Apex License (`InpApexLicense`) — issued via the website's `/#admin` panel. No other token is required.
+3. Allow WebRequest for the deployed Apex URL (Tools → Options → Expert Advisors).
+4. Enable Algo Trading, then arm Apex from the website Dashboard/Settings.
 
 Older EA builds are kept for reference only under `ea/archive/` — do not attach them.

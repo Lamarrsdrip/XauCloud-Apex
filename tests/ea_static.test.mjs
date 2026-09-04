@@ -129,14 +129,53 @@ test('restart recovery persists and reloads local state (including master ticket
 test('Strategy Tester can actually run the EA: WebRequest is skipped and it self-arms, instead of spamming ERR_FUNCTION_NOT_ALLOWED forever unarmed',()=>{assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)return false;/);assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)C\.armed=true;/)});
 test('rejection/structure-break confirmation cannot resolve on the same candle that triggered the sweep — requires a later closed bar',()=>{assert.match(s,/watchSweepBarTime=m1\[1\]\.time/);assert.match(s,/if\(m1\[i\]\.time<=watchSweepBarTime\)continue;/);assert.match(s,/if\(m1\[1\]\.time>watchSweepBarTime\)\{if\(s\.dir<0\)bos=/)});
 test('no setup-invalidation exit and no old money-ratchet — only target hit, profit ratchet, master SL, or broker/margin close end a campaign',()=>{assert.doesNotMatch(s,/Invalidated\(/);assert.doesNotMatch(s,/enableInvalidationExit/);assert.doesNotMatch(s,/invalidationGivebackPct/);assert.doesNotMatch(s,/INVALIDATED_PROFIT|INVALIDATED_LOSS/);assert.doesNotMatch(s,/normalAccountMaxMultiplier/)});
-test('EA license is wired into config polling and event telemetry for backend/EA enforcement, without touching strategy logic',()=>{assert.match(s,/input string InpApexLicense=""/);assert.match(s,/license=%s.*InpApexLicense/);assert.match(s,/\\"license\\":\\"%s\\".*InpApexLicense/)});
+test('EA license is wired into event telemetry for backend/EA enforcement, without touching strategy logic',()=>{assert.match(s,/input string InpApexLicense=""/);assert.match(s,/\\"license\\":\\"%s\\".*InpApexLicense/)});
 test('customer-facing identity is clean (XauCloud Apex), internal version metadata retained for traceability as v3.5.x, and no internal dev codenames leak into customer-facing constants',()=>{
  assert.match(s,/#property copyright "XauCloud Apex"/);
- assert.match(s,/#property version   "3\.510"/);
- assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.1"/);
+ assert.match(s,/#property version   "3\.520"/);
+ assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.2"/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.1-RecoveryExit40"/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.0/);
  assert.doesNotMatch(s,/Default180-BE50|15-50-100-MarginLadder|TraderSync/);
+});
+test('v3.5.2: no separate EA infrastructure token — the Apex license alone authenticates every backend call, via the X-Apex-License header',()=>{
+ assert.doesNotMatch(s,/InpEaToken/);
+ assert.doesNotMatch(s,/REPLACE_EA_TOKEN/);
+ assert.doesNotMatch(s,/Authorization: Bearer /);
+ assert.match(s,/string hdr="X-Apex-License: "\+InpApexLicense\+"\\r\\nContent-Type: application\/json\\r\\n";/);
+ assert.doesNotMatch(s,/\/api\/ea\/config\?account=%I64d&license=%s/);
+ assert.match(s,/ep=StringFormat\("\/api\/ea\/config\?account=%I64d",AccountInfoInteger\(ACCOUNT_LOGIN\)\);/);
+});
+test('ConfigPoll surfaces the HTTP transport code and reports APEX_CONFIG_POLL_OK / APEX_CONFIG_POLL_FAIL explicitly, not just APEX_READY',()=>{
+ assert.match(s,/bool Http\(string method,string ep,string body,string &resp,int &code\)\{/);
+ assert.match(s,/Print\("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=REQUEST_FAILED"\);/);
+ assert.match(s,/Print\("APEX_CONFIG_POLL_OK licenseStatus=ACTIVE armed=",\(C\.armed\?"true":"false"\)," source=REMOTE account=",AccountInfoInteger\(ACCOUNT_LOGIN\)," version=",APEX_VERSION\);/);
+ assert.match(s,/Print\("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=",lastLicenseStatus\);/);
+});
+test('operational scan-state logging is deduplicated (only prints on state change) and covers the documented wait/watch/entry reasons',()=>{
+ assert.match(s,/void ScanLog\(string state,string reason=""\)\{/);
+ assert.match(s,/if\(sig==lastScanState\)return;/);
+ for(const reason of ['SYMBOL_MISMATCH','LICENSE_NOT_ACTIVE','ACCOUNT_NOT_ARMED','COOLDOWN_ACTIVE','NO_TICKS','WATCHING_FOR_REJECTION','WAITING_FOR_MICRO_BOS','WAIT_M3_CONFIRMATION','ENTRY_SCORE_TOO_LOW','WATCH_EXPIRED','WAIT_NO_STRONG_IMPULSE_OR_LIQUIDITY_SWEEP'])
+  assert.match(s,new RegExp(reason),`missing scan reason ${reason}`);
+ assert.match(s,/ScanLog\("ENTRY_READY",""\);/);
+});
+test('scan-state diagnostics are purely observational: the core scan gate is unchanged (armed + cooldown + Observe/Start), no new blocking condition can silently prevent a real setup',()=>{
+ // symbolContains gate only blocks when the configured substring truly does not match _Symbol —
+ // for the real deployment (XAUUSDm contains XAUUSD) this can never trigger, so it changes nothing in practice
+ assert.match(s,/if\(StringFind\(_Symbol,C\.symbolContains\)<0\)\{ScanLog\("WAIT","SYMBOL_MISMATCH"\);return;\}/);
+ assert.match(s,/if\(!C\.armed\)\{ScanLog\("WAIT","ACCOUNT_NOT_ARMED"\);return;\}/);
+ assert.match(s,/Snap s=Observe\(\);\s*\n\s*if\(s\.valid\)\{\s*\n\s*ScanLog\("ENTRY_READY",""\);\s*\n\s*Start\(s\);/);
+});
+test('duplicate-instance detection is logging-only and never gates trading logic (arbitrating ownership automatically would itself be a behavior change)',()=>{
+ assert.match(s,/void DupInstanceCheck\(\)\{/);
+ assert.match(s,/GlobalVariableCheck\(key\)/);
+ // the only statement inside the duplicate-detection branch is a ScanLog call — no return/CloseAll/etc
+ assert.match(s,/if\(ownerChart!=ChartID\(\)&&\(now-last\)<\(InpConfigPollSeconds\*3\)\)\{\s*\n\s*ScanLog\("DUPLICATE_INSTANCE_WARNING",StringFormat\("otherChartId=%I64d_thisChartId=%I64d_magic=%I64d",ownerChart,ChartID\(\),InpMagic\)\);\s*\n\s*\}/);
+ assert.match(s,/DupInstanceCheck\(\);/);
+});
+test('order execution is logged locally (APEX_ORDER_SENT / APEX_ORDER_REJECTED) in addition to the existing Emit telemetry',()=>{
+ assert.match(s,/Print\("APEX_ORDER_REJECTED retcode=",trade\.ResultRetcode\(\)/);
+ assert.match(s,/Print\("APEX_ORDER_SENT layer=",layers\+1/);
 });
 
 test('v3.5.1 Recovery-To-Entry exit: enabled by default, arms at 40% of the ORIGINAL fixed SL distance',()=>{

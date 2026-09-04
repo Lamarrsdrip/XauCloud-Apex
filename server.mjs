@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const PORT=Number(process.env.PORT||8787);
 const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-const EA_TOKEN=process.env.EA_TOKEN||'change-me-ea';
+// EA_TOKEN is no longer required from customer EAs as of v3.5.2 — the Apex license alone
+// authenticates /api/ea/config and /api/ea/event (see checkEaLicense()). The env var can stay
+// defined in the hosting panel without effect; nothing in this file reads it anymore.
 const SESSION_SECRET=process.env.SESSION_SECRET||'change-me-session-secret';
 const SESSION_TTL_MS=30*24*60*60*1000;
 const DATA=path.resolve(process.env.DATA_DIR||path.join(__dirname,'data'));
@@ -119,6 +121,26 @@ function clientIp(req){
   if(fwd)return String(fwd).split(',')[0].trim();
   return req.socket.remoteAddress||'unknown';
 }
+
+// ---------- EA license-auth brute-force protection ----------
+// A legitimate EA polls its own valid license every ~8s indefinitely — that must never trip
+// this. Only FAILED license lookups (wrong/unknown/expired/disabled/mismatched) count against
+// the limit, so this only throttles someone guessing many different license values from one IP.
+const eaAuthFails=new Map();
+function eaAuthLimited(ip){
+  const rec=eaAuthFails.get(ip);
+  return !!(rec&&Date.now()<rec.resetAt&&rec.count>30);
+}
+function recordEaAuthFailure(ip){
+  const now=Date.now(),windowMs=10*60*1000;
+  const rec=eaAuthFails.get(ip);
+  if(!rec||now>rec.resetAt){eaAuthFails.set(ip,{count:1,resetAt:now+windowMs});return}
+  rec.count++;
+}
+function logEaAuthFailure(ip,licenseKey,code){
+  console.warn(`EA_AUTH_FAIL ip=${ip} license=${maskLicense(licenseKey)} reason=${code}`);
+}
+function maskLicense(k){k=String(k||'');return k.length<=8?'***':k.slice(0,5)+'…'+k.slice(-4)}
 
 // ---------- admin-token brute-force lockout ----------
 const adminFails=new Map();
@@ -512,16 +534,21 @@ const server=http.createServer(async(req,res)=>{
     const u=new URL(req.url,'http://localhost');
 
     if(u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.5.1'});
+      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.5.2'});
 
     // ---------- EA contract ----------
+    // Customer-facing auth is the Apex license alone — no separate infrastructure token.
+    // License is read from the X-Apex-License header (preferred) with a query-string/body
+    // fallback kept only so an already-running older EA build doesn't go dark mid-migration.
     if(req.method==='GET'&&u.pathname==='/api/ea/config'){
-      if(!auth(req,EA_TOKEN))return json(res,401,{error:'unauthorized'});
+      const ip=clientIp(req);
+      if(eaAuthLimited(ip))return json(res,429,{error:'too_many_attempts'});
       const cfg=clean(await read(CONFIG,DEFAULT));
       const account=u.searchParams.get('account')||'0';
       if(cfg.account!=='0'&&cfg.account!==account)return json(res,403,{error:'account_not_allowed'});
-      const licenseKey=u.searchParams.get('license')||'';
+      const licenseKey=req.headers['x-apex-license']||u.searchParams.get('license')||'';
       const lic=await checkEaLicense(licenseKey,account);
+      if(!lic.ok){recordEaAuthFailure(ip);logEaAuthFailure(ip,licenseKey,lic.code);}
       const st=await read(STATE,{});
       st.lastSeen=new Date().toISOString();
       atomic(STATE,st).catch(()=>{});
@@ -531,14 +558,15 @@ const server=http.createServer(async(req,res)=>{
     }
 
     if(req.method==='POST'&&u.pathname==='/api/ea/event'){
-      if(!auth(req,EA_TOKEN))return json(res,401,{error:'unauthorized'});
+      const ip=clientIp(req);
+      if(eaAuthLimited(ip))return json(res,429,{error:'too_many_attempts'});
       const b=await body(req);
       // Validate license/account the same way as a config poll — an event under an unknown,
       // inactive, or mismatched license/account is not blindly accepted as this license's activity.
-      const licenseKey=String(b.license||'');
+      const licenseKey=String(req.headers['x-apex-license']||b.license||'');
       const account=String(b.account||'');
       const lic=await checkEaLicense(licenseKey,account);
-      if(!lic.ok)return json(res,403,{error:lic.code});
+      if(!lic.ok){recordEaAuthFailure(ip);logEaAuthFailure(ip,licenseKey,lic.code);return json(res,403,{error:lic.code});}
       await touchLicenseTelemetry(licenseKey,{eaVersion:b.eaVersion,broker:b.broker,currency:b.currency,configSource:b.configSource});
       await event({type:String(b.type||'EA_EVENT'),...b});
       const st=await read(STATE,{});

@@ -1,14 +1,14 @@
 #property copyright "XauCloud Apex"
-#property version   "3.510"
+#property version   "3.520"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
-// Internal build lineage: v3.5.1 (dev codename RecoveryExit40) — adds the Recovery-To-Entry exit.
+// Internal build lineage: v3.5.1 (dev codename RecoveryExit40) adds the Recovery-To-Entry exit;
+// v3.5.2 removes the separate infrastructure EA token — the Apex license alone now authenticates.
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.5.1"
+#define APEX_VERSION "XauCloud-Apex_v3.5.2"
 #define APEX_MAGIC 8620260903
 input string InpApiBase="https://apex.xaucloud.io";
-input string InpEaToken="REPLACE_EA_TOKEN";
 input string InpApexLicense="";
 input int InpConfigPollSeconds=8;
 input int InpScanMilliseconds=250;
@@ -32,16 +32,27 @@ struct Config{bool armed;string account;string symbolContains;string targetMode,
 struct Snap{bool valid;int dir;double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;bool swept,rejected,microBreak,m3,m5,continuation,pullbackFail;string sig,reason;};
 Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,firstEntryPrice=0,firstSLPrice=0,firstInitialSLPrice=0;bool recoveryExitArmed=false;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
 bool watch=false;int watchDir=0;datetime watchStart=0,watchSweepBarTime=0;double watchExtreme=0,watchPrior=0,watchAtr=0;string watchSig="";
-bool everSyncedRemote=false;string lastConfigSig="";
+bool everSyncedRemote=false;string lastConfigSig="";string lastLicenseStatus="UNKNOWN";
 string trim(string s){StringTrimLeft(s);StringTrimRight(s);return s;} string raw(string j,string k){string n="\""+k+"\":";int p=StringFind(j,n);if(p<0)return"";p+=StringLen(n);while(p<StringLen(j)&&StringGetCharacter(j,p)==' ')p++;ushort c=StringGetCharacter(j,p);if(c=='\"'){int e=p+1;while(e<StringLen(j)&&StringGetCharacter(j,e)!='\"')e++;return StringSubstr(j,p+1,e-p-1);}int e=p;while(e<StringLen(j)){ushort x=StringGetCharacter(j,e);if(x==','||x=='}'||x==']')break;e++;}return trim(StringSubstr(j,p,e-p));}
 double jd(string j,string k,double d){string v=raw(j,k);return v==""?d:StringToDouble(v);} int ji(string j,string k,int d){string v=raw(j,k);return v==""?d:(int)StringToInteger(v);} bool jb(string j,string k,bool d){string v=raw(j,k);if(v=="true")return true;if(v=="false")return false;return d;} string js(string j,string k,string d){string v=raw(j,k);return v==""?d:v;} ulong ju(string j,string k,ulong d){string v=raw(j,k);return v==""?d:(ulong)StringToInteger(v);}
-bool Http(string method,string ep,string body,string &resp){if((bool)MQLInfoInteger(MQL_TESTER))return false;string hdr="Authorization: Bearer "+InpEaToken+"\r\nContent-Type: application/json\r\n";char d[],r[];string rh;StringToCharArray(body,d,0,WHOLE_ARRAY,CP_UTF8);ResetLastError();int code=WebRequest(method,InpApiBase+ep,hdr,7000,d,r,rh);if(code<0){Print("APEX_HTTP_ERROR ",GetLastError());return false;}resp=CharArrayToString(r,0,-1,CP_UTF8);return code>=200&&code<300;}
+bool Http(string method,string ep,string body,string &resp,int &code){
+ code=0;
+ if((bool)MQLInfoInteger(MQL_TESTER))return false;
+ string hdr="X-Apex-License: "+InpApexLicense+"\r\nContent-Type: application/json\r\n";
+ char d[],r[];string rh;
+ StringToCharArray(body,d,0,WHOLE_ARRAY,CP_UTF8);
+ ResetLastError();
+ code=WebRequest(method,InpApiBase+ep,hdr,7000,d,r,rh);
+ if(code<0){Print("APEX_HTTP_ERROR ",GetLastError());return false;}
+ resp=CharArrayToString(r,0,-1,CP_UTF8);
+ return code>=200&&code<300;
+}
 string ConfigSource(){return everSyncedRemote?"REMOTE":"LOCAL_INPUT";}
 void Emit(string type,string extra=""){
  string cfgFields=StringFormat(",\"l1MarginPct\":%.2f,\"l2MarginPct\":%.2f,\"l3PlusMarginPct\":%.2f,\"takeProfitPct\":%.2f,\"fixedSLGoldMove\":%.2f,\"beEnabled\":%s,\"beTriggerPct\":%.2f,\"recoveryExitEnabled\":%s,\"recoveryArmPctOfSL\":%.2f,\"ratchetEnabled\":%s,\"ratchetTriggerPct\":%.2f,\"ratchetLockPct\":%.2f,\"ratchetStepPct\":%.2f,\"ratchetLockStepPct\":%.2f,\"configSource\":\"%s\",\"eaVersion\":\"%s\"",
   C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"true":"false",C.masterBreakEvenTriggerPct,C.recoveryExitEnabled?"true":"false",C.recoveryExitArmPctOfSL,C.profitRatchetEnabled?"true":"false",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource(),APEX_VERSION);
  string b=StringFormat("{\"type\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"currency\":\"%s\",\"license\":\"%s\",\"symbol\":\"%s\",\"version\":\"%s\",\"campaignId\":\"%s\",\"signature\":\"%s\",\"direction\":%d,\"layers\":%d,\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f%s%s}",type,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),AccountInfoString(ACCOUNT_CURRENCY),InpApexLicense,_Symbol,APEX_VERSION,campId,campSig,campDir,layers,AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),AccountInfoDouble(ACCOUNT_MARGIN_FREE),cfgFields,extra);
- string r;Http("POST","/api/ea/event",b,r);
+ string r;int code=0;Http("POST","/api/ea/event",b,r,code);
 }
 void PrintEffectiveConfig(){
  Print("APEX_EFFECTIVE_CONFIG",
@@ -63,6 +74,34 @@ void PrintEffectiveConfig(){
   " ratchetLockStepPct=",DoubleToString(C.ratchetLockStepPct,2),
   " hardTP=",DoubleToString(C.normalTargetProfitPct,2),
   " source=",ConfigSource());
+}
+// Deduplicated operational-state log: only prints when the (state,reason) pair actually
+// changes, so the 250ms scan loop never spams the log — purely observational, changes nothing.
+string lastScanState="";
+void ScanLog(string state,string reason=""){
+ string sig=state+"|"+reason;
+ if(sig==lastScanState)return;
+ lastScanState=sig;
+ if(reason=="")Print("APEX_",state);
+ else Print("APEX_",state," reason=",reason);
+}
+// Terminal-wide GlobalVariable heartbeat so two XauCloud-Apex instances on the same account
+// (e.g. attached to both M5 and H1 by mistake) can detect each other. Detection/logging only —
+// does not gate trading logic, since arbitrating which instance "owns" execution safely would
+// itself be a behavior change; the fix is to detach the extra chart.
+string DupCheckKey(){return StringFormat("XauCloudApex_%I64d_%I64d",InpMagic,AccountInfoInteger(ACCOUNT_LOGIN));}
+void DupInstanceCheck(){
+ string key=DupCheckKey();
+ datetime now=TimeGMT();
+ if(GlobalVariableCheck(key)){
+   datetime last=(datetime)GlobalVariableGet(key);
+   long ownerChart=(long)GlobalVariableGet(key+"_chart");
+   if(ownerChart!=ChartID()&&(now-last)<(InpConfigPollSeconds*3)){
+     ScanLog("DUPLICATE_INSTANCE_WARNING",StringFormat("otherChartId=%I64d_thisChartId=%I64d_magic=%I64d",ownerChart,ChartID(),InpMagic));
+   }
+ }
+ GlobalVariableSet(key,(double)now);
+ GlobalVariableSet(key+"_chart",(double)ChartID());
 }
 void Defaults(){
  C.armed=!InpRequireRemoteArm;C.account="0";C.symbolContains="XAUUSD";C.targetMode="MULTIPLIER";C.accountProfile="NORMAL";
@@ -86,8 +125,12 @@ void Defaults(){
 }
 string ConfigSignature(){return StringFormat("%.2f|%.2f|%.2f|%.2f|%.2f|%s|%.2f|%s|%.2f|%s|%.2f|%.2f|%.2f|%.2f|%s",C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"1":"0",C.masterBreakEvenTriggerPct,C.recoveryExitEnabled?"1":"0",C.recoveryExitArmPctOfSL,C.profitRatchetEnabled?"1":"0",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource());}
 bool ConfigPoll(){
- string r,ep=StringFormat("/api/ea/config?account=%I64d&license=%s",AccountInfoInteger(ACCOUNT_LOGIN),InpApexLicense);
- if(!Http("GET",ep,"",r))return false;
+ string r,ep=StringFormat("/api/ea/config?account=%I64d",AccountInfoInteger(ACCOUNT_LOGIN));
+ int code=0;
+ if(!Http("GET",ep,"",r,code)){
+   Print("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=REQUEST_FAILED");
+   return false;
+ }
  C.armed=jb(r,"armed",C.armed);C.account=js(r,"account",C.account);C.symbolContains=js(r,"symbolContains",C.symbolContains);C.targetMode=js(r,"targetMode",C.targetMode);C.accountProfile=js(r,"accountProfile",C.accountProfile);C.targetEquity=jd(r,"targetEquity",C.targetEquity);C.targetMultiplier=jd(r,"targetMultiplier",C.targetMultiplier);
  C.normalTargetProfitPct=jd(r,"normalTargetProfitPct",C.normalTargetProfitPct);
  C.baseMarginPct=jd(r,"baseMarginPct",C.baseMarginPct);
@@ -106,6 +149,11 @@ bool ConfigPoll(){
  C.recoveryExitEnabled=jb(r,"recoveryExitEnabled",C.recoveryExitEnabled);
  C.recoveryExitArmPctOfSL=jd(r,"recoveryExitArmPctOfSL",C.recoveryExitArmPctOfSL);
  everSyncedRemote=true;
+ lastLicenseStatus=js(r,"licenseStatus","UNKNOWN");
+ if(lastLicenseStatus=="ACTIVE")
+   Print("APEX_CONFIG_POLL_OK licenseStatus=ACTIVE armed=",(C.armed?"true":"false")," source=REMOTE account=",AccountInfoInteger(ACCOUNT_LOGIN)," version=",APEX_VERSION);
+ else
+   Print("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=",lastLicenseStatus);
  string sig=ConfigSignature();
  if(sig!=lastConfigSig){lastConfigSig=sig;PrintEffectiveConfig();Emit("CONFIG_SYNC");}
  return true;
@@ -207,7 +255,12 @@ bool OpenLayer(int dir,double score,string why){
  double sl=0;
  if(firstNormal&&C.normalFixedSLGoldMove>0)sl=NormalizeDouble(dir>0?reqPrice-C.normalFixedSLGoldMove:reqPrice+C.normalFixedSLGoldMove,digits);
  bool ok=dir>0?trade.Buy(vol,_Symbol,0,sl,0,com):trade.Sell(vol,_Symbol,0,sl,0,com);
- if(!ok){Emit("ORDER_FAIL",StringFormat(",\"retcode\":%d",trade.ResultRetcode()));return false;}
+ if(!ok){
+   Print("APEX_ORDER_REJECTED retcode=",trade.ResultRetcode()," layer=",layers+1," volume=",DoubleToString(vol,4));
+   Emit("ORDER_FAIL",StringFormat(",\"retcode\":%d",trade.ResultRetcode()));
+   return false;
+ }
+ Print("APEX_ORDER_SENT layer=",layers+1," volume=",DoubleToString(trade.ResultVolume(),4)," price=",DoubleToString(trade.ResultPrice(),5));
  layers++;
  lastAdd=dir>0?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
  if(firstNormal){
@@ -370,6 +423,7 @@ void OnDeinit(const int r){EventKillTimer();if(hAtr!=INVALID_HANDLE)IndicatorRel
 void OnTick(){}
 void OnTimer(){
  datetime now=TimeCurrent();
+ DupInstanceCheck();
  if(now-lastCfg>=InpConfigPollSeconds){ConfigPoll();lastCfg=now;}
  if(camp||CountPos()>0){
    if(!camp&&CountPos()>0){
@@ -394,8 +448,29 @@ void OnTimer(){
    Manage();
    return;
  }
- if(!C.armed)return;
- if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60)return;
+ if(StringFind(_Symbol,C.symbolContains)<0){ScanLog("WAIT","SYMBOL_MISMATCH");return;}
+ if(lastLicenseStatus!="ACTIVE"){ScanLog("WAIT","LICENSE_NOT_ACTIVE");return;}
+ if(!C.armed){ScanLog("WAIT","ACCOUNT_NOT_ARMED");return;}
+ if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60){ScanLog("WAIT","COOLDOWN_ACTIVE");return;}
+ bool wasWatching=watch;
+ MqlTick tick;
+ bool haveTick=SymbolInfoTick(_Symbol,tick);
  Snap s=Observe();
- if(s.valid)Start(s);
+ if(s.valid){
+   ScanLog("ENTRY_READY","");
+   Start(s);
+ }else if(!haveTick){
+   ScanLog("WAIT","NO_TICKS");
+ }else if(watch){
+   double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
+   string reason="WATCHING_FOR_REJECTION";
+   if(s.rejected&&!s.microBreak)reason="WAITING_FOR_MICRO_BOS";
+   else if(s.rejected&&s.microBreak&&C.requireM3Confirm&&!s.m3)reason="WAIT_M3_CONFIRMATION";
+   else if(s.rejected&&s.microBreak&&s.score<threshold)reason="ENTRY_SCORE_TOO_LOW";
+   ScanLog("WATCH",reason);
+ }else if(wasWatching&&!watch){
+   ScanLog("SCAN","WATCH_EXPIRED");
+ }else{
+   ScanLog("SCAN","WAIT_NO_STRONG_IMPULSE_OR_LIQUIDITY_SWEEP");
+ }
 }

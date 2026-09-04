@@ -123,7 +123,7 @@ double VolumeForMargin(int dir,double pct){
  double balance=AccountInfoDouble(ACCOUNT_BALANCE),equity=AccountInfoDouble(ACCOUNT_EQUITY),free=AccountInfoDouble(ACCOUNT_MARGIN_FREE),leverage=(double)AccountInfoInteger(ACCOUNT_LEVERAGE);
  double budget=free*clamp(pct,.1,100)/100.0,mx=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX),mn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN),p=dir>0?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID),m=0,m1lot=0;
  ENUM_ORDER_TYPE t=dir>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
- OrderCalcMargin(t,_Symbol,1.0,p,m1lot);
+ if(!OrderCalcMargin(t,_Symbol,1.0,p,m1lot))m1lot=0;
  if(free<=0){Emit("MARGIN_CALC",StringFormat(",\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f,\"leverage\":%.0f,\"configuredMarginPct\":%.2f,\"marginRequiredFor1Lot\":%.2f,\"rawCalculatedLot\":0,\"normalizedLot\":0,\"rejected\":true,\"rejectReason\":\"NO_FREE_MARGIN\"",balance,equity,free,leverage,pct,m1lot));return 0;}
  double rawLot=m1lot>0?budget/m1lot:0;
  if(OrderCalcMargin(t,_Symbol,mx,p,m)&&m<=budget){

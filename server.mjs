@@ -42,7 +42,25 @@ const OBSOLETE_FIELDS=[
   'ratchetTriggerMoney','ratchetLockMoney','ratchetStepMoney','ratchetLockStepMoney'
 ];
 
-async function atomic(file,obj){const t=file+'.tmp'+process.pid;await fs.writeFile(t,JSON.stringify(obj,null,2));await fs.rename(t,file)}
+export async function atomic(file,obj){
+  // A mid-deploy version-directory swap can delete the temp file between writeFile and rename
+  // (observed in production as a transient ENOENT here) — the request already caught/handled
+  // this as a 500, but retry once with the dir re-created so a save isn't silently lost.
+  const t=file+'.tmp'+process.pid;
+  const body=JSON.stringify(obj,null,2);
+  try{
+    await fs.writeFile(t,body);
+    await fs.rename(t,file);
+  }catch(e){
+    if(e&&e.code==='ENOENT'){
+      await fs.mkdir(path.dirname(file),{recursive:true});
+      await fs.writeFile(t,body);
+      await fs.rename(t,file);
+      return;
+    }
+    throw e;
+  }
+}
 async function ensure(){
   await fs.mkdir(DATA,{recursive:true});
   try{await fs.access(CONFIG)}catch{await atomic(CONFIG,DEFAULT)}

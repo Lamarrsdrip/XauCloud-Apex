@@ -38,7 +38,11 @@ double jd(string j,string k,double d){string v=raw(j,k);return v==""?d:StringToD
 bool Http(string method,string ep,string body,string &resp,int &code){
  code=0;
  if((bool)MQLInfoInteger(MQL_TESTER))return false;
- string hdr="X-Apex-License: "+InpApexLicense+"\r\nContent-Type: application/json\r\n";
+ // MT5's WebRequest sends no/unusual User-Agent by default, which some hosting edge/WAF layers
+ // (e.g. Hostinger's) treat as bot traffic and block with a 403 before the request ever reaches
+ // the app. A normal browser UA avoids that false-positive without weakening any real security —
+ // the actual auth boundary is still the Apex license alone, checked server-side on every call.
+ string hdr="X-Apex-License: "+InpApexLicense+"\r\nContent-Type: application/json\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36\r\n";
  char d[],r[];string rh;
  StringToCharArray(body,d,0,WHOLE_ARRAY,CP_UTF8);
  ResetLastError();
@@ -106,6 +110,10 @@ void ScanLog(string state,string reason=""){
 // itself be a behavior change; the fix is to detach the extra chart.
 string DupCheckKey(){return StringFormat("XauCloudApex_%I64d_%I64d",InpMagic,AccountInfoInteger(ACCOUNT_LOGIN));}
 void DupInstanceCheck(){
+ // Meaningless in Strategy Tester (each run is a fresh isolated instance; GlobalVariables can
+ // persist stale entries across separate tester runs in the same terminal and would otherwise
+ // produce spurious warnings) — this check exists only to catch a live-account misconfiguration.
+ if((bool)MQLInfoInteger(MQL_TESTER))return;
  string key=DupCheckKey();
  datetime now=TimeGMT();
  if(GlobalVariableCheck(key)){
@@ -428,7 +436,16 @@ void Manage(){
 }
 int OnInit(){
  Defaults();
- if((bool)MQLInfoInteger(MQL_TESTER))C.armed=true;
+ if((bool)MQLInfoInteger(MQL_TESTER)){
+   // Strategy Tester never calls out to the live backend (Http() short-circuits for
+   // MQL_TESTER), so it must run entirely on local Inputs/Defaults() — the same way it always
+   // has. Both trading authority (armed) and the scan-loop's license gate are overridden here;
+   // leaving lastLicenseStatus at its default "UNKNOWN" would permanently block scanning in
+   // Tester once the scan-state license gate was added, which is not what remote-license
+   // enforcement is for — that gate exists for the LIVE backend connection only.
+   C.armed=true;
+   lastLicenseStatus="ACTIVE";
+ }
  if(StringFind(_Symbol,"XAU")<0)return INIT_FAILED;
  hAtr=iATR(_Symbol,PERIOD_M1,14);
  if(hAtr==INVALID_HANDLE)return INIT_FAILED;

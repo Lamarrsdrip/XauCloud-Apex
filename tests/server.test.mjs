@@ -1,5 +1,16 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
-import {clean,learn,classifyMt5} from '../server.mjs';
+import {clean,learn,classifyMt5,atomic} from '../server.mjs';
+import path from 'node:path';
+import os from 'node:os';
+
+test('REGRESSION GUARD: atomic() recovers when its target directory is missing (observed in production as a transient ENOENT on rename during a mid-deploy version-directory swap) instead of throwing and losing the write',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'apex-atomic-test-'));
+ fs.rmSync(dir,{recursive:true,force:true}); // directory does not exist at all
+ const target=path.join(dir,'config.json');
+ await atomic(target,{hello:'world'});
+ assert.equal(JSON.parse(fs.readFileSync(target,'utf8')).hello,'world');
+ fs.rmSync(dir,{recursive:true,force:true});
+});
 
 test('classifyMt5: no heartbeat ever recorded is DISCONNECTED',()=>{
  assert.equal(classifyMt5(null),'DISCONNECTED');
@@ -491,6 +502,42 @@ test('arm/disarm: toggling Apex Armed persists to config and is reflected in bot
   const eaPoll=await req(base,`/api/ea/config?account=777`,{headers:eaHeaders(key)});
   assert.equal(eaPoll.body.armed,true);
   assert.equal(eaPoll.body.licenseStatus,'ACTIVE');
+ });
+});
+
+test('REGRESSION GUARD: a partial config save never resets unrelated fields (writeConfigMerge always merges onto the current persisted config, never replaces it) — saving margin does not disarm, saving armed does not touch recovery/ratchet',async()=>{
+ await withServer(async base=>{
+  const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
+  const create=await req(base,'/api/admin/licenses',{method:'POST',headers:{authorization:`Bearer ${ADMIN_TOKEN}`},body:{}});
+  const key=create.body.license.key;
+  await req(base,`/api/ea/config?account=333222`,{headers:eaHeaders(key)}); // establish heartbeat so armed/settings are visible
+  const login=await req(base,'/api/auth/login',{method:'POST',body:{license:key}});
+  const cookie=login.headers['set-cookie'][0].split(';')[0];
+
+  await req(base,'/api/session/config',{method:'POST',cookie,body:{armed:true}});
+  const afterArm=await req(base,'/api/auth/me',{cookie});
+  assert.equal(afterArm.body.armed,true);
+
+  // saving an unrelated field (margin ladder) must not silently disarm
+  await req(base,'/api/session/config',{method:'POST',cookie,body:{normalL1MarginPct:22}});
+  const afterMargin=await req(base,'/api/auth/me',{cookie});
+  assert.equal(afterMargin.body.armed,true,'saving margin settings must not reset armed=false');
+  assert.equal(afterMargin.body.settings.normalL1MarginPct,22);
+  assert.equal(afterMargin.body.settings.recoveryExitEnabled,true,'unrelated recovery settings must survive an unrelated save');
+  assert.equal(afterMargin.body.settings.ratchetTriggerPct,180,'unrelated ratchet settings must survive an unrelated save');
+
+  // saving recovery settings must not disturb the margin change or armed state from the prior saves
+  await req(base,'/api/session/config',{method:'POST',cookie,body:{recoveryExitArmPctOfSL:33}});
+  const afterRecovery=await req(base,'/api/auth/me',{cookie});
+  assert.equal(afterRecovery.body.armed,true);
+  assert.equal(afterRecovery.body.settings.normalL1MarginPct,22,'the earlier margin save must survive a later unrelated save');
+  assert.equal(afterRecovery.body.settings.recoveryExitArmPctOfSL,33);
+
+  // finally, disarming explicitly must still work (armed is not being accidentally pinned true)
+  await req(base,'/api/session/config',{method:'POST',cookie,body:{armed:false}});
+  const afterDisarm=await req(base,'/api/auth/me',{cookie});
+  assert.equal(afterDisarm.body.armed,false);
+  assert.equal(afterDisarm.body.settings.normalL1MarginPct,22,'disarming must not reset unrelated settings either');
  });
 });
 

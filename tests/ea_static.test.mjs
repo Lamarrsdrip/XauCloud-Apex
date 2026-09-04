@@ -126,7 +126,26 @@ test('restart recovery persists and reloads local state (including master ticket
  assert.match(s,/mfe=jd\(j,"mfe",0\);/);
  assert.match(s,/firstSLPrice=jd\(j,"firstSLPrice",0\);/);
 });
-test('Strategy Tester can actually run the EA: WebRequest is skipped and it self-arms, instead of spamming ERR_FUNCTION_NOT_ALLOWED forever unarmed',()=>{assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)return false;/);assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)C\.armed=true;/)});
+test('Strategy Tester can actually run the EA: WebRequest is skipped and it self-arms, instead of spamming ERR_FUNCTION_NOT_ALLOWED forever unarmed',()=>{assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)return false;/);assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)\{/);assert.match(s,/C\.armed=true;\s*\n\s*lastLicenseStatus="ACTIVE";/)});
+test('REGRESSION GUARD: Strategy Tester must never be blocked by the live-only license scan-gate — lastLicenseStatus starts "UNKNOWN" and Http()/ConfigPoll() always short-circuit in MQL_TESTER, so without an explicit override the LICENSE_NOT_ACTIVE gate would permanently block Tester scanning',()=>{
+ // the tester branch in OnInit must set lastLicenseStatus to ACTIVE, not leave it at the "UNKNOWN" default
+ assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)\{[^}]*lastLicenseStatus="ACTIVE";[^}]*\}/s);
+ // and this override must happen in OnInit, before the scan loop's gate can ever run
+ const onInitIdx = s.indexOf('int OnInit(){');
+ const onTimerIdx = s.indexOf('void OnTimer(){');
+ const testerOverrideIdx = s.indexOf('lastLicenseStatus="ACTIVE";');
+ assert.ok(onInitIdx>=0 && onTimerIdx>onInitIdx, 'OnInit must precede OnTimer');
+ assert.ok(testerOverrideIdx>onInitIdx && testerOverrideIdx<onTimerIdx, 'the tester lastLicenseStatus override must live inside OnInit, before OnTimer\'s gate ever runs');
+ // the scan-loop gate itself must still exist (this test guards the override, not the gate's removal)
+ assert.match(s,/if\(lastLicenseStatus!="ACTIVE"\)\{ScanLog\("WAIT","LICENSE_NOT_ACTIVE"\);return;\}/);
+});
+test('REGRESSION GUARD: Strategy Tester armed authority is set in OnInit before any scan-gate check, matching the license override',()=>{
+ assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)\{[^}]*C\.armed=true;[^}]*\}/s);
+ assert.match(s,/if\(!C\.armed\)\{ScanLog\("WAIT","ACCOUNT_NOT_ARMED"\);return;\}/);
+});
+test('duplicate-instance detection is skipped entirely in Strategy Tester (would otherwise read stale GlobalVariables left by earlier separate test runs)',()=>{
+ assert.match(s,/void DupInstanceCheck\(\)\{\s*\n(\s*\/\/[^\n]*\n)*\s*if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)return;/);
+});
 test('rejection/structure-break confirmation cannot resolve on the same candle that triggered the sweep — requires a later closed bar',()=>{assert.match(s,/watchSweepBarTime=m1\[1\]\.time/);assert.match(s,/if\(m1\[i\]\.time<=watchSweepBarTime\)continue;/);assert.match(s,/if\(m1\[1\]\.time>watchSweepBarTime\)\{if\(s\.dir<0\)bos=/)});
 test('no setup-invalidation exit and no old money-ratchet — only target hit, profit ratchet, master SL, or broker/margin close end a campaign',()=>{assert.doesNotMatch(s,/Invalidated\(/);assert.doesNotMatch(s,/enableInvalidationExit/);assert.doesNotMatch(s,/invalidationGivebackPct/);assert.doesNotMatch(s,/INVALIDATED_PROFIT|INVALIDATED_LOSS/);assert.doesNotMatch(s,/normalAccountMaxMultiplier/)});
 test('EA license is wired into event telemetry for backend/EA enforcement, without touching strategy logic',()=>{assert.match(s,/input string InpApexLicense=""/);assert.match(s,/\\"license\\":\\"%s\\".*InpApexLicense/)});
@@ -142,7 +161,7 @@ test('v3.5.2: no separate EA infrastructure token — the Apex license alone aut
  assert.doesNotMatch(s,/InpEaToken/);
  assert.doesNotMatch(s,/REPLACE_EA_TOKEN/);
  assert.doesNotMatch(s,/Authorization: Bearer /);
- assert.match(s,/string hdr="X-Apex-License: "\+InpApexLicense\+"\\r\\nContent-Type: application\/json\\r\\n";/);
+ assert.match(s,/string hdr="X-Apex-License: "\+InpApexLicense\+"\\r\\nContent-Type: application\/json\\r\\nUser-Agent: Mozilla/);
  assert.doesNotMatch(s,/\/api\/ea\/config\?account=%I64d&license=%s/);
  assert.match(s,/ep=StringFormat\("\/api\/ea\/config\?account=%I64d",AccountInfoInteger\(ACCOUNT_LOGIN\)\);/);
 });

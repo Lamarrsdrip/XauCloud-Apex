@@ -126,25 +126,31 @@ test('restart recovery persists and reloads local state (including master ticket
  assert.match(s,/mfe=jd\(j,"mfe",0\);/);
  assert.match(s,/firstSLPrice=jd\(j,"firstSLPrice",0\);/);
 });
-test('Strategy Tester can actually run the EA: WebRequest is skipped and it self-arms, instead of spamming ERR_FUNCTION_NOT_ALLOWED forever unarmed',()=>{assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)return false;/);assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)\{/);assert.match(s,/C\.armed=true;\s*\n\s*lastLicenseStatus="ACTIVE";/)});
-test('REGRESSION GUARD: Strategy Tester must never be blocked by the live-only license scan-gate — lastLicenseStatus starts "UNKNOWN" and Http()/ConfigPoll() always short-circuit in MQL_TESTER, so without an explicit override the LICENSE_NOT_ACTIVE gate would permanently block Tester scanning',()=>{
- // the tester branch in OnInit must set lastLicenseStatus to ACTIVE, not leave it at the "UNKNOWN" default
- assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)\{[^}]*lastLicenseStatus="ACTIVE";[^}]*\}/s);
- // and this override must happen in OnInit, before the scan loop's gate can ever run
+test('a single IsTester() helper is the source of truth for Strategy Tester detection, used structurally at each definition point instead of a scattered post-hoc OnInit override',()=>{
+ assert.match(s,/bool IsTester\(\)\{return \(bool\)MQLInfoInteger\(MQL_TESTER\);\}/);
+});
+test('Strategy Tester can actually run the EA: WebRequest is skipped and it self-arms via Defaults(), instead of spamming ERR_FUNCTION_NOT_ALLOWED forever unarmed',()=>{
+ assert.match(s,/if\(IsTester\(\)\)return false;/);
+ assert.match(s,/C\.armed=IsTester\(\)\?true:!InpRequireRemoteArm;/);
+});
+test('REGRESSION GUARD: Strategy Tester must never be blocked by the live-only license scan-gate — the OnTimer gate itself is IsTester()-guarded, so lastLicenseStatus (which stays "UNKNOWN" in Tester since Http()/ConfigPoll() always short-circuit) is never consulted there',()=>{
+ assert.match(s,/if\(!IsTester\(\)&&lastLicenseStatus!="ACTIVE"\)\{ScanLog\("WAIT","LICENSE_NOT_ACTIVE"\);return;\}/);
+ // no post-hoc OnInit override should exist anymore — the guard is structural, not patched on afterward
  const onInitIdx = s.indexOf('int OnInit(){');
  const onTimerIdx = s.indexOf('void OnTimer(){');
- const testerOverrideIdx = s.indexOf('lastLicenseStatus="ACTIVE";');
- assert.ok(onInitIdx>=0 && onTimerIdx>onInitIdx, 'OnInit must precede OnTimer');
- assert.ok(testerOverrideIdx>onInitIdx && testerOverrideIdx<onTimerIdx, 'the tester lastLicenseStatus override must live inside OnInit, before OnTimer\'s gate ever runs');
- // the scan-loop gate itself must still exist (this test guards the override, not the gate's removal)
- assert.match(s,/if\(lastLicenseStatus!="ACTIVE"\)\{ScanLog\("WAIT","LICENSE_NOT_ACTIVE"\);return;\}/);
+ const onInitBody = s.slice(onInitIdx, onTimerIdx);
+ assert.doesNotMatch(onInitBody, /lastLicenseStatus="ACTIVE";/, 'OnInit must not force lastLicenseStatus — the IsTester() gate in OnTimer makes that unnecessary');
 });
-test('REGRESSION GUARD: Strategy Tester armed authority is set in OnInit before any scan-gate check, matching the license override',()=>{
- assert.match(s,/if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)\{[^}]*C\.armed=true;[^}]*\}/s);
+test('REGRESSION GUARD: Strategy Tester armed authority is set structurally in Defaults() (via IsTester()), not as a post-hoc OnInit override, and the live scan-gate is unchanged',()=>{
+ assert.match(s,/void Defaults\(\)\{\s*\n(\s*\/\/[^\n]*\n)*\s*C\.armed=IsTester\(\)\?true:!InpRequireRemoteArm;/);
  assert.match(s,/if\(!C\.armed\)\{ScanLog\("WAIT","ACCOUNT_NOT_ARMED"\);return;\}/);
+ const onInitIdx = s.indexOf('int OnInit(){');
+ const onTimerIdx = s.indexOf('void OnTimer(){');
+ const onInitBody = s.slice(onInitIdx, onTimerIdx);
+ assert.doesNotMatch(onInitBody, /C\.armed=true;/, 'OnInit must not force C.armed — Defaults() already handles Tester via IsTester()');
 });
 test('duplicate-instance detection is skipped entirely in Strategy Tester (would otherwise read stale GlobalVariables left by earlier separate test runs)',()=>{
- assert.match(s,/void DupInstanceCheck\(\)\{\s*\n(\s*\/\/[^\n]*\n)*\s*if\(\(bool\)MQLInfoInteger\(MQL_TESTER\)\)return;/);
+ assert.match(s,/void DupInstanceCheck\(\)\{\s*\n(\s*\/\/[^\n]*\n)*\s*if\(IsTester\(\)\)return;/);
 });
 test('rejection/structure-break confirmation cannot resolve on the same candle that triggered the sweep — requires a later closed bar',()=>{assert.match(s,/watchSweepBarTime=m1\[1\]\.time/);assert.match(s,/if\(m1\[i\]\.time<=watchSweepBarTime\)continue;/);assert.match(s,/if\(m1\[1\]\.time>watchSweepBarTime\)\{if\(s\.dir<0\)bos=/)});
 test('no setup-invalidation exit and no old money-ratchet — only target hit, profit ratchet, master SL, or broker/margin close end a campaign',()=>{assert.doesNotMatch(s,/Invalidated\(/);assert.doesNotMatch(s,/enableInvalidationExit/);assert.doesNotMatch(s,/invalidationGivebackPct/);assert.doesNotMatch(s,/INVALIDATED_PROFIT|INVALIDATED_LOSS/);assert.doesNotMatch(s,/normalAccountMaxMultiplier/)});
@@ -152,7 +158,8 @@ test('EA license is wired into event telemetry for backend/EA enforcement, witho
 test('customer-facing identity is clean (XauCloud Apex), internal version metadata retained for traceability as v3.5.x, and no internal dev codenames leak into customer-facing constants',()=>{
  assert.match(s,/#property copyright "XauCloud Apex"/);
  assert.match(s,/#property version   "3\.530"/);
- assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.3"/);
+ assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.3-DirectAPI"/);
+ assert.match(s,/input string InpApiBase="https:\/\/api\.apex\.xaucloud\.io";/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.1-RecoveryExit40"/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.0/);
  assert.doesNotMatch(s,/Default180-BE50|15-50-100-MarginLadder|TraderSync/);

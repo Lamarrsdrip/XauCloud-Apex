@@ -47,7 +47,7 @@ ADMIN_TOKEN=... SESSION_SECRET=... node server.mjs
 EA setup:
 1. Download XauCloud-Apex, compile `ea/XauCloud-Apex.mq5` in MetaEditor (require zero errors), and attach it to a XAUUSD/XAUUSDm chart.
 2. Enter your Apex License (`InpApexLicense`) — issued via the website's `/#admin` panel. No other token is required.
-3. Allow WebRequest for the deployed Apex URL (Tools → Options → Expert Advisors).
+3. Allow WebRequest for `https://api.apex.xaucloud.io` (Tools → Options → Expert Advisors → "Allow WebRequest for listed URL") — as of v3.5.3-DirectAPI the EA calls this hostname, not `https://apex.xaucloud.io`; MT5's allow-list is per-exact-hostname and a stale entry silently fails every poll with `APEX_HTTP_ERROR 4014`.
 4. Enable Algo Trading, then arm Apex from the website Dashboard/Settings.
 
 Older EA builds are kept for reference only under `ea/archive/` — do not attach them.

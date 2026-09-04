@@ -7,11 +7,16 @@
 // v3.5.3 fixes a real regression where Strategy Tester was permanently blocked by the live-only
 // license scan-gate, adds transport-vs-license failure diagnostics, and a browser User-Agent on
 // outbound requests (auth/telemetry/diagnostics only — no trading-strategy change in v3.5.2/3.5.3).
+// v3.5.3-DirectAPI: points the EA at api.apex.xaucloud.io, a hostname served directly by the
+// same Node app but outside Hostinger's CDN/edge layer (the layer that was 403-blocking every
+// live WebRequest); also replaces the OnInit post-hoc Tester override with an explicit IsTester()
+// guard used at the point of definition (Defaults()/OnTimer()) so Tester authority is structural,
+// not patched on afterward — the backend can never again block Strategy Tester.
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.5.3"
+#define APEX_VERSION "XauCloud-Apex_v3.5.3-DirectAPI"
 #define APEX_MAGIC 8620260903
-input string InpApiBase="https://apex.xaucloud.io";
+input string InpApiBase="https://api.apex.xaucloud.io";
 input string InpApexLicense="";
 input int InpConfigPollSeconds=8;
 input int InpScanMilliseconds=250;
@@ -36,11 +41,15 @@ struct Snap{bool valid;int dir;double score,atr,price,extreme,impulseMult,sweepM
 Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,firstEntryPrice=0,firstSLPrice=0,firstInitialSLPrice=0;bool recoveryExitArmed=false;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
 bool watch=false;int watchDir=0;datetime watchStart=0,watchSweepBarTime=0;double watchExtreme=0,watchPrior=0,watchAtr=0;string watchSig="";
 bool everSyncedRemote=false;string lastConfigSig="";string lastLicenseStatus="UNKNOWN";
+// Single source of truth for "are we running inside Strategy Tester" — used everywhere Tester
+// needs to behave independently of the live backend (arming, the license scan-gate, duplicate-
+// instance detection) instead of a scattered, easy-to-miss MQLInfoInteger(MQL_TESTER) at each site.
+bool IsTester(){return (bool)MQLInfoInteger(MQL_TESTER);}
 string trim(string s){StringTrimLeft(s);StringTrimRight(s);return s;} string raw(string j,string k){string n="\""+k+"\":";int p=StringFind(j,n);if(p<0)return"";p+=StringLen(n);while(p<StringLen(j)&&StringGetCharacter(j,p)==' ')p++;ushort c=StringGetCharacter(j,p);if(c=='\"'){int e=p+1;while(e<StringLen(j)&&StringGetCharacter(j,e)!='\"')e++;return StringSubstr(j,p+1,e-p-1);}int e=p;while(e<StringLen(j)){ushort x=StringGetCharacter(j,e);if(x==','||x=='}'||x==']')break;e++;}return trim(StringSubstr(j,p,e-p));}
 double jd(string j,string k,double d){string v=raw(j,k);return v==""?d:StringToDouble(v);} int ji(string j,string k,int d){string v=raw(j,k);return v==""?d:(int)StringToInteger(v);} bool jb(string j,string k,bool d){string v=raw(j,k);if(v=="true")return true;if(v=="false")return false;return d;} string js(string j,string k,string d){string v=raw(j,k);return v==""?d:v;} ulong ju(string j,string k,ulong d){string v=raw(j,k);return v==""?d:(ulong)StringToInteger(v);}
 bool Http(string method,string ep,string body,string &resp,int &code){
  code=0;
- if((bool)MQLInfoInteger(MQL_TESTER))return false;
+ if(IsTester())return false;
  // MT5's WebRequest sends no/unusual User-Agent by default, which some hosting edge/WAF layers
  // (e.g. Hostinger's) treat as bot traffic and block with a 403 before the request ever reaches
  // the app. A normal browser UA avoids that false-positive without weakening any real security —
@@ -116,7 +125,7 @@ void DupInstanceCheck(){
  // Meaningless in Strategy Tester (each run is a fresh isolated instance; GlobalVariables can
  // persist stale entries across separate tester runs in the same terminal and would otherwise
  // produce spurious warnings) — this check exists only to catch a live-account misconfiguration.
- if((bool)MQLInfoInteger(MQL_TESTER))return;
+ if(IsTester())return;
  string key=DupCheckKey();
  datetime now=TimeGMT();
  if(GlobalVariableCheck(key)){
@@ -130,7 +139,10 @@ void DupInstanceCheck(){
  GlobalVariableSet(key+"_chart",(double)ChartID());
 }
 void Defaults(){
- C.armed=!InpRequireRemoteArm;C.account="0";C.symbolContains="XAUUSD";C.targetMode="MULTIPLIER";C.accountProfile="NORMAL";
+ // Tester must always start armed from local Inputs, regardless of InpRequireRemoteArm — it never
+ // talks to the live backend (Http() short-circuits for IsTester()), so remote-arm requirements
+ // can never be satisfied there and would otherwise permanently block Strategy Tester.
+ C.armed=IsTester()?true:!InpRequireRemoteArm;C.account="0";C.symbolContains="XAUUSD";C.targetMode="MULTIPLIER";C.accountProfile="NORMAL";
  C.targetEquity=1000;C.targetMultiplier=100;
  C.normalTargetProfitPct=InpNormalTakeProfitPct;
  C.baseMarginPct=100;
@@ -438,17 +450,11 @@ void Manage(){
  if(spaced&&earned)OpenLayer(campDir,s.score,s.reason);
 }
 int OnInit(){
+ // Defaults() already sets C.armed correctly for both Tester (always true) and live (per
+ // InpRequireRemoteArm) via IsTester() — no post-hoc override needed here. The OnTimer() license
+ // scan-gate is itself IsTester()-guarded, so lastLicenseStatus is never consulted in Tester and
+ // needs no override either; it stays at its real default ("UNKNOWN") until a live ConfigPoll().
  Defaults();
- if((bool)MQLInfoInteger(MQL_TESTER)){
-   // Strategy Tester never calls out to the live backend (Http() short-circuits for
-   // MQL_TESTER), so it must run entirely on local Inputs/Defaults() — the same way it always
-   // has. Both trading authority (armed) and the scan-loop's license gate are overridden here;
-   // leaving lastLicenseStatus at its default "UNKNOWN" would permanently block scanning in
-   // Tester once the scan-state license gate was added, which is not what remote-license
-   // enforcement is for — that gate exists for the LIVE backend connection only.
-   C.armed=true;
-   lastLicenseStatus="ACTIVE";
- }
  if(StringFind(_Symbol,"XAU")<0)return INIT_FAILED;
  hAtr=iATR(_Symbol,PERIOD_M1,14);
  if(hAtr==INVALID_HANDLE)return INIT_FAILED;
@@ -456,7 +462,7 @@ int OnInit(){
  ConfigPoll();
  lastConfigSig=ConfigSignature();
  PrintEffectiveConfig();
- Print("APEX_READY ",APEX_VERSION," tester=",(bool)MQLInfoInteger(MQL_TESTER));
+ Print("APEX_READY ",APEX_VERSION," tester=",(IsTester()?"true":"false"));
  return INIT_SUCCEEDED;
 }
 void OnDeinit(const int r){EventKillTimer();if(hAtr!=INVALID_HANDLE)IndicatorRelease(hAtr);}
@@ -489,7 +495,7 @@ void OnTimer(){
    return;
  }
  if(StringFind(_Symbol,C.symbolContains)<0){ScanLog("WAIT","SYMBOL_MISMATCH");return;}
- if(lastLicenseStatus!="ACTIVE"){ScanLog("WAIT","LICENSE_NOT_ACTIVE");return;}
+ if(!IsTester()&&lastLicenseStatus!="ACTIVE"){ScanLog("WAIT","LICENSE_NOT_ACTIVE");return;}
  if(!C.armed){ScanLog("WAIT","ACCOUNT_NOT_ARMED");return;}
  if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60){ScanLog("WAIT","COOLDOWN_ACTIVE");return;}
  bool wasWatching=watch;

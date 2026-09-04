@@ -48,6 +48,21 @@ bool Http(string method,string ep,string body,string &resp,int &code){
  return code>=200&&code<300;
 }
 string ConfigSource(){return everSyncedRemote?"REMOTE":"LOCAL_INPUT";}
+// Never print the full license key — only a masked head/tail, matching the backend's own masking.
+string MaskLicense(string k){int n=StringLen(k);if(n<=8)return"***";return StringSubstr(k,0,5)+"…"+StringSubstr(k,n-4,4);}
+// Distinguishes a genuine transport/edge-level rejection (before the request ever reaches the
+// Apex backend's own license logic, which always answers 200 with an explicit licenseStatus)
+// from the backend's own license-state reasons, so a WAF/proxy block is never mislabeled as a
+// license problem.
+string TransportFailReason(int code){
+ if(code==0)return"WEBREQUEST_TRANSPORT_ERROR";
+ if(code==401)return"UNAUTHORIZED_401";
+ if(code==403)return"FORBIDDEN_403_LIKELY_EDGE_OR_PROXY_BLOCK";
+ if(code==404)return"NOT_FOUND_404";
+ if(code==429)return"RATE_LIMITED_429";
+ if(code>=500)return"SERVER_ERROR_"+IntegerToString(code);
+ return"HTTP_"+IntegerToString(code);
+}
 void Emit(string type,string extra=""){
  string cfgFields=StringFormat(",\"l1MarginPct\":%.2f,\"l2MarginPct\":%.2f,\"l3PlusMarginPct\":%.2f,\"takeProfitPct\":%.2f,\"fixedSLGoldMove\":%.2f,\"beEnabled\":%s,\"beTriggerPct\":%.2f,\"recoveryExitEnabled\":%s,\"recoveryArmPctOfSL\":%.2f,\"ratchetEnabled\":%s,\"ratchetTriggerPct\":%.2f,\"ratchetLockPct\":%.2f,\"ratchetStepPct\":%.2f,\"ratchetLockStepPct\":%.2f,\"configSource\":\"%s\",\"eaVersion\":\"%s\"",
   C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"true":"false",C.masterBreakEvenTriggerPct,C.recoveryExitEnabled?"true":"false",C.recoveryExitArmPctOfSL,C.profitRatchetEnabled?"true":"false",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource(),APEX_VERSION);
@@ -128,7 +143,10 @@ bool ConfigPoll(){
  string r,ep=StringFormat("/api/ea/config?account=%I64d",AccountInfoInteger(ACCOUNT_LOGIN));
  int code=0;
  if(!Http("GET",ep,"",r,code)){
-   Print("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=REQUEST_FAILED");
+   string reason=TransportFailReason(code);
+   Print("APEX_AUTH_FAIL status=",code," reason=",reason," license=",MaskLicense(InpApexLicense));
+   Print("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=",reason);
+   if(StringLen(r)>0)Print("APEX_CONFIG_POLL_FAIL_BODY ",StringSubstr(r,0,220));
    return false;
  }
  C.armed=jb(r,"armed",C.armed);C.account=js(r,"account",C.account);C.symbolContains=js(r,"symbolContains",C.symbolContains);C.targetMode=js(r,"targetMode",C.targetMode);C.accountProfile=js(r,"accountProfile",C.accountProfile);C.targetEquity=jd(r,"targetEquity",C.targetEquity);C.targetMultiplier=jd(r,"targetMultiplier",C.targetMultiplier);
@@ -150,10 +168,12 @@ bool ConfigPoll(){
  C.recoveryExitArmPctOfSL=jd(r,"recoveryExitArmPctOfSL",C.recoveryExitArmPctOfSL);
  everSyncedRemote=true;
  lastLicenseStatus=js(r,"licenseStatus","UNKNOWN");
- if(lastLicenseStatus=="ACTIVE")
+ if(lastLicenseStatus=="ACTIVE"){
    Print("APEX_CONFIG_POLL_OK licenseStatus=ACTIVE armed=",(C.armed?"true":"false")," source=REMOTE account=",AccountInfoInteger(ACCOUNT_LOGIN)," version=",APEX_VERSION);
- else
+ }else{
+   Print("APEX_AUTH_FAIL status=",code," reason=",lastLicenseStatus," license=",MaskLicense(InpApexLicense));
    Print("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=",lastLicenseStatus);
+ }
  string sig=ConfigSignature();
  if(sig!=lastConfigSig){lastConfigSig=sig;PrintEffectiveConfig();Emit("CONFIG_SYNC");}
  return true;

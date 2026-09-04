@@ -148,9 +148,28 @@ test('v3.5.2: no separate EA infrastructure token — the Apex license alone aut
 });
 test('ConfigPoll surfaces the HTTP transport code and reports APEX_CONFIG_POLL_OK / APEX_CONFIG_POLL_FAIL explicitly, not just APEX_READY',()=>{
  assert.match(s,/bool Http\(string method,string ep,string body,string &resp,int &code\)\{/);
- assert.match(s,/Print\("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=REQUEST_FAILED"\);/);
+ assert.match(s,/Print\("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=",reason\);/);
  assert.match(s,/Print\("APEX_CONFIG_POLL_OK licenseStatus=ACTIVE armed=",\(C\.armed\?"true":"false"\)," source=REMOTE account=",AccountInfoInteger\(ACCOUNT_LOGIN\)," version=",APEX_VERSION\);/);
  assert.match(s,/Print\("APEX_CONFIG_POLL_FAIL httpCode=",code," reason=",lastLicenseStatus\);/);
+});
+test('a transport-level failure (edge/proxy/network) is distinguished from a genuine backend license-state failure, never mislabeled, and the license is never printed unmasked',()=>{
+ assert.match(s,/string MaskLicense\(string k\)\{int n=StringLen\(k\);if\(n<=8\)return"\*\*\*";return StringSubstr\(k,0,5\)\+"…"\+StringSubstr\(k,n-4,4\);\}/);
+ assert.match(s,/string TransportFailReason\(int code\)\{/);
+ assert.match(s,/if\(code==403\)return"FORBIDDEN_403_LIKELY_EDGE_OR_PROXY_BLOCK";/);
+ assert.match(s,/if\(code==401\)return"UNAUTHORIZED_401";/);
+ assert.match(s,/if\(code==429\)return"RATE_LIMITED_429";/);
+ assert.match(s,/Print\("APEX_AUTH_FAIL status=",code," reason=",reason," license=",MaskLicense\(InpApexLicense\)\);/);
+ assert.match(s,/Print\("APEX_AUTH_FAIL status=",code," reason=",lastLicenseStatus," license=",MaskLicense\(InpApexLicense\)\);/);
+ // the raw license value must never appear directly (unmasked) in a Print(...) call — every
+ // Print(...) that references InpApexLicense must go through MaskLicense() first
+ const printCalls = s.match(/Print\([^;]*?\);/gs) || [];
+ for (const call of printCalls) {
+   if (call.includes('InpApexLicense')) {
+     assert.match(call, /MaskLicense\(InpApexLicense\)/, `Print call references InpApexLicense unmasked: ${call}`);
+   }
+ }
+ // response body is captured on a transport failure for diagnosis, truncated (not unbounded)
+ assert.match(s,/if\(StringLen\(r\)>0\)Print\("APEX_CONFIG_POLL_FAIL_BODY ",StringSubstr\(r,0,220\)\);/);
 });
 test('operational scan-state logging is deduplicated (only prints on state change) and covers the documented wait/watch/entry reasons',()=>{
  assert.match(s,/void ScanLog\(string state,string reason=""\)\{/);

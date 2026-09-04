@@ -28,7 +28,7 @@ input bool   InpMasterBreakEvenEnabled=true;    // Move L1/master SL to entry af
 input double InpMasterBreakEvenTriggerPct=50.0; // Default: +50% basket profit => master SL to entry         // ...raise protected floor another +100%
 input bool   InpRecoveryExitEnabled=true;       // Deep adverse move then recovery to entry => exit basket
 input double InpRecoveryExitArmPctOfSL=40.0;    // Arm after L1 reaches this % of ORIGINAL SL distance
-struct Config{bool armed;string account;string symbolContains;string targetMode,accountProfile;double targetEquity,targetMultiplier,normalTargetProfitPct,baseMarginPct,layerMultiplier;int maxLayers;double entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;int rejectionBars,watchExpiryMinutes,cooldownMinutes;bool requireM3Confirm,requireM5Context,learningEnabled,normalProfitFloorEnabled;double learnEntryAdj,learnAddAdj;};
+struct Config{bool armed;string account;string symbolContains;string targetMode,accountProfile;double targetEquity,targetMultiplier,normalTargetProfitPct,baseMarginPct,layerMultiplier;int maxLayers;double entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;int rejectionBars,watchExpiryMinutes,cooldownMinutes;bool requireM3Confirm,requireM5Context,learningEnabled,normalProfitFloorEnabled;double learnEntryAdj,learnAddAdj;bool profitRatchetEnabled;double ratchetTriggerPct,ratchetLockPct,ratchetStepPct,ratchetLockStepPct;};
 struct Snap{bool valid;int dir;double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;bool swept,rejected,microBreak,m3,m5,continuation,pullbackFail;string sig,reason;};
 Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,peakProfitPct=0,floorProfitPct=0,firstEntryPrice=0,firstSLPrice=0,firstInitialSLPrice=0;bool recoveryExitArmed=false;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
 bool watch=false;int watchDir=0;datetime watchStart=0,watchSweepBarTime=0;double watchExtreme=0,watchPrior=0,watchAtr=0;string watchSig="";
@@ -68,6 +68,8 @@ void SaveCloudCache(){
    CacheSet("CD",C.cooldownMinutes); CacheSet("M3",C.requireM3Confirm?1:0);
    CacheSet("M5",C.requireM5Context?1:0); CacheSet("LE",C.learningEnabled?1:0);
    CacheSet("LEA",C.learnEntryAdj); CacheSet("LAA",C.learnAddAdj);
+   CacheSet("RTE",C.profitRatchetEnabled?1:0); CacheSet("RTT",C.ratchetTriggerPct);
+   CacheSet("RTL",C.ratchetLockPct); CacheSet("RTS",C.ratchetStepPct); CacheSet("RTK",C.ratchetLockStepPct);
    CacheSet("REV",(double)g_cloudLastCommandRevision);
 }
 bool LoadCloudCache(){
@@ -93,6 +95,11 @@ bool LoadCloudCache(){
    if(CacheGet("LE",v))C.learningEnabled=v>0.5;
    if(CacheGet("LEA",v))C.learnEntryAdj=v;
    if(CacheGet("LAA",v))C.learnAddAdj=v;
+   if(CacheGet("RTE",v))C.profitRatchetEnabled=v>0.5;
+   if(CacheGet("RTT",v))C.ratchetTriggerPct=v;
+   if(CacheGet("RTL",v))C.ratchetLockPct=v;
+   if(CacheGet("RTS",v))C.ratchetStepPct=v;
+   if(CacheGet("RTK",v))C.ratchetLockStepPct=v;
    if(CacheGet("REV",v))g_cloudLastCommandRevision=(long)v;
    g_cloudUsingCache=true;
    g_cloudLastStatus="CACHED_LAST_KNOWN_GOOD";
@@ -167,6 +174,16 @@ void ApplyRemoteConfig(string r){
    C.learningEnabled=jb(r,"learningEnabled",C.learningEnabled);
    C.learnEntryAdj=jd(r,"entryScoreAdjustment",C.learnEntryAdj);
    C.learnAddAdj=jd(r,"addScoreAdjustment",C.learnAddAdj);
+   // Basket profit-exit settings (Basket Take Profit + Profit Ratchet) were previously parsed
+   // here (normalTargetProfitPct) or not parsed at all (ratchet*) and the runtime logic below
+   // read the local compiled InpXxx values instead of these C.* fields -- the website dashboard
+   // had zero effect on the running EA for these two settings. Fixed: Manage()/Start() now read
+   // C.normalTargetProfitPct / C.profitRatchetEnabled / C.ratchet* exclusively.
+   C.profitRatchetEnabled=jb(r,"profitRatchetEnabled",C.profitRatchetEnabled);
+   C.ratchetTriggerPct=jd(r,"ratchetTriggerPct",C.ratchetTriggerPct);
+   C.ratchetLockPct=jd(r,"ratchetLockPct",C.ratchetLockPct);
+   C.ratchetStepPct=jd(r,"ratchetStepPct",C.ratchetStepPct);
+   C.ratchetLockStepPct=jd(r,"ratchetLockStepPct",C.ratchetLockStepPct);
 }
 
 bool CloudSync(){
@@ -234,7 +251,17 @@ void Emit(string type,string extra=""){
 }
 void Defaults(){
    C.armed=!InpRequireRemoteArm;C.account="0";C.symbolContains="XAUUSD";C.targetMode="MULTIPLIER";
-   C.accountProfile="NORMAL";C.targetEquity=1000;C.targetMultiplier=100;C.normalTargetProfitPct=0;
+   C.accountProfile="NORMAL";C.targetEquity=1000;C.targetMultiplier=100;
+   // Seeded from the matching InpXxx so a cold EA (no cloud contact yet) or a Strategy Tester run
+   // (which never calls CloudSync/ApplyRemoteConfig) behaves exactly as the compiled Inputs say,
+   // identical to pre-fix behavior. Once a real config poll succeeds, ApplyRemoteConfig() overwrites
+   // these with the website/backend-saved values, which is the authority from then on.
+   C.normalTargetProfitPct=InpNormalTakeProfitPct;
+   C.profitRatchetEnabled=InpProfitRatchetEnabled;
+   C.ratchetTriggerPct=InpRatchetTriggerPct;
+   C.ratchetLockPct=InpRatchetLockPct;
+   C.ratchetStepPct=InpRatchetStepPct;
+   C.ratchetLockStepPct=InpRatchetLockStepPct;
    C.baseMarginPct=100;C.layerMultiplier=2;C.maxLayers=0;C.entryScore=76;C.addScore=70;
    C.impulseAtr=1.8;C.sweepAtr=.05;C.rejectionBars=5;C.watchExpiryMinutes=12;
    C.addSpacingAtr=.22;C.rejectionZoneAtr=.12;C.cooldownMinutes=0;C.requireM3Confirm=true;
@@ -331,7 +358,7 @@ bool OpenLayer(int dir,double score,string why){
  return true;
 }
 bool CloseAll(){trade.SetExpertMagicNumber(InpMagic);for(int pass=0;pass<6;pass++){bool any=false;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(t&&PositionGetString(POSITION_SYMBOL)==_Symbol&&PositionGetInteger(POSITION_MAGIC)==InpMagic){any=true;trade.PositionClose(t);}}if(!any)break;Sleep(100);}return CountPos()==0;}
-void Start(Snap &s){camp=true;campDir=s.dir;layers=0;cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);targetEq=C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(InpNormalTakeProfitPct>0?cycleStart*(1.0+InpNormalTakeProfitPct/100.0):0.0):cycleStart*C.targetMultiplier);peakProfitPct=0;floorProfitPct=0;firstEntryPrice=0;firstSLPrice=0;masterTicket=0;masterGuardStage=0;campStart=TimeCurrent();campId=StringFormat("%I64d-%I64d",AccountInfoInteger(ACCOUNT_LOGIN),(long)campStart);campSig=s.sig;mfe=0;mae=0;Emit("CAMPAIGN_START",StringFormat(",\"score\":%.2f,\"targetEquity\":%.2f,\"entryPrice\":%.5f,\"impulseMult\":%.3f,\"wickRatio\":%.3f,\"m3\":%s,\"m5\":%s,\"atr\":%.5f",s.score,targetEq,s.price,s.impulseMult,s.wickRatio,s.m3?"true":"false",s.m5?"true":"false",s.atr));if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED")){camp=false;campId="";ClearState();}watch=false;}
+void Start(Snap &s){camp=true;campDir=s.dir;layers=0;cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);targetEq=C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0):cycleStart*C.targetMultiplier);peakProfitPct=0;floorProfitPct=0;firstEntryPrice=0;firstSLPrice=0;masterTicket=0;masterGuardStage=0;campStart=TimeCurrent();campId=StringFormat("%I64d-%I64d",AccountInfoInteger(ACCOUNT_LOGIN),(long)campStart);campSig=s.sig;mfe=0;mae=0;Emit("CAMPAIGN_START",StringFormat(",\"score\":%.2f,\"targetEquity\":%.2f,\"entryPrice\":%.5f,\"impulseMult\":%.3f,\"wickRatio\":%.3f,\"m3\":%s,\"m5\":%s,\"atr\":%.5f",s.score,targetEq,s.price,s.impulseMult,s.wickRatio,s.m3?"true":"false",s.m5?"true":"false",s.atr));if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED")){camp=false;campId="";ClearState();}watch=false;}
 void Finish(string outcome,string why){Emit("CAMPAIGN_END",StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"mfe\":%.2f,\"mae\":%.2f,\"durationSec\":%d",outcome,why,mfe,mae,(int)(TimeCurrent()-campStart)));camp=false;campDir=0;layers=0;lastAdd=0;peakProfitPct=0;floorProfitPct=0;firstEntryPrice=0;firstSLPrice=0;masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";watch=false;ClearState();}
 Snap AddSignal(){Snap s=Observe();if(s.dir!=campDir){s.valid=false;MqlRates m1[];if(!Rates(PERIOD_M1,30,m1))return s;s.atr=ATR();s.dir=campDir;s.price=campDir>0?SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK);bool cont=campDir<0?(m1[1].close<m1[2].low&&m1[2].close<m1[3].low):(m1[1].close>m1[2].high&&m1[2].close>m1[3].high);bool pf=campDir<0?(m1[2].close>m1[2].open&&m1[1].close<m1[2].low):(m1[2].close<m1[2].open&&m1[1].close>m1[2].high);s.continuation=cont;s.pullbackFail=pf;s.score=60+(cont?20:0)+(pf?15:0);s.sig=campSig;s.reason=cont?"CONTINUATION_BREAK":pf?"FAILED_PULLBACK":"NO_NEW_CONFIRMATION";}return s;}
 void Manage(){
@@ -413,13 +440,13 @@ void Manage(){
  // +300% peak => protect +200%
  // +400% peak => protect +300%, etc.
  // This is NOT a hard TP. The basket keeps running until it retraces to the earned floor.
- if(C.accountProfile=="NORMAL"&&InpProfitRatchetEnabled&&cycleStart>0&&
-    InpRatchetTriggerPct>0&&InpRatchetLockPct>=0&&
-    InpRatchetStepPct>0&&InpRatchetLockStepPct>=0){
+ if(C.accountProfile=="NORMAL"&&C.profitRatchetEnabled&&cycleStart>0&&
+    C.ratchetTriggerPct>0&&C.ratchetLockPct>=0&&
+    C.ratchetStepPct>0&&C.ratchetLockStepPct>=0){
    double peakPct=(mfe/cycleStart)*100.0;
-   if(peakPct>=InpRatchetTriggerPct){
-     int ratchetSteps=(int)MathFloor((peakPct-InpRatchetTriggerPct)/InpRatchetStepPct);
-     double protectedPct=InpRatchetLockPct+(double)ratchetSteps*InpRatchetLockStepPct;
+   if(peakPct>=C.ratchetTriggerPct){
+     int ratchetSteps=(int)MathFloor((peakPct-C.ratchetTriggerPct)/C.ratchetStepPct);
+     double protectedPct=C.ratchetLockPct+(double)ratchetSteps*C.ratchetLockStepPct;
      protectedPct=MathMax(0.0,protectedPct);
      double protectedProfit=cycleStart*(protectedPct/100.0);
      if(p<=protectedProfit){
@@ -464,4 +491,4 @@ int OnInit(){
       " | armed=",C.armed?"true":"false",
       " | strategy/exit logic unchanged from v3.5.1");
    return INIT_SUCCEEDED;
-}void OnDeinit(const int r){EventKillTimer();if(hAtr!=INVALID_HANDLE)IndicatorRelease(hAtr);}void OnTick(){}void OnTimer(){datetime now=TimeCurrent();if(now-lastCfg>=InpConfigPollSeconds){CloudSync();lastCfg=now;}if(camp||CountPos()>0){if(!camp&&CountPos()>0){int nDir,nCount;double nPrice;NewestMagicPosition(nDir,nPrice,nCount);string j;if(nCount>0&&LoadState(j)&&ji(j,"campDir",0)==nDir&&StringLen(js(j,"campId",""))>0){camp=true;campId=js(j,"campId","");campSig=js(j,"campSig","RECOVERED");campDir=nDir;layers=(int)MathMax(nCount,ji(j,"layers",nCount));cycleStart=jd(j,"cycleStart",AccountInfoDouble(ACCOUNT_BALANCE));targetEq=jd(j,"targetEq",C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(InpNormalTakeProfitPct>0?cycleStart*(1.0+InpNormalTakeProfitPct/100.0):0.0):cycleStart*C.targetMultiplier));peakProfitPct=jd(j,"peakProfitPct",0);floorProfitPct=jd(j,"floorProfitPct",0);firstEntryPrice=jd(j,"firstEntryPrice",0);firstSLPrice=jd(j,"firstSLPrice",0);masterTicket=ju(j,"masterTicket",0);masterGuardStage=ji(j,"masterGuardStage",0);campStart=(datetime)ji(j,"campStart",(int)now);lastAdd=nPrice;mfe=jd(j,"mfe",0);mae=jd(j,"mae",0);Emit("CAMPAIGN_RECOVERED",StringFormat(",\"source\":\"STATE_FILE\",\"layers\":%d",layers));}else if(nCount>0){camp=true;campDir=nDir;layers=nCount;cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);targetEq=C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(InpNormalTakeProfitPct>0?cycleStart*(1.0+InpNormalTakeProfitPct/100.0):0.0):cycleStart*C.targetMultiplier);peakProfitPct=0;floorProfitPct=0;masterTicket=FindOldestApexPosition();masterGuardStage=0;firstEntryPrice=0;firstSLPrice=0;campStart=now;campId=StringFormat("RECOVER-%I64d",(long)now);campSig="RECOVERED_NO_STATE";lastAdd=nPrice;mfe=0;mae=0;Emit("CAMPAIGN_RECOVERED",",\"source\":\"POSITION_SCAN_ONLY\",\"warning\":\"CYCLE_START_EQUITY_ESTIMATED_FROM_RESTART_BALANCE\"");}SaveState();}Manage();return;}if(!C.armed)return;if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60)return;Snap s=Observe();if(s.valid)Start(s);}
+}void OnDeinit(const int r){EventKillTimer();if(hAtr!=INVALID_HANDLE)IndicatorRelease(hAtr);}void OnTick(){}void OnTimer(){datetime now=TimeCurrent();if(now-lastCfg>=InpConfigPollSeconds){CloudSync();lastCfg=now;}if(camp||CountPos()>0){if(!camp&&CountPos()>0){int nDir,nCount;double nPrice;NewestMagicPosition(nDir,nPrice,nCount);string j;if(nCount>0&&LoadState(j)&&ji(j,"campDir",0)==nDir&&StringLen(js(j,"campId",""))>0){camp=true;campId=js(j,"campId","");campSig=js(j,"campSig","RECOVERED");campDir=nDir;layers=(int)MathMax(nCount,ji(j,"layers",nCount));cycleStart=jd(j,"cycleStart",AccountInfoDouble(ACCOUNT_BALANCE));targetEq=jd(j,"targetEq",C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0):cycleStart*C.targetMultiplier));peakProfitPct=jd(j,"peakProfitPct",0);floorProfitPct=jd(j,"floorProfitPct",0);firstEntryPrice=jd(j,"firstEntryPrice",0);firstSLPrice=jd(j,"firstSLPrice",0);masterTicket=ju(j,"masterTicket",0);masterGuardStage=ji(j,"masterGuardStage",0);campStart=(datetime)ji(j,"campStart",(int)now);lastAdd=nPrice;mfe=jd(j,"mfe",0);mae=jd(j,"mae",0);Emit("CAMPAIGN_RECOVERED",StringFormat(",\"source\":\"STATE_FILE\",\"layers\":%d",layers));}else if(nCount>0){camp=true;campDir=nDir;layers=nCount;cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);targetEq=C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0):cycleStart*C.targetMultiplier);peakProfitPct=0;floorProfitPct=0;masterTicket=FindOldestApexPosition();masterGuardStage=0;firstEntryPrice=0;firstSLPrice=0;campStart=now;campId=StringFormat("RECOVER-%I64d",(long)now);campSig="RECOVERED_NO_STATE";lastAdd=nPrice;mfe=0;mae=0;Emit("CAMPAIGN_RECOVERED",",\"source\":\"POSITION_SCAN_ONLY\",\"warning\":\"CYCLE_START_EQUITY_ESTIMATED_FROM_RESTART_BALANCE\"");}SaveState();}Manage();return;}if(!C.armed)return;if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60)return;Snap s=Observe();if(s.valid)Start(s);}

@@ -236,3 +236,43 @@ test('bridge unreachable falls back to local lastSeen instead of breaking the da
   assert.equal(me.body.bridge.ok,false);
   assert.equal(me.body.armed,true);
 }));
+
+test('G: Basket TP + Profit Ratchet settings saved from the dashboard propagate through session/config -> bridge config/upsert -> exactly what the EA would poll',async()=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'apex37-tp-ratchet-')),bridge=await fakeBridge();
+  const key='APEX-TPRATCHET-01',now=new Date().toISOString();
+  await fs.writeFile(path.join(dir,'licenses.json'),JSON.stringify({[key]:{status:'ACTIVE',account:'',customer:'qa',createdAt:now,updatedAt:now}}));
+  await fs.writeFile(path.join(dir,'license-configs.json'),'{}');
+  await fs.writeFile(path.join(dir,'config.json'),JSON.stringify({armed:false}));
+  process.env.NODE_ENV='test';process.env.DATA_DIR=dir;process.env.SESSION_SECRET='test-secret';
+  process.env.XAUCLOUD_BASE_URL=bridge.base;process.env.APEX_BRIDGE_SECRET='integration-secret';
+  let mod;
+  try{
+    mod=await import('../server.mjs?tp-ratchet-'+Math.random());
+    await mod.syncAllLicensesAtStartup();
+    await new Promise(ok=>mod.server.listen(0,'127.0.0.1',ok));
+    const base=`http://127.0.0.1:${mod.server.address().port}`;
+    const login=await request(base,'/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:{license:key}});
+    const cookie=login.cookie.split(';')[0];
+
+    const payload={
+      normalTargetProfitPct:500,
+      profitRatchetEnabled:true,ratchetTriggerPct:180,ratchetLockPct:100,ratchetStepPct:100,ratchetLockStepPct:100
+    };
+    const saved=await request(base,'/api/session/config',{method:'POST',headers:{'content-type':'application/json','cookie':cookie},body:payload});
+    assert.equal(saved.status,200);
+    for(const [k,v] of Object.entries(payload))assert.equal(saved.body.config[k],v,`saved config missing/wrong ${k}`);
+
+    // exactly what reached the XauCloud bridge (i.e. what /api/cloud/apex/config would serve the EA)
+    const bridged=bridge.configs.get(key);
+    assert.ok(bridged,'bridge never received the config upsert');
+    for(const [k,v] of Object.entries(payload))assert.equal(bridged[k],v,`bridge config missing/wrong ${k}`);
+
+    // and the dashboard's own settings view reflects the same saved values (UI truthfulness)
+    const me=await request(base,'/api/auth/me',{headers:{cookie}});
+    for(const [k,v] of Object.entries(payload))assert.equal(me.body.settings[k],v,`dashboard settings missing/wrong ${k}`);
+  }finally{
+    if(mod?.server?.listening)await new Promise(ok=>mod.server.close(ok));
+    await bridge.close();await fs.rm(dir,{recursive:true,force:true});
+    delete process.env.APEX_BRIDGE_SECRET;delete process.env.XAUCLOUD_BASE_URL;
+  }
+});

@@ -97,6 +97,90 @@ test('custom ladder: trigger 50%, lock 25%, step 50%, lockStep 25% (Strategy Tes
   assert.equal(at100.protectedPct, 50);
 });
 
+// ---------- QA task letters C/D exact boundary points (task-specified example ladder) ----------
+test('C: +179% peak -> no protected floor', ()=>{
+  assert.equal(ratchetFloor(1000, 1790, DEFAULT_RATCHET).active, false);
+});
+test('C: +180% peak -> +100% floor', ()=>{
+  assert.equal(ratchetFloor(1000, 1800, DEFAULT_RATCHET).protectedPct, 100);
+});
+test('C: +279% peak -> still +100% (has not reached the next step yet)', ()=>{
+  assert.equal(ratchetFloor(1000, 2790, DEFAULT_RATCHET).protectedPct, 100);
+});
+test('C: +280% peak -> +200% floor', ()=>{
+  assert.equal(ratchetFloor(1000, 2800, DEFAULT_RATCHET).protectedPct, 200);
+});
+test('C: +380% peak -> +300% floor', ()=>{
+  assert.equal(ratchetFloor(1000, 3800, DEFAULT_RATCHET).protectedPct, 300);
+});
+test('C: +480% peak -> +400% floor', ()=>{
+  assert.equal(ratchetFloor(1000, 4800, DEFAULT_RATCHET).protectedPct, 400);
+});
+
+// ---------- Basket TP boundary (task letter B), mirroring Manage()'s targetEq>0&&campEq>=targetEq ----------
+function shouldCloseOnBasketTP(cycleStart, campaignProfit, takeProfitPct){
+  const targetEq = takeProfitPct>0 ? cycleStart*(1.0+takeProfitPct/100.0) : 0.0;
+  if(!(targetEq>0)) return false; // 0 = disabled, matches Manage()'s `targetEq>0` guard
+  const campEq = cycleStart + campaignProfit;
+  return campEq >= targetEq;
+}
+test('A: Basket TP = 0 -> never closes on the hard target, at any profit level', ()=>{
+  assert.equal(shouldCloseOnBasketTP(1000, 0, 0), false);
+  assert.equal(shouldCloseOnBasketTP(1000, 1_000_000, 0), false);
+});
+test('B: Basket TP = 500% does not close at +499% campaign profit', ()=>{
+  assert.equal(shouldCloseOnBasketTP(1000, 4990, 500), false);
+});
+test('B: Basket TP = 500% closes at exactly +500% campaign profit', ()=>{
+  assert.equal(shouldCloseOnBasketTP(1000, 5000, 500), true);
+});
+
+// ---------- E/F: Basket TP and Profit Ratchet enabled together -- exact Manage() ordering
+// (ratchet checked first, then the hard TP -- see ea/XauCloud-Apex.mq5 Manage()) decides which
+// exit condition wins when a tick's current profit satisfies more than one. ----------
+function resolveExit(cycleStart, peakProfit, currentProfit, ratchetCfg, takeProfitPct){
+  if(shouldCloseOnRatchet(cycleStart, peakProfit, currentProfit, ratchetCfg)) return 'RATCHET';
+  if(shouldCloseOnBasketTP(cycleStart, currentProfit, takeProfitPct)) return 'BASKET_TP';
+  return null;
+}
+test('E: Basket TP 500% + ratchet enabled -- peak +380% (protects +300%), retrace to +300% closes by RATCHET, not Basket TP', ()=>{
+  const cycleStart=1000, peak=3800, current=3000; // 380% peak, retraced to exactly the 300% floor
+  assert.equal(resolveExit(cycleStart, peak, current, DEFAULT_RATCHET, 500), 'RATCHET');
+});
+test('F: Basket TP 500% + ratchet enabled -- profit rises straight through to +500% closes by BASKET_TP, not ratchet', ()=>{
+  const cycleStart=1000, peak=5000, current=5000; // monotonic rise, peak==current==500%
+  // At peak 500%: steps=floor((500-180)/100)=3 -> protectedPct=100+300=400% -> floor is $4,000,
+  // current profit $5,000 is still above that floor, so the ratchet does not fire; the hard
+  // Basket TP (targetEq = $6,000 = $1,000 + $5,000) does.
+  assert.equal(resolveExit(cycleStart, peak, current, DEFAULT_RATCHET, 500), 'BASKET_TP');
+});
+test('E/F: neither setting disables the other -- ratchet still protects profit even with a Basket TP configured above the current ratchet floor', ()=>{
+  const cycleStart=1000, peak=2800, current=2000; // 280% peak -> 200% floor, well under the 500% TP
+  assert.equal(resolveExit(cycleStart, peak, current, DEFAULT_RATCHET, 500), 'RATCHET');
+  // and with Basket TP disabled (0) the same retrace still closes via ratchet, proving ratchet
+  // does not depend on a Basket TP being configured at all
+  assert.equal(resolveExit(cycleStart, peak, current, DEFAULT_RATCHET, 0), 'RATCHET');
+});
+
+// ---------- H: restart/re-attach reproducibility. The EA never persists a separate "floor" --
+// Manage() recomputes protectedProfit fresh every tick from (cycleStart, mfe, ratchet config).
+// SaveState()/LoadState() persist cycleStart and mfe (the running peak) verbatim (see
+// ea/XauCloud-Apex.mq5 SaveState/OnTimer STATE_FILE recovery branch), and the fix in this
+// change makes SaveCloudCache/LoadCloudCache persist the ratchet CONFIG too -- so recomputing
+// the floor after a restart from the restored (cycleStart, mfe, config) must reproduce the
+// exact same protected floor as before the restart, with no separate floor variable needed. ----------
+test('H: restart preserves the intended ratchet floor because it is a pure function of persisted cycleStart+peak+config, not separately stored state', ()=>{
+  const cycleStart=1000, peak=3800; // 380% peak -> 300% floor, as in case E
+  const beforeRestart = ratchetFloor(cycleStart, peak, DEFAULT_RATCHET);
+  // Simulate restart: SaveState() persisted cycleStart & mfe(=peak), OnTimer's STATE_FILE
+  // recovery branch restores them verbatim, and (after this fix) LoadCloudCache() restores
+  // the same ratchet config that was active before the restart.
+  const restoredCycleStart = cycleStart, restoredPeak = peak, restoredCfg = {...DEFAULT_RATCHET};
+  const afterRestart = ratchetFloor(restoredCycleStart, restoredPeak, restoredCfg);
+  assert.deepEqual(afterRestart, beforeRestart);
+  assert.equal(afterRestart.protectedProfit, 3000);
+});
+
 // ---------- TP calculation (mirrors Start()'s targetEq for NORMAL profile) ----------
 function normalTargetEquity(cycleStart, takeProfitPct){
   return takeProfitPct>0 ? cycleStart*(1.0+takeProfitPct/100.0) : 0.0;

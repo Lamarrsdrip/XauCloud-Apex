@@ -96,8 +96,8 @@ test('local EA Inputs seed the Config struct as the offline/pre-sync fallback (D
  assert.match(s,/C\.masterBreakEvenEnabled=InpMasterBreakEvenEnabled;/);
  assert.match(s,/C\.masterBreakEvenTriggerPct=InpMasterBreakEvenTriggerPct;/);
 });
-test('effective config source is tracked explicitly (REMOTE vs LOCAL_INPUT) and logged, never left ambiguous',()=>{
- assert.match(s,/string ConfigSource\(\)\{return everSyncedRemote\?"REMOTE":"LOCAL_INPUT";\}/);
+test('effective config source is tracked explicitly (REMOTE vs CACHED vs LOCAL_INPUT) and logged, never left ambiguous',()=>{
+ assert.match(s,/string ConfigSource\(\)\{return everSyncedRemote\?"REMOTE":\(usingCachedConfig\?"CACHED":"LOCAL_INPUT"\);\}/);
  assert.match(s,/Print\("APEX_EFFECTIVE_CONFIG"/);
  assert.match(s,/everSyncedRemote=true;/);
  assert.match(s,/" l1MarginPct=",DoubleToString\(C\.normalL1MarginPct,2\)/);
@@ -152,13 +152,40 @@ test('REGRESSION GUARD: Strategy Tester armed authority is set structurally in D
 test('duplicate-instance detection is skipped entirely in Strategy Tester (would otherwise read stale GlobalVariables left by earlier separate test runs)',()=>{
  assert.match(s,/void DupInstanceCheck\(\)\{\s*\n(\s*\/\/[^\n]*\n)*\s*if\(IsTester\(\)\)return;/);
 });
+test('v3.6.0 REGRESSION GUARD: trading must never depend on backend reachability — the last-known-good remote config (armed, license-active flag, every remotely-tunable trading parameter) is cached to MT5 GlobalVariables on every successful ConfigPoll, so an unreachable backend means "keep running on what I was last told", not "reset to unarmed"',()=>{
+ // cache is written on every successful poll, not just a happy-path subset
+ const configPollIdx = s.indexOf('bool ConfigPoll(){');
+ const configPollEnd = s.indexOf('\n}', configPollIdx);
+ const configPollBody = s.slice(configPollIdx, configPollEnd);
+ assert.match(configPollBody, /everSyncedRemote=true;\s*\n\s*lastLicenseStatus=js\(r,"licenseStatus","UNKNOWN"\);\s*\n\s*SaveConfigCache\(\);/, 'SaveConfigCache must run on every successful poll, before branching on ACTIVE vs not');
+ // cache functions exist and cover both the arm authority and the license-active flag
+ assert.match(s,/void SaveConfigCache\(\)\{/);
+ assert.match(s,/void LoadConfigCache\(\)\{/);
+ assert.match(s,/CacheSetD\("armed",C\.armed\?1:0\);/);
+ assert.match(s,/CacheSetD\("licenseActive",lastLicenseStatus=="ACTIVE"\?1:0\);/);
+ assert.match(s,/if\(CacheGetD\("armed",v\)\)C\.armed=\(v!=0\);/);
+ assert.match(s,/if\(CacheGetD\("licenseActive",v\)&&v!=0\)lastLicenseStatus="ACTIVE";/);
+ // a cold EA with zero prior contact must NOT fabricate a cache — cacheVersion is the sentinel
+ assert.match(s,/if\(!CacheGetD\("cacheVersion",v\)\)return;/);
+ // the cache load is wired into Defaults() itself (structural, like the IsTester() arm fix),
+ // and only consulted when remote arming is actually in play — InpRequireRemoteArm=false already
+ // means "always armed locally, ignore the backend" and Tester never talks to the backend at all
+ assert.match(s,/if\(!IsTester\(\)&&InpRequireRemoteArm\)LoadConfigCache\(\);/);
+ const defaultsIdx = s.indexOf('void Defaults(){');
+ const loadCacheIdx = s.indexOf('LoadConfigCache();', defaultsIdx);
+ const configSignatureIdx = s.indexOf('string ConfigSignature()');
+ assert.ok(defaultsIdx>=0 && loadCacheIdx>defaultsIdx && loadCacheIdx<configSignatureIdx, 'LoadConfigCache() must be called inside Defaults(), not left as dead code elsewhere');
+});
+test('v3.6.0: the config cache is account-scoped (keyed by ACCOUNT_LOGIN), so two different accounts on the same terminal never cross-contaminate each other\'s last-known-good armed/license state',()=>{
+ assert.match(s,/string CacheKey\(string field\)\{return StringFormat\("XauCloudApex_Cfg_%I64d_%s",AccountInfoInteger\(ACCOUNT_LOGIN\),field\);\}/);
+});
 test('rejection/structure-break confirmation cannot resolve on the same candle that triggered the sweep — requires a later closed bar',()=>{assert.match(s,/watchSweepBarTime=m1\[1\]\.time/);assert.match(s,/if\(m1\[i\]\.time<=watchSweepBarTime\)continue;/);assert.match(s,/if\(m1\[1\]\.time>watchSweepBarTime\)\{if\(s\.dir<0\)bos=/)});
 test('no setup-invalidation exit and no old money-ratchet — only target hit, profit ratchet, master SL, or broker/margin close end a campaign',()=>{assert.doesNotMatch(s,/Invalidated\(/);assert.doesNotMatch(s,/enableInvalidationExit/);assert.doesNotMatch(s,/invalidationGivebackPct/);assert.doesNotMatch(s,/INVALIDATED_PROFIT|INVALIDATED_LOSS/);assert.doesNotMatch(s,/normalAccountMaxMultiplier/)});
 test('EA license is wired into event telemetry for backend/EA enforcement, without touching strategy logic',()=>{assert.match(s,/input string InpApexLicense=""/);assert.match(s,/\\"license\\":\\"%s\\".*InpApexLicense/)});
 test('customer-facing identity is clean (XauCloud Apex), internal version metadata retained for traceability as v3.5.x, and no internal dev codenames leak into customer-facing constants',()=>{
  assert.match(s,/#property copyright "XauCloud Apex"/);
- assert.match(s,/#property version   "3\.530"/);
- assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.3-DirectAPI"/);
+ assert.match(s,/#property version   "3\.600"/);
+ assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.6\.0-LocalResilience"/);
  assert.match(s,/input string InpApiBase="https:\/\/api\.apex\.xaucloud\.io";/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.1-RecoveryExit40"/);
  assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.0/);

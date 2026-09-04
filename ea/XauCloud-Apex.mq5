@@ -1,5 +1,5 @@
 #property copyright "XauCloud Apex"
-#property version   "3.530"
+#property version   "3.600"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
 // Internal build lineage: v3.5.1 (dev codename RecoveryExit40) adds the Recovery-To-Entry exit;
@@ -12,9 +12,19 @@
 // live WebRequest); also replaces the OnInit post-hoc Tester override with an explicit IsTester()
 // guard used at the point of definition (Defaults()/OnTimer()) so Tester authority is structural,
 // not patched on afterward — the backend can never again block Strategy Tester.
+// v3.6.0-LocalResilience: the backend origin also runs its own TLS/bot-fingerprint protection
+// independent of the CDN, which still blocks MT5's WebRequest even via the direct-API hostname —
+// an infrastructure problem outside the EA's control. Rather than let that make Apex depend on
+// the backend to trade, this build adopts XauCloud Command Center's proven pattern: the backend
+// is a monitoring/remote-arm channel only, never a dependency of trading logic. The last-known
+// -good remote config (armed, license-active flag, every remotely-tunable trading parameter) is
+// now cached to MT5 GlobalVariables on every successful ConfigPoll() and reloaded on restart/
+// reattach, so an unreachable backend means "keep running on what I was last told", not "reset
+// to unarmed and stop." Nothing is trusted until the backend has actually confirmed it at least
+// once — a cold EA with zero prior contact still starts unarmed exactly as before.
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.5.3-DirectAPI"
+#define APEX_VERSION "XauCloud-Apex_v3.6.0-LocalResilience"
 #define APEX_MAGIC 8620260903
 input string InpApiBase="https://api.apex.xaucloud.io";
 input string InpApexLicense="";
@@ -40,7 +50,7 @@ struct Config{bool armed;string account;string symbolContains;string targetMode,
 struct Snap{bool valid;int dir;double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;bool swept,rejected,microBreak,m3,m5,continuation,pullbackFail;string sig,reason;};
 Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,firstEntryPrice=0,firstSLPrice=0,firstInitialSLPrice=0;bool recoveryExitArmed=false;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
 bool watch=false;int watchDir=0;datetime watchStart=0,watchSweepBarTime=0;double watchExtreme=0,watchPrior=0,watchAtr=0;string watchSig="";
-bool everSyncedRemote=false;string lastConfigSig="";string lastLicenseStatus="UNKNOWN";
+bool everSyncedRemote=false;string lastConfigSig="";string lastLicenseStatus="UNKNOWN";bool usingCachedConfig=false;
 // Single source of truth for "are we running inside Strategy Tester" — used everywhere Tester
 // needs to behave independently of the live backend (arming, the license scan-gate, duplicate-
 // instance detection) instead of a scattered, easy-to-miss MQLInfoInteger(MQL_TESTER) at each site.
@@ -63,7 +73,7 @@ bool Http(string method,string ep,string body,string &resp,int &code){
  resp=CharArrayToString(r,0,-1,CP_UTF8);
  return code>=200&&code<300;
 }
-string ConfigSource(){return everSyncedRemote?"REMOTE":"LOCAL_INPUT";}
+string ConfigSource(){return everSyncedRemote?"REMOTE":(usingCachedConfig?"CACHED":"LOCAL_INPUT");}
 // Never print the full license key — only a masked head/tail, matching the backend's own masking.
 string MaskLicense(string k){int n=StringLen(k);if(n<=8)return"***";return StringSubstr(k,0,5)+"…"+StringSubstr(k,n-4,4);}
 // Distinguishes a genuine transport/edge-level rejection (before the request ever reaches the
@@ -138,6 +148,65 @@ void DupInstanceCheck(){
  GlobalVariableSet(key,(double)now);
  GlobalVariableSet(key+"_chart",(double)ChartID());
 }
+// Last-known-good remote config cache (MT5 terminal GlobalVariables — the same durable,
+// restart-surviving key/value store XauCloud Command Center uses for its Prop Firm config).
+// The backend is a monitoring/remote-arm channel only; trading itself must never depend on
+// reaching it. A GlobalVariable is a double, so bools are stored as 1/0 and lastLicenseStatus
+// is cached as a single "was ACTIVE last time we actually heard from the backend" flag — the
+// OnTimer license gate only ever branches on ACTIVE-vs-not, so that's all it needs. Nothing is
+// cached until at least one REAL successful ConfigPoll() has happened — a cold EA with no prior
+// contact still starts from Inp*/local defaults exactly as before; only a previously-confirmed
+// state is ever trusted across an outage or restart.
+string CacheKey(string field){return StringFormat("XauCloudApex_Cfg_%I64d_%s",AccountInfoInteger(ACCOUNT_LOGIN),field);}
+bool CacheGetD(string field,double &val){string k=CacheKey(field);if(!GlobalVariableCheck(k))return false;val=GlobalVariableGet(k);return true;}
+void CacheSetD(string field,double val){GlobalVariableSet(CacheKey(field),val);}
+void SaveConfigCache(){
+ CacheSetD("armed",C.armed?1:0);
+ CacheSetD("licenseActive",lastLicenseStatus=="ACTIVE"?1:0);
+ CacheSetD("targetEquity",C.targetEquity);CacheSetD("targetMultiplier",C.targetMultiplier);
+ CacheSetD("normalTargetProfitPct",C.normalTargetProfitPct);CacheSetD("baseMarginPct",C.baseMarginPct);
+ CacheSetD("layerMultiplier",C.layerMultiplier);CacheSetD("maxLayers",C.maxLayers);
+ CacheSetD("entryScore",C.entryScore);CacheSetD("addScore",C.addScore);
+ CacheSetD("impulseAtr",C.impulseAtr);CacheSetD("sweepAtr",C.sweepAtr);
+ CacheSetD("addSpacingAtr",C.addSpacingAtr);CacheSetD("rejectionZoneAtr",C.rejectionZoneAtr);
+ CacheSetD("rejectionBars",C.rejectionBars);CacheSetD("watchExpiryMinutes",C.watchExpiryMinutes);
+ CacheSetD("cooldownMinutes",C.cooldownMinutes);
+ CacheSetD("requireM3Confirm",C.requireM3Confirm?1:0);CacheSetD("requireM5Context",C.requireM5Context?1:0);
+ CacheSetD("learningEnabled",C.learningEnabled?1:0);
+ CacheSetD("normalL1MarginPct",C.normalL1MarginPct);CacheSetD("normalL2MarginPct",C.normalL2MarginPct);
+ CacheSetD("normalL3PlusMarginPct",C.normalL3PlusMarginPct);CacheSetD("normalFixedSLGoldMove",C.normalFixedSLGoldMove);
+ CacheSetD("profitRatchetEnabled",C.profitRatchetEnabled?1:0);
+ CacheSetD("ratchetTriggerPct",C.ratchetTriggerPct);CacheSetD("ratchetLockPct",C.ratchetLockPct);
+ CacheSetD("ratchetStepPct",C.ratchetStepPct);CacheSetD("ratchetLockStepPct",C.ratchetLockStepPct);
+ CacheSetD("masterBreakEvenEnabled",C.masterBreakEvenEnabled?1:0);CacheSetD("masterBreakEvenTriggerPct",C.masterBreakEvenTriggerPct);
+ CacheSetD("recoveryExitEnabled",C.recoveryExitEnabled?1:0);CacheSetD("recoveryExitArmPctOfSL",C.recoveryExitArmPctOfSL);
+ CacheSetD("cacheVersion",1);
+}
+void LoadConfigCache(){
+ double v;
+ if(!CacheGetD("cacheVersion",v))return;
+ usingCachedConfig=true;
+ if(CacheGetD("armed",v))C.armed=(v!=0);
+ if(CacheGetD("licenseActive",v)&&v!=0)lastLicenseStatus="ACTIVE";
+ if(CacheGetD("targetEquity",v))C.targetEquity=v; if(CacheGetD("targetMultiplier",v))C.targetMultiplier=v;
+ if(CacheGetD("normalTargetProfitPct",v))C.normalTargetProfitPct=v; if(CacheGetD("baseMarginPct",v))C.baseMarginPct=v;
+ if(CacheGetD("layerMultiplier",v))C.layerMultiplier=v; if(CacheGetD("maxLayers",v))C.maxLayers=(int)v;
+ if(CacheGetD("entryScore",v))C.entryScore=v; if(CacheGetD("addScore",v))C.addScore=v;
+ if(CacheGetD("impulseAtr",v))C.impulseAtr=v; if(CacheGetD("sweepAtr",v))C.sweepAtr=v;
+ if(CacheGetD("addSpacingAtr",v))C.addSpacingAtr=v; if(CacheGetD("rejectionZoneAtr",v))C.rejectionZoneAtr=v;
+ if(CacheGetD("rejectionBars",v))C.rejectionBars=(int)v; if(CacheGetD("watchExpiryMinutes",v))C.watchExpiryMinutes=(int)v;
+ if(CacheGetD("cooldownMinutes",v))C.cooldownMinutes=(int)v;
+ if(CacheGetD("requireM3Confirm",v))C.requireM3Confirm=(v!=0); if(CacheGetD("requireM5Context",v))C.requireM5Context=(v!=0);
+ if(CacheGetD("learningEnabled",v))C.learningEnabled=(v!=0);
+ if(CacheGetD("normalL1MarginPct",v))C.normalL1MarginPct=v; if(CacheGetD("normalL2MarginPct",v))C.normalL2MarginPct=v;
+ if(CacheGetD("normalL3PlusMarginPct",v))C.normalL3PlusMarginPct=v; if(CacheGetD("normalFixedSLGoldMove",v))C.normalFixedSLGoldMove=v;
+ if(CacheGetD("profitRatchetEnabled",v))C.profitRatchetEnabled=(v!=0);
+ if(CacheGetD("ratchetTriggerPct",v))C.ratchetTriggerPct=v; if(CacheGetD("ratchetLockPct",v))C.ratchetLockPct=v;
+ if(CacheGetD("ratchetStepPct",v))C.ratchetStepPct=v; if(CacheGetD("ratchetLockStepPct",v))C.ratchetLockStepPct=v;
+ if(CacheGetD("masterBreakEvenEnabled",v))C.masterBreakEvenEnabled=(v!=0); if(CacheGetD("masterBreakEvenTriggerPct",v))C.masterBreakEvenTriggerPct=v;
+ if(CacheGetD("recoveryExitEnabled",v))C.recoveryExitEnabled=(v!=0); if(CacheGetD("recoveryExitArmPctOfSL",v))C.recoveryExitArmPctOfSL=v;
+ Print("APEX_CONFIG_CACHE_LOADED armed=",(C.armed?"true":"false")," licenseActive=",(lastLicenseStatus=="ACTIVE"?"true":"false")," source=CACHED");
+}
 void Defaults(){
  // Tester must always start armed from local Inputs, regardless of InpRequireRemoteArm — it never
  // talks to the live backend (Http() short-circuits for IsTester()), so remote-arm requirements
@@ -160,6 +229,12 @@ void Defaults(){
  C.masterBreakEvenTriggerPct=InpMasterBreakEvenTriggerPct;
  C.recoveryExitEnabled=InpRecoveryExitEnabled;
  C.recoveryExitArmPctOfSL=InpRecoveryExitArmPctOfSL;
+ // Overlay the last-known-good remote config, if one was ever actually confirmed by the
+ // backend, so a restart/outage falls back to "what I was last told" instead of blindly
+ // resetting to unarmed local defaults. Only meaningful when remote arming is in play —
+ // InpRequireRemoteArm=false already means "always armed locally, ignore the backend"
+ // and Tester never talks to the backend at all, so neither should consult the cache.
+ if(!IsTester()&&InpRequireRemoteArm)LoadConfigCache();
 }
 string ConfigSignature(){return StringFormat("%.2f|%.2f|%.2f|%.2f|%.2f|%s|%.2f|%s|%.2f|%s|%.2f|%.2f|%.2f|%.2f|%s",C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"1":"0",C.masterBreakEvenTriggerPct,C.recoveryExitEnabled?"1":"0",C.recoveryExitArmPctOfSL,C.profitRatchetEnabled?"1":"0",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource());}
 bool ConfigPoll(){
@@ -191,6 +266,7 @@ bool ConfigPoll(){
  C.recoveryExitArmPctOfSL=jd(r,"recoveryExitArmPctOfSL",C.recoveryExitArmPctOfSL);
  everSyncedRemote=true;
  lastLicenseStatus=js(r,"licenseStatus","UNKNOWN");
+ SaveConfigCache();
  if(lastLicenseStatus=="ACTIVE"){
    Print("APEX_CONFIG_POLL_OK licenseStatus=ACTIVE armed=",(C.armed?"true":"false")," source=REMOTE account=",AccountInfoInteger(ACCOUNT_LOGIN)," version=",APEX_VERSION);
  }else{

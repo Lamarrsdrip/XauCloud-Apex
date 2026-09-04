@@ -1,6 +1,10 @@
-# XauCloud Apex v3.5.3
+# XauCloud Apex v3.6.0
 
 Private XAUUSD campaign EA and control plane built around a repeated pattern: strong impulse into a recent liquidity extreme, sweep/failure, rejection, micro-structure break, initial entry, then increasingly large additions only while the basket is profitable and fresh continuation or failed-pullback confirmation appears. Setup/entry/pyramid detection logic is unchanged from earlier versions — see `docs/STRATEGY_SPEC.md` for the full forensic history and evidence this build is based on.
+
+## Local resilience (v3.6.0)
+
+The backend is a monitoring/remote-arm channel only — trading logic never depends on reaching it, matching the pattern already proven by XauCloud Command Center. On every successful `ConfigPoll()`, the EA caches `armed`, the license-active flag, and every remotely-tunable trading parameter to MT5 GlobalVariables (account-scoped, survives EA/terminal restart). If the backend later becomes unreachable — network issue, an infrastructure-side block, a redeploy — the EA keeps running on the last-known-good cached config instead of resetting to unarmed: `Print("APEX_CONFIG_CACHE_LOADED ...")` on load, `configSource=CACHED` in telemetry until a fresh sync happens. A cold EA with zero prior successful contact still starts unarmed exactly as before — nothing is trusted until the backend has actually confirmed it at least once.
 
 ## v3.5 exit & sizing architecture (current)
 

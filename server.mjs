@@ -22,8 +22,10 @@ const DEFAULT={
   targetEquity:1000,targetMultiplier:100,
   normalTargetProfitPct:0,
   baseMarginPct:100,layerMultiplier:2,maxLayers:0,
-  normalFixedSLGoldMove:10,
-  profitRatchetEnabled:true,ratchetTriggerPct:200,ratchetLockPct:100,ratchetStepPct:100,ratchetLockStepPct:100,
+  normalL1MarginPct:15,normalL2MarginPct:50,normalL3PlusMarginPct:100,
+  normalFixedSLGoldMove:30,
+  profitRatchetEnabled:true,ratchetTriggerPct:180,ratchetLockPct:100,ratchetStepPct:100,ratchetLockStepPct:100,
+  masterBreakEvenEnabled:true,masterBreakEvenTriggerPct:50,
   entryScore:76,addScore:70,impulseAtr:1.8,sweepAtr:.05,
   rejectionBars:5,watchExpiryMinutes:12,addSpacingAtr:.22,
   rejectionZoneAtr:.12,requireM3Confirm:true,requireM5Context:false,
@@ -61,12 +63,17 @@ export function clean(x={}){
     baseMarginPct:num(x.baseMarginPct,100,.01,100),
     layerMultiplier:num(x.layerMultiplier,2,1,10),
     maxLayers:Math.round(num(x.maxLayers,0,0,50)),
-    normalFixedSLGoldMove:num(x.normalFixedSLGoldMove,10,0,1e6),
+    normalL1MarginPct:num(x.normalL1MarginPct,15,.01,100),
+    normalL2MarginPct:num(x.normalL2MarginPct,50,.01,100),
+    normalL3PlusMarginPct:num(x.normalL3PlusMarginPct,100,.01,100),
+    normalFixedSLGoldMove:num(x.normalFixedSLGoldMove,30,0,1e6),
     profitRatchetEnabled:x.profitRatchetEnabled!==false,
-    ratchetTriggerPct:num(x.ratchetTriggerPct,200,.01,1e6),
+    ratchetTriggerPct:num(x.ratchetTriggerPct,180,.01,1e6),
     ratchetLockPct:num(x.ratchetLockPct,100,0,1e6),
     ratchetStepPct:num(x.ratchetStepPct,100,.01,1e6),
     ratchetLockStepPct:num(x.ratchetLockStepPct,100,0,1e6),
+    masterBreakEvenEnabled:x.masterBreakEvenEnabled!==false,
+    masterBreakEvenTriggerPct:num(x.masterBreakEvenTriggerPct,50,.01,1e6),
     entryScore:num(x.entryScore,76,40,100),
     addScore:num(x.addScore,70,40,100),
     impulseAtr:num(x.impulseAtr,1.8,.5,10),
@@ -301,6 +308,7 @@ function humanEvent(e){
     case 'LAYER_OPEN': return `Market confirmed continuation — added position ${e.layer}`;
     case 'PROFIT_RATCHET_EXIT': return `Protected profit secured at ${Number(e.protectedPct||0).toFixed(0)}% — closing campaign`;
     case 'MASTER_SL_MOVED': return 'Master position stop-loss updated';
+    case 'MASTER_BE_ARMED': return 'Break-even secured — master stop-loss moved to entry price';
     case 'CAMPAIGN_END':
       if(e.outcome==='TARGET_HIT')return `${dir} campaign complete — target reached`;
       if(e.outcome==='PROFIT_FLOOR_HIT')return 'Protected profit secured — campaign closed';
@@ -370,6 +378,31 @@ function buildHistory(events){
     };
   }).reverse();
 }
+function settingsView(cfg){
+  return {
+    accountProfile:cfg.accountProfile,
+    normalTargetProfitPct:cfg.normalTargetProfitPct,
+    baseMarginPct:cfg.baseMarginPct,
+    layerMultiplier:cfg.layerMultiplier,
+    maxLayers:cfg.maxLayers,
+    normalL1MarginPct:cfg.normalL1MarginPct,
+    normalL2MarginPct:cfg.normalL2MarginPct,
+    normalL3PlusMarginPct:cfg.normalL3PlusMarginPct,
+    normalFixedSLGoldMove:cfg.normalFixedSLGoldMove,
+    profitRatchetEnabled:cfg.profitRatchetEnabled,
+    ratchetTriggerPct:cfg.ratchetTriggerPct,
+    ratchetLockPct:cfg.ratchetLockPct,
+    ratchetStepPct:cfg.ratchetStepPct,
+    ratchetLockStepPct:cfg.ratchetLockStepPct,
+    masterBreakEvenEnabled:cfg.masterBreakEvenEnabled,
+    masterBreakEvenTriggerPct:cfg.masterBreakEvenTriggerPct,
+    advanced:{
+      entryScore:cfg.entryScore,addScore:cfg.addScore,impulseAtr:cfg.impulseAtr,sweepAtr:cfg.sweepAtr,
+      rejectionBars:cfg.rejectionBars,watchExpiryMinutes:cfg.watchExpiryMinutes,rejectionZoneAtr:cfg.rejectionZoneAtr,
+      addSpacingAtr:cfg.addSpacingAtr,requireM3Confirm:cfg.requireM3Confirm,requireM5Context:cfg.requireM5Context
+    }
+  };
+}
 async function buildMe(licenseKey){
   const licenses=await readLicenses();
   const lic=licenses[licenseKey];
@@ -377,17 +410,20 @@ async function buildMe(licenseKey){
   const baseLicense={key:licenseKey,status,account:lic?.account||null,accountProfile:lic?.accountProfile||null,expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
   if(status!=='ACTIVE')return {license:baseLicense,dataAvailable:false};
 
+  // The saved/effective-default config is always visible to an ACTIVE license, even before
+  // the EA has ever made contact — settings must never depend on live EA data to render.
   const cfg=clean(await read(CONFIG,DEFAULT));
+  const settings=settingsView(cfg);
   const state=await read(STATE,{});
   const allEv=await allEvents();
   const events=lic.account?allEv.filter(e=>String(e.account)===String(lic.account)):allEv;
   const latest=events[events.length-1]||null;
 
   if(lic.account&&!latest){
-    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true};
+    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true,settings};
   }
   if(!lic.account){
-    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true};
+    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true,settings};
   }
 
   const mt5Status=classifyMt5(state.lastSeen);
@@ -408,9 +444,13 @@ async function buildMe(licenseKey){
     learning,
     recentHuman,
     effectiveConfig:latest?{
-      marginPct:latest.marginPct,
+      l1MarginPct:latest.l1MarginPct,
+      l2MarginPct:latest.l2MarginPct,
+      l3PlusMarginPct:latest.l3PlusMarginPct,
       takeProfitPct:latest.takeProfitPct,
       fixedSLGoldMove:latest.fixedSLGoldMove,
+      beEnabled:latest.beEnabled,
+      beTriggerPct:latest.beTriggerPct,
       ratchetEnabled:latest.ratchetEnabled,
       ratchetTriggerPct:latest.ratchetTriggerPct,
       ratchetLockPct:latest.ratchetLockPct,
@@ -420,24 +460,7 @@ async function buildMe(licenseKey){
       eaVersion:latest.eaVersion||null,
       asOf:latest.ts
     }:null,
-    settings:{
-      accountProfile:cfg.accountProfile,
-      normalTargetProfitPct:cfg.normalTargetProfitPct,
-      baseMarginPct:cfg.baseMarginPct,
-      layerMultiplier:cfg.layerMultiplier,
-      maxLayers:cfg.maxLayers,
-      normalFixedSLGoldMove:cfg.normalFixedSLGoldMove,
-      profitRatchetEnabled:cfg.profitRatchetEnabled,
-      ratchetTriggerPct:cfg.ratchetTriggerPct,
-      ratchetLockPct:cfg.ratchetLockPct,
-      ratchetStepPct:cfg.ratchetStepPct,
-      ratchetLockStepPct:cfg.ratchetLockStepPct,
-      advanced:{
-        entryScore:cfg.entryScore,addScore:cfg.addScore,impulseAtr:cfg.impulseAtr,sweepAtr:cfg.sweepAtr,
-        rejectionBars:cfg.rejectionBars,watchExpiryMinutes:cfg.watchExpiryMinutes,rejectionZoneAtr:cfg.rejectionZoneAtr,
-        addSpacingAtr:cfg.addSpacingAtr,requireM3Confirm:cfg.requireM3Confirm,requireM5Context:cfg.requireM5Context
-      }
-    }
+    settings
   };
 }
 async function writeConfigMerge(partial){
@@ -458,7 +481,7 @@ const server=http.createServer(async(req,res)=>{
     const u=new URL(req.url,'http://localhost');
 
     if(u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.1.1'});
+      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.4.1'});
 
     // ---------- EA contract ----------
     if(req.method==='GET'&&u.pathname==='/api/ea/config'){

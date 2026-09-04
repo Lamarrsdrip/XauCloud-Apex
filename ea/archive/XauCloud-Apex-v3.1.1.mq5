@@ -1,10 +1,10 @@
 #property copyright "XauCloud Apex"
-#property version   "3.410"
+#property version   "3.110"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.4.1"
+#define APEX_VERSION "XauCloud-Apex_v3.1.1"
 #define APEX_MAGIC 8620260903
 input string InpApiBase="https://apex.xaucloud.io";
 input string InpEaToken="REPLACE_EA_TOKEN";
@@ -13,19 +13,15 @@ input int InpConfigPollSeconds=8;
 input int InpScanMilliseconds=250;
 input bool InpRequireRemoteArm=true;
 input long InpMagic=APEX_MAGIC;
-input double InpNormalMarginPct=15.0;             // NORMAL L1 confirmation/probe margin % (1-100); local fallback only, backend can override
-input double InpNormalL2MarginPct=50.0;           // NORMAL L2 confirmed-add margin %; local fallback only
-input double InpNormalL3PlusMarginPct=100.0;      // NORMAL L3+ use up to this % of available margin; local fallback only
+input double InpNormalMarginPct=100.0;            // NORMAL L1 margin allocation % (1-100); local fallback only, backend can override
 input double InpNormalTakeProfitPct=0.0;          // NORMAL hard basket TP %; 0 = disabled (ratchet governs the exit instead)
-input double InpNormalFixedSLGoldMove=30.0;       // L1 fixed XAU price SL distance; 0 = no broker SL
+input double InpNormalFixedSLGoldMove=10.0;       // L1 fixed XAU price SL distance; 0 = no broker SL
 input bool   InpProfitRatchetEnabled=true;        // Protect basket profit after it reaches the trigger, in % of campaign-start balance
-input double InpRatchetTriggerPct=180.0;          // First trigger: +180% peak campaign profit
+input double InpRatchetTriggerPct=200.0;          // First trigger: +200% peak campaign profit
 input double InpRatchetLockPct=100.0;             // At the trigger, protect +100% of campaign-start balance
 input double InpRatchetStepPct=100.0;             // Every additional +100% peak profit...
 input double InpRatchetLockStepPct=100.0;         // ...raises the protected floor another +100%
-input bool   InpMasterBreakEvenEnabled=true;      // Move L1/master SL to its own entry price once triggered
-input double InpMasterBreakEvenTriggerPct=50.0;   // Trigger: +50% whole-basket campaign profit
-struct Config{bool armed;string account;string symbolContains;string targetMode,accountProfile;double targetEquity,targetMultiplier,normalTargetProfitPct,baseMarginPct,layerMultiplier;int maxLayers;double entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;int rejectionBars,watchExpiryMinutes,cooldownMinutes;bool requireM3Confirm,requireM5Context,learningEnabled;double learnEntryAdj,learnAddAdj;double normalL1MarginPct,normalL2MarginPct,normalL3PlusMarginPct,normalFixedSLGoldMove,ratchetTriggerPct,ratchetLockPct,ratchetStepPct,ratchetLockStepPct,masterBreakEvenTriggerPct;bool profitRatchetEnabled,masterBreakEvenEnabled;};
+struct Config{bool armed;string account;string symbolContains;string targetMode,accountProfile;double targetEquity,targetMultiplier,normalTargetProfitPct,baseMarginPct,layerMultiplier;int maxLayers;double entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;int rejectionBars,watchExpiryMinutes,cooldownMinutes;bool requireM3Confirm,requireM5Context,learningEnabled;double learnEntryAdj,learnAddAdj;double normalFixedSLGoldMove,ratchetTriggerPct,ratchetLockPct,ratchetStepPct,ratchetLockStepPct;bool profitRatchetEnabled;};
 struct Snap{bool valid;int dir;double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;bool swept,rejected,microBreak,m3,m5,continuation,pullbackFail;string sig,reason;};
 Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,firstEntryPrice=0,firstSLPrice=0;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
 bool watch=false;int watchDir=0;datetime watchStart=0,watchSweepBarTime=0;double watchExtreme=0,watchPrior=0,watchAtr=0;string watchSig="";
@@ -35,21 +31,17 @@ double jd(string j,string k,double d){string v=raw(j,k);return v==""?d:StringToD
 bool Http(string method,string ep,string body,string &resp){if((bool)MQLInfoInteger(MQL_TESTER))return false;string hdr="Authorization: Bearer "+InpEaToken+"\r\nContent-Type: application/json\r\n";char d[],r[];string rh;StringToCharArray(body,d,0,WHOLE_ARRAY,CP_UTF8);ResetLastError();int code=WebRequest(method,InpApiBase+ep,hdr,7000,d,r,rh);if(code<0){Print("APEX_HTTP_ERROR ",GetLastError());return false;}resp=CharArrayToString(r,0,-1,CP_UTF8);return code>=200&&code<300;}
 string ConfigSource(){return everSyncedRemote?"REMOTE":"LOCAL_INPUT";}
 void Emit(string type,string extra=""){
- string cfgFields=StringFormat(",\"l1MarginPct\":%.2f,\"l2MarginPct\":%.2f,\"l3PlusMarginPct\":%.2f,\"takeProfitPct\":%.2f,\"fixedSLGoldMove\":%.2f,\"beEnabled\":%s,\"beTriggerPct\":%.2f,\"ratchetEnabled\":%s,\"ratchetTriggerPct\":%.2f,\"ratchetLockPct\":%.2f,\"ratchetStepPct\":%.2f,\"ratchetLockStepPct\":%.2f,\"configSource\":\"%s\",\"eaVersion\":\"%s\"",
-  C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"true":"false",C.masterBreakEvenTriggerPct,C.profitRatchetEnabled?"true":"false",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource(),APEX_VERSION);
+ string cfgFields=StringFormat(",\"marginPct\":%.2f,\"takeProfitPct\":%.2f,\"fixedSLGoldMove\":%.2f,\"ratchetEnabled\":%s,\"ratchetTriggerPct\":%.2f,\"ratchetLockPct\":%.2f,\"ratchetStepPct\":%.2f,\"ratchetLockStepPct\":%.2f,\"configSource\":\"%s\",\"eaVersion\":\"%s\"",
+  C.baseMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.profitRatchetEnabled?"true":"false",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource(),APEX_VERSION);
  string b=StringFormat("{\"type\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"currency\":\"%s\",\"license\":\"%s\",\"symbol\":\"%s\",\"version\":\"%s\",\"campaignId\":\"%s\",\"signature\":\"%s\",\"direction\":%d,\"layers\":%d,\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f%s%s}",type,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),AccountInfoString(ACCOUNT_CURRENCY),InpApexLicense,_Symbol,APEX_VERSION,campId,campSig,campDir,layers,AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),AccountInfoDouble(ACCOUNT_MARGIN_FREE),cfgFields,extra);
  string r;Http("POST","/api/ea/event",b,r);
 }
 void PrintEffectiveConfig(){
  Print("APEX_EFFECTIVE_CONFIG",
   " profile=",C.accountProfile,
-  " l1MarginPct=",DoubleToString(C.normalL1MarginPct,2),
-  " l2MarginPct=",DoubleToString(C.normalL2MarginPct,2),
-  " l3PlusMarginPct=",DoubleToString(C.normalL3PlusMarginPct,2),
+  " marginPct=",DoubleToString(C.baseMarginPct,2),
   " takeProfitPct=",DoubleToString(C.normalTargetProfitPct,2),
   " fixedSLGoldMove=",DoubleToString(C.normalFixedSLGoldMove,2),
-  " masterBEEnabled=",(C.masterBreakEvenEnabled?"true":"false"),
-  " masterBETriggerPct=",DoubleToString(C.masterBreakEvenTriggerPct,2),
   " ratchetEnabled=",(C.profitRatchetEnabled?"true":"false"),
   " ratchetTriggerPct=",DoubleToString(C.ratchetTriggerPct,2),
   " ratchetLockPct=",DoubleToString(C.ratchetLockPct,2),
@@ -61,21 +53,16 @@ void Defaults(){
  C.armed=!InpRequireRemoteArm;C.account="0";C.symbolContains="XAUUSD";C.targetMode="MULTIPLIER";C.accountProfile="NORMAL";
  C.targetEquity=1000;C.targetMultiplier=100;
  C.normalTargetProfitPct=InpNormalTakeProfitPct;
- C.baseMarginPct=100;
+ C.baseMarginPct=InpNormalMarginPct;
  C.layerMultiplier=2;C.maxLayers=0;C.entryScore=76;C.addScore=70;C.impulseAtr=1.8;C.sweepAtr=.05;C.rejectionBars=5;C.watchExpiryMinutes=12;C.addSpacingAtr=.22;C.rejectionZoneAtr=.12;C.cooldownMinutes=0;C.requireM3Confirm=true;C.requireM5Context=false;C.learningEnabled=true;C.learnEntryAdj=0;C.learnAddAdj=0;
- C.normalL1MarginPct=InpNormalMarginPct;
- C.normalL2MarginPct=InpNormalL2MarginPct;
- C.normalL3PlusMarginPct=InpNormalL3PlusMarginPct;
  C.normalFixedSLGoldMove=InpNormalFixedSLGoldMove;
  C.profitRatchetEnabled=InpProfitRatchetEnabled;
  C.ratchetTriggerPct=InpRatchetTriggerPct;
  C.ratchetLockPct=InpRatchetLockPct;
  C.ratchetStepPct=InpRatchetStepPct;
  C.ratchetLockStepPct=InpRatchetLockStepPct;
- C.masterBreakEvenEnabled=InpMasterBreakEvenEnabled;
- C.masterBreakEvenTriggerPct=InpMasterBreakEvenTriggerPct;
 }
-string ConfigSignature(){return StringFormat("%.2f|%.2f|%.2f|%.2f|%.2f|%s|%.2f|%s|%.2f|%.2f|%.2f|%.2f|%s",C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"1":"0",C.masterBreakEvenTriggerPct,C.profitRatchetEnabled?"1":"0",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource());}
+string ConfigSignature(){return StringFormat("%.2f|%.2f|%.2f|%s|%.2f|%.2f|%.2f|%.2f|%s",C.baseMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.profitRatchetEnabled?"1":"0",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource());}
 bool ConfigPoll(){
  string r,ep=StringFormat("/api/ea/config?account=%I64d&license=%s",AccountInfoInteger(ACCOUNT_LOGIN),InpApexLicense);
  if(!Http("GET",ep,"",r))return false;
@@ -83,17 +70,12 @@ bool ConfigPoll(){
  C.normalTargetProfitPct=jd(r,"normalTargetProfitPct",C.normalTargetProfitPct);
  C.baseMarginPct=jd(r,"baseMarginPct",C.baseMarginPct);
  C.layerMultiplier=jd(r,"layerMultiplier",C.layerMultiplier);C.maxLayers=ji(r,"maxLayers",C.maxLayers);C.entryScore=jd(r,"entryScore",C.entryScore);C.addScore=jd(r,"addScore",C.addScore);C.impulseAtr=jd(r,"impulseAtr",C.impulseAtr);C.sweepAtr=jd(r,"sweepAtr",C.sweepAtr);C.rejectionBars=ji(r,"rejectionBars",C.rejectionBars);C.watchExpiryMinutes=ji(r,"watchExpiryMinutes",C.watchExpiryMinutes);C.addSpacingAtr=jd(r,"addSpacingAtr",C.addSpacingAtr);C.rejectionZoneAtr=jd(r,"rejectionZoneAtr",C.rejectionZoneAtr);C.cooldownMinutes=ji(r,"cooldownMinutes",C.cooldownMinutes);C.requireM3Confirm=jb(r,"requireM3Confirm",C.requireM3Confirm);C.requireM5Context=jb(r,"requireM5Context",C.requireM5Context);C.learningEnabled=jb(r,"learningEnabled",C.learningEnabled);C.learnEntryAdj=jd(r,"entryScoreAdjustment",0);C.learnAddAdj=jd(r,"addScoreAdjustment",0);
- C.normalL1MarginPct=jd(r,"normalL1MarginPct",C.normalL1MarginPct);
- C.normalL2MarginPct=jd(r,"normalL2MarginPct",C.normalL2MarginPct);
- C.normalL3PlusMarginPct=jd(r,"normalL3PlusMarginPct",C.normalL3PlusMarginPct);
  C.normalFixedSLGoldMove=jd(r,"normalFixedSLGoldMove",C.normalFixedSLGoldMove);
  C.profitRatchetEnabled=jb(r,"profitRatchetEnabled",C.profitRatchetEnabled);
  C.ratchetTriggerPct=jd(r,"ratchetTriggerPct",C.ratchetTriggerPct);
  C.ratchetLockPct=jd(r,"ratchetLockPct",C.ratchetLockPct);
  C.ratchetStepPct=jd(r,"ratchetStepPct",C.ratchetStepPct);
  C.ratchetLockStepPct=jd(r,"ratchetLockStepPct",C.ratchetLockStepPct);
- C.masterBreakEvenEnabled=jb(r,"masterBreakEvenEnabled",C.masterBreakEvenEnabled);
- C.masterBreakEvenTriggerPct=jd(r,"masterBreakEvenTriggerPct",C.masterBreakEvenTriggerPct);
  everSyncedRemote=true;
  string sig=ConfigSignature();
  if(sig!=lastConfigSig){lastConfigSig=sig;PrintEffectiveConfig();Emit("CONFIG_SYNC");}
@@ -158,34 +140,9 @@ bool MasterPositionExists(){
  }
  return false;
 }
-bool SetMasterSL(double newSL,string reason){
- if(masterTicket==0||!MasterPositionExists())return false;
- int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
- newSL=NormalizeDouble(newSL,digits);
- trade.SetExpertMagicNumber(InpMagic);
- ResetLastError();
- bool ok=trade.PositionModify(masterTicket,newSL,0);
- if(ok){
-   firstSLPrice=newSL;
-   SaveState();
-   Emit("MASTER_SL_MOVED",StringFormat(",\"stage\":%d,\"slPrice\":%.5f,\"reason\":\"%s\"",masterGuardStage,newSL,reason));
-   return true;
- }
- Emit("MASTER_SL_MOVE_FAIL",StringFormat(",\"stage\":%d,\"requestedSL\":%.5f,\"retcode\":%d,\"error\":%d,\"reason\":\"%s\"",masterGuardStage,newSL,trade.ResultRetcode(),GetLastError(),reason));
- return false;
-}
 bool OpenLayer(int dir,double score,string why){
- double pct=0.0;
- if(C.accountProfile=="NORMAL"){
-   // v3.4 confirmation-first exposure ladder:
-   // L1 = probe margin %, L2 = confirmed-add margin %, L3+ = up to configured % of available margin.
-   if(layers<=0)pct=clamp(C.normalL1MarginPct,0.1,100.0);
-   else if(layers==1)pct=clamp(C.normalL2MarginPct,0.1,100.0);
-   else pct=clamp(C.normalL3PlusMarginPct,0.1,100.0);
- }else{
-   double basePct=C.baseMarginPct;
-   pct=MathMin(100.0,basePct*MathPow(C.layerMultiplier,layers));
- }
+ double basePct=clamp(C.baseMarginPct,1.0,100.0);
+ double pct=MathMin(100.0,basePct*MathPow(C.layerMultiplier,layers));
  double vol=VolumeForMargin(dir,pct);
  if(vol<=0){Emit("ADD_BLOCKED",",\"reason\":\"NO_MARGIN_CAPACITY\"");return false;}
  trade.SetExpertMagicNumber(InpMagic);trade.SetDeviationInPoints(80);
@@ -240,25 +197,9 @@ void Manage(){
  double p=BasketProfit(),campEq=cycleStart+p;
  mfe=MathMax(mfe,p);mae=MathMin(mae,p);
 
- // Master break-even: once the WHOLE Apex basket reaches the configured campaign-profit
- // threshold, tighten ONLY the master/L1 broker SL to its own entry price. One-way — once
- // armed (firstSLPrice at-or-past entry), this never fires again for the same campaign, so
- // the SL can never be widened back out.
- if(C.accountProfile=="NORMAL"&&C.masterBreakEvenEnabled&&masterTicket>0&&
-    firstEntryPrice>0&&cycleStart>0){
-   double campaignProfitPct=(p/cycleStart)*100.0;
-   bool beAlreadyActive=(campDir>0?firstSLPrice>=firstEntryPrice:firstSLPrice<=firstEntryPrice)&&firstSLPrice>0;
-   if(campaignProfitPct>=C.masterBreakEvenTriggerPct&&!beAlreadyActive){
-     double beSL=firstEntryPrice;
-     if(SetMasterSL(beSL,"CAMPAIGN_PROFIT_REACHED_BE_TRIGGER")){
-       Emit("MASTER_BE_ARMED",StringFormat(",\"campaignProfitPct\":%.2f,\"triggerPct\":%.2f,\"entryPrice\":%.5f,\"masterTicket\":%I64u",campaignProfitPct,C.masterBreakEvenTriggerPct,firstEntryPrice,masterTicket));
-     }
-   }
- }
-
  // Synthetic master/L1 fixed SL guard: closes the WHOLE basket the instant live price crosses
- // the current SL level (fixed distance, or the break-even price once armed), reinforcing the
- // broker's own native SL order on the master position.
+ // the configured XAU-move distance from the L1 entry, reinforcing (not replacing) the broker's
+ // own native SL order on the master position.
  if(C.accountProfile=="NORMAL"&&masterTicket>0&&firstEntryPrice>0&&firstSLPrice>0){
    double guardPx=campDir>0?SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    bool masterGuardHit=(campDir>0?guardPx<=firstSLPrice:guardPx>=firstSLPrice);
@@ -270,7 +211,7 @@ void Manage(){
  }
 
  // Percentage profit ratchet, based on campaign-start balance (NOT a hard TP):
- // +180% peak => protect +100%, +280% peak => protect +200%, +380% peak => protect +300%, etc.
+ // +200% peak => protect +100%, +300% peak => protect +200%, +400% peak => protect +300%, etc.
  // The floor only ever ratchets forward (driven by mfe, the historical peak, which never decreases).
  if(C.accountProfile=="NORMAL"&&C.profitRatchetEnabled&&cycleStart>0&&
     C.ratchetTriggerPct>0&&C.ratchetLockPct>=0&&

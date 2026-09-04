@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {clean,learn} from '../server.mjs';
 
-test('defaults match the v3.1 NORMAL plan: 100% margin, 2x layering, hard TP disabled, percentage ratchet on',()=>{
+test('defaults match the v3.4 NORMAL plan: 15/50/100 margin ladder, hard TP disabled, $30 fixed SL, 180% ratchet trigger, +50% break-even',()=>{
  const c=JSON.parse(fs.readFileSync(new URL('../data/config.json',import.meta.url)));
  assert.equal(c.baseMarginPct,100);
  assert.equal(c.layerMultiplier,2);
@@ -9,12 +9,17 @@ test('defaults match the v3.1 NORMAL plan: 100% margin, 2x layering, hard TP dis
  assert.equal(c.cooldownMinutes,0);
  assert.equal(c.normalTargetProfitPct,0);
  assert.equal(c.accountProfile,'NORMAL');
- assert.equal(c.normalFixedSLGoldMove,10);
+ assert.equal(c.normalL1MarginPct,15);
+ assert.equal(c.normalL2MarginPct,50);
+ assert.equal(c.normalL3PlusMarginPct,100);
+ assert.equal(c.normalFixedSLGoldMove,30);
  assert.equal(c.profitRatchetEnabled,true);
- assert.equal(c.ratchetTriggerPct,200);
+ assert.equal(c.ratchetTriggerPct,180);
  assert.equal(c.ratchetLockPct,100);
  assert.equal(c.ratchetStepPct,100);
  assert.equal(c.ratchetLockStepPct,100);
+ assert.equal(c.masterBreakEvenEnabled,true);
+ assert.equal(c.masterBreakEvenTriggerPct,50);
 });
 
 test('clean() bounds and defaults untrusted input',()=>{
@@ -43,21 +48,39 @@ test('clean() bounds margin to (0,100]: in-range values pass through, out-of-ran
  assert.equal(clean({baseMarginPct:NaN}).baseMarginPct,100);
 });
 
-test('clean() fixed SL: 0 is a valid disabled value, negative clamps up to 0 (never goes negative), non-finite falls back to default',()=>{
+test('clean() fixed SL: 0 is a valid disabled value, negative clamps up to 0 (never goes negative), non-finite falls back to the v3.4 default of 30',()=>{
  assert.equal(clean({normalFixedSLGoldMove:0}).normalFixedSLGoldMove,0);
  assert.equal(clean({normalFixedSLGoldMove:25}).normalFixedSLGoldMove,25);
  assert.equal(clean({normalFixedSLGoldMove:-5}).normalFixedSLGoldMove,0);
- assert.equal(clean({normalFixedSLGoldMove:'abc'}).normalFixedSLGoldMove,10);
+ assert.equal(clean({normalFixedSLGoldMove:'abc'}).normalFixedSLGoldMove,30);
 });
 
-test('clean() ratchet fields: trigger/step are held just above 0 (never 0 or negative), lock/lockStep allow exactly 0, non-finite falls back to default',()=>{
+test('clean() ratchet fields: trigger/step are held just above 0 (never 0 or negative), lock/lockStep allow exactly 0, non-finite falls back to the v3.4 default (trigger=180)',()=>{
  assert.equal(clean({ratchetTriggerPct:0}).ratchetTriggerPct,.01);
  assert.equal(clean({ratchetTriggerPct:-10}).ratchetTriggerPct,.01);
- assert.equal(clean({ratchetTriggerPct:'abc'}).ratchetTriggerPct,200);
+ assert.equal(clean({ratchetTriggerPct:'abc'}).ratchetTriggerPct,180);
  assert.equal(clean({ratchetStepPct:0}).ratchetStepPct,.01);
  assert.equal(clean({ratchetLockPct:0}).ratchetLockPct,0);
  assert.equal(clean({ratchetLockStepPct:0}).ratchetLockStepPct,0);
  assert.equal(clean({profitRatchetEnabled:false}).profitRatchetEnabled,false);
+});
+
+test('clean() three-tier NORMAL margin ladder: bounds each tier to (0,100], non-finite falls back to its own v3.4 default (15/50/100)',()=>{
+ assert.equal(clean({normalL1MarginPct:150}).normalL1MarginPct,100);
+ assert.equal(clean({normalL1MarginPct:-5}).normalL1MarginPct,.01);
+ assert.equal(clean({normalL1MarginPct:'abc'}).normalL1MarginPct,15);
+ assert.equal(clean({normalL2MarginPct:'abc'}).normalL2MarginPct,50);
+ assert.equal(clean({normalL3PlusMarginPct:'abc'}).normalL3PlusMarginPct,100);
+ assert.equal(clean({normalL2MarginPct:250}).normalL2MarginPct,100);
+});
+
+test('clean() master break-even: trigger held above 0, non-finite falls back to default 50; enabled defaults true and only an explicit false disables it',()=>{
+ assert.equal(clean({masterBreakEvenTriggerPct:0}).masterBreakEvenTriggerPct,.01);
+ assert.equal(clean({masterBreakEvenTriggerPct:-10}).masterBreakEvenTriggerPct,.01);
+ assert.equal(clean({masterBreakEvenTriggerPct:'abc'}).masterBreakEvenTriggerPct,50);
+ assert.equal(clean({}).masterBreakEvenEnabled,true);
+ assert.equal(clean({masterBreakEvenEnabled:false}).masterBreakEvenEnabled,false);
+ assert.equal(clean({masterBreakEvenEnabled:'nonsense'}).masterBreakEvenEnabled,true);
 });
 
 test('clean() strips obsolete removed fields (normalAccountMaxMultiplier, enableInvalidationExit, invalidationGivebackPct, normalProfitFloorEnabled) instead of persisting them',()=>{
@@ -247,6 +270,16 @@ test('full license lifecycle: admin issues a license, user logs in, session read
   assert.equal(meBeforeContact.status,200);
   assert.equal(meBeforeContact.body.dataAvailable,false);
   assert.equal(meBeforeContact.body.waitingForFirstContact,true);
+  // critical fix: settings (effective default values) must be visible even before the EA has ever connected,
+  // decoupled from dataAvailable/live telemetry — a user must be able to review/adjust defaults pre-EA-contact.
+  assert.ok(meBeforeContact.body.settings,'settings must be present before first EA contact');
+  assert.equal(meBeforeContact.body.settings.normalL1MarginPct,15);
+  assert.equal(meBeforeContact.body.settings.normalL2MarginPct,50);
+  assert.equal(meBeforeContact.body.settings.normalL3PlusMarginPct,100);
+  assert.equal(meBeforeContact.body.settings.normalFixedSLGoldMove,30);
+  assert.equal(meBeforeContact.body.settings.ratchetTriggerPct,180);
+  assert.equal(meBeforeContact.body.settings.masterBreakEvenEnabled,true);
+  assert.equal(meBeforeContact.body.settings.masterBreakEvenTriggerPct,50);
 
   // EA contacts with this license and account 111 -> auto-binds
   const eaConfig=await req(base,`/api/ea/config?account=111&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});

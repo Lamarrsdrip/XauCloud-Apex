@@ -29,48 +29,55 @@ export function shouldCloseOnRatchet(campaignStartBalance, peakProfit, currentPr
   return currentProfit <= r.protectedProfit;
 }
 
-const DEFAULT_RATCHET = {enabled:true, triggerPct:200, lockPct:100, stepPct:100, lockStepPct:100};
+// v3.4 default ladder: trigger 180%, lock 100%, step 100%, lockStep 100%
+const DEFAULT_RATCHET = {enabled:true, triggerPct:180, lockPct:100, stepPct:100, lockStepPct:100};
 
-test('below trigger: $1,999 peak on a $1,000 campaign (199.9%) does not activate the ratchet', ()=>{
-  const r = ratchetFloor(1000, 1999, DEFAULT_RATCHET);
+test('below trigger: $1,799 peak on a $1,000 campaign (179.9%) does not activate the ratchet', ()=>{
+  const r = ratchetFloor(1000, 1799, DEFAULT_RATCHET);
   assert.equal(r.active, false);
-  assert.equal(shouldCloseOnRatchet(1000, 1999, 1999, DEFAULT_RATCHET), false);
+  assert.equal(shouldCloseOnRatchet(1000, 1799, 1799, DEFAULT_RATCHET), false);
 });
 
-test('exactly at trigger: $2,000 peak = 200% -> floor is $1,000 (100%), but does NOT close at $2,000 current', ()=>{
-  const r = ratchetFloor(1000, 2000, DEFAULT_RATCHET);
+test('exactly at trigger: $1,800 peak = 180% -> floor is $1,000 (100%), but does NOT close at $1,800 current', ()=>{
+  const r = ratchetFloor(1000, 1800, DEFAULT_RATCHET);
   assert.equal(r.active, true);
   assert.equal(r.protectedPct, 100);
   assert.equal(r.protectedProfit, 1000);
-  assert.equal(shouldCloseOnRatchet(1000, 2000, 2000, DEFAULT_RATCHET), false);
+  assert.equal(shouldCloseOnRatchet(1000, 1800, 1800, DEFAULT_RATCHET), false);
 });
 
-test('peak continues to $3,000 (300%): floor becomes $2,000 (200%)', ()=>{
-  const r = ratchetFloor(1000, 3000, DEFAULT_RATCHET);
+test('peak continues to $2,800 (280%): floor becomes $2,000 (200%)', ()=>{
+  const r = ratchetFloor(1000, 2800, DEFAULT_RATCHET);
   assert.equal(r.protectedPct, 200);
   assert.equal(r.protectedProfit, 2000);
 });
 
-test('retrace from $3,000 peak down to exactly $2,000 current: closes the whole basket', ()=>{
-  assert.equal(shouldCloseOnRatchet(1000, 3000, 2000, DEFAULT_RATCHET), true);
+test('retrace from $2,800 peak down to exactly $2,000 current: closes the whole basket', ()=>{
+  assert.equal(shouldCloseOnRatchet(1000, 2800, 2000, DEFAULT_RATCHET), true);
 });
 
-test('retrace from $3,000 peak to $2,500 current (still above the $2,000 floor): stays open', ()=>{
-  assert.equal(shouldCloseOnRatchet(1000, 3000, 2500, DEFAULT_RATCHET), false);
+test('retrace from $2,800 peak to $2,200 current (still above the $2,000 floor): stays open', ()=>{
+  assert.equal(shouldCloseOnRatchet(1000, 2800, 2200, DEFAULT_RATCHET), false);
 });
 
-test('peak $4,000 (400%) -> floor $3,000 (300%)', ()=>{
-  const r = ratchetFloor(1000, 4000, DEFAULT_RATCHET);
+test('peak $3,800 (380%) -> floor $3,000 (300%)', ()=>{
+  const r = ratchetFloor(1000, 3800, DEFAULT_RATCHET);
   assert.equal(r.protectedPct, 300);
   assert.equal(r.protectedProfit, 3000);
 });
 
+test('peak $4,800 (480%) -> floor $4,000 (400%)', ()=>{
+  const r = ratchetFloor(1000, 4800, DEFAULT_RATCHET);
+  assert.equal(r.protectedPct, 400);
+  assert.equal(r.protectedProfit, 4000);
+});
+
 test('ratchet only ratchets forward: floor computed from peak, not current, and never decreases as current retraces short of the floor', ()=>{
-  const peak = 6000; // 600%
-  const floorAt600 = ratchetFloor(1000, peak, DEFAULT_RATCHET);
-  assert.equal(floorAt600.protectedProfit, 5000); // 500%
-  // retrace to 5600 (peak unchanged since caller always passes the historical max)
-  const stillOpen = shouldCloseOnRatchet(1000, peak, 5600, DEFAULT_RATCHET);
+  const peak = 5800; // 580%: steps = floor((580-180)/100) = 4 -> protectedPct = 100+4*100 = 500%
+  const floorAt580 = ratchetFloor(1000, peak, DEFAULT_RATCHET);
+  assert.equal(floorAt580.protectedProfit, 5000); // 500%
+  // retrace to 5400 (peak unchanged since caller always passes the historical max)
+  const stillOpen = shouldCloseOnRatchet(1000, peak, 5400, DEFAULT_RATCHET);
   assert.equal(stillOpen, false);
   const closes = shouldCloseOnRatchet(1000, peak, 5000, DEFAULT_RATCHET);
   assert.equal(closes, true);
@@ -123,4 +130,57 @@ test('fixed SL 5: BUY @4700 -> 4695, SELL @4700 -> 4705', ()=>{
 test('fixed SL 0 means no broker SL (returns the no-SL sentinel 0)', ()=>{
   assert.equal(fixedSlPrice(4700, 1, 0), 0);
   assert.equal(fixedSlPrice(4700, -1, 0), 0);
+});
+test('v3.4 default fixed SL is 30: BUY @4700 -> 4670, SELL @4700 -> 4730', ()=>{
+  assert.equal(fixedSlPrice(4700, 1, 30), 4670);
+  assert.equal(fixedSlPrice(4700, -1, 30), 4730);
+});
+
+// ---------- v3.4 three-tier NORMAL margin ladder (mirrors OpenLayer's pct selection) ----------
+function normalLayerMarginPct(layers, ladder){
+  if(layers<=0) return ladder.l1;
+  if(layers===1) return ladder.l2;
+  return ladder.l3Plus;
+}
+const DEFAULT_LADDER = {l1:15, l2:50, l3Plus:100};
+test('L1 (master, layers<=0) uses the L1 margin tier', ()=>{
+  assert.equal(normalLayerMarginPct(0, DEFAULT_LADDER), 15);
+});
+test('L2 (first add, layers==1) uses the L2 margin tier', ()=>{
+  assert.equal(normalLayerMarginPct(1, DEFAULT_LADDER), 50);
+});
+test('L3 and every subsequent add (layers>=2) uses the L3+ margin tier', ()=>{
+  assert.equal(normalLayerMarginPct(2, DEFAULT_LADDER), 100);
+  assert.equal(normalLayerMarginPct(3, DEFAULT_LADDER), 100);
+  assert.equal(normalLayerMarginPct(9, DEFAULT_LADDER), 100);
+});
+
+// ---------- Master break-even (mirrors Manage()'s BE block) ----------
+// campaignProfitPct is whole-basket profit (p) as a % of campaign-start balance, BE moves ONLY
+// the master/L1 SL to its own entry price, one-way (never re-fires once armed).
+function masterBreakEven({campaignProfitPct, triggerPct, enabled, alreadyActive}){
+  if(!enabled) return {armed:false};
+  if(alreadyActive) return {armed:false}; // one-way: does not re-trigger, cannot widen back
+  if(campaignProfitPct>=triggerPct) return {armed:true};
+  return {armed:false};
+}
+test('break-even does not arm below the +50% whole-basket trigger', ()=>{
+  assert.equal(masterBreakEven({campaignProfitPct:49.9, triggerPct:50, enabled:true, alreadyActive:false}).armed, false);
+});
+test('break-even arms at exactly +50% whole-basket campaign profit', ()=>{
+  assert.equal(masterBreakEven({campaignProfitPct:50, triggerPct:50, enabled:true, alreadyActive:false}).armed, true);
+});
+test('break-even arms above +50% too (e.g. skipped straight to +75% on a fast-moving campaign)', ()=>{
+  assert.equal(masterBreakEven({campaignProfitPct:75, triggerPct:50, enabled:true, alreadyActive:false}).armed, true);
+});
+test('break-even never re-arms once already active, even if profit is still above trigger (one-way, cannot widen back)', ()=>{
+  assert.equal(masterBreakEven({campaignProfitPct:90, triggerPct:50, enabled:true, alreadyActive:true}).armed, false);
+});
+test('break-even is disabled entirely when masterBreakEvenEnabled is false, regardless of profit', ()=>{
+  assert.equal(masterBreakEven({campaignProfitPct:200, triggerPct:50, enabled:false, alreadyActive:false}).armed, false);
+});
+test('break-even SL target is the campaign\'s own entry price, not an offset (true breakeven, zero risk on the master leg)', ()=>{
+  const firstEntryPrice = 4700;
+  const beSL = firstEntryPrice; // EA sets beSL=firstEntryPrice directly
+  assert.equal(beSL, 4700);
 });

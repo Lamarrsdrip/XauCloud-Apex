@@ -1,17 +1,18 @@
-# XauCloud Apex v3.1.1
+# XauCloud Apex v3.4.1
 
 Private XAUUSD campaign EA and control plane built around a repeated pattern: strong impulse into a recent liquidity extreme, sweep/failure, rejection, micro-structure break, initial entry, then increasingly large additions only while the basket is profitable and fresh continuation or failed-pullback confirmation appears. Setup/entry/pyramid detection logic is unchanged from earlier versions — see `docs/STRATEGY_SPEC.md` for the full forensic history and evidence this build is based on.
 
-## v3 exit architecture (current)
+## v3.4 exit & sizing architecture (current)
 
-v3 replaces the old fixed-multiplier/floor exit with three independently-configurable mechanisms, all synced from the website/backend with local EA Inputs as the offline fallback:
+All of the below is synced from the website/backend with local EA Inputs as the offline fallback:
 
-- **Margin allocation** (`baseMarginPct`, default 100%) — first-layer margin request as a % of current free margin; each confirmed add doubles the request (`layerMultiplier`, default 2×), always bounded by what the broker will actually accept at that instant (`OrderCalcMargin`-based, not a hardcoded lot table).
-- **Fixed master (L1) stop-loss** (`normalFixedSLGoldMove`, default 10) — an XAU **price-distance**, not pips or account money. Only the first/master position ever receives a broker SL; pyramid adds never do. If the master leg disappears for any reason (broker SL fill, manual close, margin stop-out), the whole remaining basket closes immediately — no orphan positions. A synthetic price-based guard reinforces the broker's own SL order so the whole basket reacts together.
-- **Percentage profit ratchet** (default: trigger +200%, lock +100%, then +100% step / +100% lock-step) — protects basket profit in stages, in % of campaign-start balance, once peak profit crosses the trigger. The floor only ever moves up; a retrace below an already-earned floor closes the whole basket. This is **not** a hard take-profit — the basket keeps running past the trigger, hunting for the next stage.
+- **Three-tier NORMAL margin ladder** — `normalL1MarginPct` (default 15%), `normalL2MarginPct` (default 50%), `normalL3PlusMarginPct` (default 100%): the master/first entry, first add, and every add after that each request their own configured % of current free margin, always bounded by what the broker will actually accept at that instant (`OrderCalcMargin`-based, not a hardcoded lot table). The UNLIMITED profile is unaffected and still uses `baseMarginPct` × `layerMultiplier`^layers.
+- **Fixed master (L1) stop-loss** (`normalFixedSLGoldMove`, default 30) — an XAU **price-distance**, not pips or account money. Only the first/master position ever receives a broker SL; pyramid adds never do. If the master leg disappears for any reason (broker SL fill, manual close, margin stop-out), the whole remaining basket closes immediately — no orphan positions. A synthetic price-based guard reinforces the broker's own SL order so the whole basket reacts together.
+- **Master break-even protection** (`masterBreakEvenEnabled`, default on; `masterBreakEvenTriggerPct`, default +50%) — once whole-basket campaign profit reaches the trigger %, the master/L1 stop-loss moves one-way to its own entry price (true breakeven on the master leg). It never re-fires once armed and never widens back out.
+- **Percentage profit ratchet** (default: trigger +180%, lock +100%, then +100% step / +100% lock-step) — protects basket profit in stages, in % of campaign-start balance, once peak profit crosses the trigger. The floor only ever moves up; a retrace below an already-earned floor closes the whole basket. This is **not** a hard take-profit — the basket keeps running past the trigger, hunting for the next stage.
 - **Optional hard basket TP** (`normalTargetProfitPct`, default **0 = disabled**) — left off by default so the ratchet (not a fixed target) governs the exit. A TP set below the ratchet's first trigger would close the basket before the ratchet ever gets to activate.
 
-Every EA event carries the effective values it's actually running with (`marginPct`, `takeProfitPct`, `fixedSLGoldMove`, `ratchetEnabled`, `ratchetTrigger/Lock/Step/LockStepPct`) plus `configSource` (`REMOTE` once the backend has synced at least once, `LOCAL_INPUT` until then) and `eaVersion`, so the dashboard can show exactly what's running without guessing. `OnInit` and every config change also print `APEX_EFFECTIVE_CONFIG ... source=REMOTE|LOCAL_INPUT` to the terminal log.
+Every EA event carries the effective values it's actually running with (`l1MarginPct`, `l2MarginPct`, `l3PlusMarginPct`, `takeProfitPct`, `fixedSLGoldMove`, `beEnabled`, `beTriggerPct`, `ratchetEnabled`, `ratchetTrigger/Lock/Step/LockStepPct`) plus `configSource` (`REMOTE` once the backend has synced at least once, `LOCAL_INPUT` until then) and `eaVersion`, so the dashboard can show exactly what's running without guessing. `OnInit` and every config change also print `APEX_EFFECTIVE_CONFIG ... source=REMOTE|LOCAL_INPUT` to the terminal log. The website's Settings page always shows the effective default values for a license, even before the EA has ever connected — settings are never blank.
 
 ## Strategy state machine
 
@@ -21,7 +22,7 @@ The implementation does not assume that every large move must reverse. It requir
 
 ## Lot semantics
 
-First layer requests `baseMarginPct` of *current* free-margin capacity (default 100%, i.e. all of it — this is the account owner's explicit choice for this build, not a conservative default). Each confirmed add doubles that percentage request against the then-current free margin. `maxLayers=0` means no software layer cap; the broker, available margin, and the ratchet/TP/SL exits become the practical limits.
+For the NORMAL profile, each layer requests its own configured % of *current* free-margin capacity: `normalL1MarginPct` (default 15%) for the master/first entry, `normalL2MarginPct` (default 50%) for the first add, `normalL3PlusMarginPct` (default 100%) for every add after that. `maxLayers=0` means no software layer cap; the broker, available margin, and the ratchet/TP/SL/break-even exits become the practical limits. The UNLIMITED profile keeps the older `baseMarginPct` × `layerMultiplier`^layers exponential sizing, unchanged.
 
 ## Learning brain
 

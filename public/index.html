@@ -539,17 +539,26 @@ function armDisarmCard(me){
 }
 function configSyncCard(me){
   var ec = me.effectiveConfig;
-  if (!ec) return '<div class="card"><h3>Config &amp; Sync</h3><div class="row"><span class="k">Status</span><span class="v">No EA contact yet</span></div></div>';
+  var acc = me.account || {};
+  if (!ec) return '<div class="card"><h3>Effective EA Configuration</h3><div class="row"><span class="k">Status</span><span class="v">No EA contact yet</span></div></div>';
   var sourceTone = ec.configSource==='REMOTE' ? 'green' : 'amber';
   var sourceLabel = ec.configSource==='REMOTE' ? 'Remote (website)' : (ec.configSource==='LOCAL_INPUT' ? 'Local MT5 Inputs' : '—');
-  return '<div class="card"><h3>Config &amp; Sync</h3>'
-    + '<div class="row"><span class="k">Config Source</span><span class="v">'+pill(sourceLabel, sourceTone)+'</span></div>'
+  return '<div class="card"><h3>Effective EA Configuration</h3>'
     + '<div class="row"><span class="k">EA Version</span><span class="v" style="font-size:12px">'+esc(ec.eaVersion||'—')+'</span></div>'
-    + '<div class="row"><span class="k">EA Last Synced</span><span class="v">'+esc(fmtAgo(ec.asOf))+'</span></div>'
-    + '<div class="row"><span class="k">Effective Margin</span><span class="v">'+esc(ec.marginPct)+'%</span></div>'
-    + '<div class="row"><span class="k">Effective TP</span><span class="v">'+(ec.takeProfitPct>0? esc(ec.takeProfitPct)+'%' : 'Disabled')+'</span></div>'
-    + '<div class="row"><span class="k">Effective Fixed SL</span><span class="v">'+(ec.fixedSLGoldMove>0? esc(ec.fixedSLGoldMove)+' XAU move' : 'Disabled')+'</span></div>'
-    + '<div class="row"><span class="k">Effective Ratchet</span><span class="v">'+(ec.ratchetEnabled? ('+' +esc(ec.ratchetTriggerPct)+'% → +'+esc(ec.ratchetLockPct)+'%') : 'Off')+'</span></div>'
+    + '<div class="row"><span class="k">Account</span><span class="v">'+esc(acc.account||'—')+'</span></div>'
+    + '<div class="row"><span class="k">Profile</span><span class="v">'+esc(me.accountProfile||'—')+'</span></div>'
+    + '<div class="row"><span class="k">L1 Margin</span><span class="v">'+esc(ec.l1MarginPct)+'%</span></div>'
+    + '<div class="row"><span class="k">L2 Margin</span><span class="v">'+esc(ec.l2MarginPct)+'%</span></div>'
+    + '<div class="row"><span class="k">L3+ Margin</span><span class="v">'+esc(ec.l3PlusMarginPct)+'%</span></div>'
+    + '<div class="row"><span class="k">Hard TP</span><span class="v">'+(ec.takeProfitPct>0? esc(ec.takeProfitPct)+'%' : 'Disabled')+'</span></div>'
+    + '<div class="row"><span class="k">Fixed Master SL</span><span class="v">'+(ec.fixedSLGoldMove>0? esc(ec.fixedSLGoldMove)+' XAU move' : 'Disabled')+'</span></div>'
+    + '<div class="row"><span class="k">Master BE Trigger</span><span class="v">'+(ec.beEnabled? '+'+esc(ec.beTriggerPct)+'%' : 'Off')+'</span></div>'
+    + '<div class="row"><span class="k">Profit Ratchet</span><span class="v">'+(ec.ratchetEnabled? 'On' : 'Off')+'</span></div>'
+    + '<div class="row"><span class="k">Ratchet Trigger</span><span class="v">+'+esc(ec.ratchetTriggerPct)+'%</span></div>'
+    + '<div class="row"><span class="k">Ratchet Lock</span><span class="v">+'+esc(ec.ratchetLockPct)+'%</span></div>'
+    + '<div class="row"><span class="k">Ratchet Step</span><span class="v">+'+esc(ec.ratchetStepPct)+'% → +'+esc(ec.ratchetLockStepPct)+'%</span></div>'
+    + '<div class="row"><span class="k">Last EA Sync</span><span class="v">'+esc(fmtAgo(ec.asOf))+'</span></div>'
+    + '<div class="row"><span class="k">Config Source</span><span class="v">'+pill(sourceLabel, sourceTone)+'</span></div>'
     + '</div>';
 }
 function ratchetLadderHtml(trigger, lock, step, lockStep, enabled){
@@ -667,7 +676,7 @@ function pageLearning(me){
 function pageSettings(me){
   var s = me.settings || {};
   var adv = s.advanced || {};
-  var disabled = !me.dataAvailable;
+  var disabled = !me.settings;
   var lic = me.license || {};
   var html = '<h1 class="page-title">Settings</h1><p class="page-sub">How Apex trades your account</p>';
   html += '<div class="card"><h3>License</h3>'
@@ -684,15 +693,35 @@ function pageSettings(me){
     + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
     + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>NORMAL</option>'
     + '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>UNLIMITED</option>'
-    + '</select><div class="hint">NORMAL accounts close the whole basket at a fixed target and start fresh. UNLIMITED accounts use a multiplier-style target.</div></div>'
-    + '<div class="field-grid">'
-    + '<div class="field"><label>Margin Allocation (%)</label><input type="number" id="f-baseMarginPct" value="'+esc(s.baseMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">First-layer margin allocation. Must be &gt;0 and &le;100.</div></div>'
-    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). The Profit Ratchet below is the intended exit — a hard TP would close the basket before the ratchet can activate.</div></div>'
-    + '<div class="field"><label>Fixed Master SL — Gold Move ($)</label><input type="number" step="any" id="f-normalFixedSLGoldMove" value="'+esc(s.normalFixedSLGoldMove)+'" '+(disabled?'disabled':'')+'><div class="hint">XAU price distance from the first (master) entry, not pips or account money. 0 = no broker stop-loss on the master position.</div></div>'
-    + '<div class="field"><label>Pyramiding Multiplier</label><input type="number" id="f-layerMultiplier" value="'+esc(s.layerMultiplier)+'" '+(disabled?'disabled':'')+'></div>'
-    + '<div class="field"><label>Max Layers</label><input type="number" id="f-maxLayers" value="'+esc(s.maxLayers)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = broker/margin limited (no software cap)</div></div>'
-    + '</div>'
+    + '</select><div class="hint">NORMAL accounts close the whole basket at a fixed target/ratchet and start fresh. UNLIMITED accounts use a multiplier-style target.</div></div>'
+    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). The Profit Ratchet below is the intended exit — a hard TP would close the basket before the ratchet can activate. Set above 0 to activate a hard target instead.</div></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save Settings</button></div>'
+    + '</div>';
+
+  html += '<div class="card"><h3>Margin Allocation (NORMAL)</h3>'
+    + '<div class="hint" style="margin-bottom:14px">Apex still requires its existing add conditions (a fresh continuation/confirmation signal) before opening L2 or L3+ — these layers do not all open immediately.</div>'
+    + '<div class="field-grid">'
+    + '<div class="field"><label>Confirmation / L1 Margin (%)</label><input type="number" step="any" id="f-normalL1MarginPct" value="'+esc(s.normalL1MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Small confirmation trade used to test whether the setup is behaving correctly.</div></div>'
+    + '<div class="field"><label>Confirmed / L2 Margin (%)</label><input type="number" step="any" id="f-normalL2MarginPct" value="'+esc(s.normalL2MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Larger confirmed add after Apex receives another valid continuation/add signal.</div></div>'
+    + '<div class="field"><label>Full Exposure / L3+ Margin (%)</label><input type="number" step="any" id="f-normalL3PlusMarginPct" value="'+esc(s.normalL3PlusMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Use up to the configured percentage of currently available margin after further valid confirmation.</div></div>'
+    + '</div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-margin" '+(disabled?'disabled':'')+'>Save Margin Allocation</button></div>'
+    + '</div>';
+
+  html += '<div class="card"><h3>Fixed Master SL &amp; Layer Cap</h3>'
+    + '<div class="field-grid">'
+    + '<div class="field"><label>Fixed Master SL — Gold Move</label><input type="number" step="any" id="f-normalFixedSLGoldMove" value="'+esc(s.normalFixedSLGoldMove)+'" '+(disabled?'disabled':'')+'><div class="hint">XAU price distance from the first (master) entry, not pips or account money. 0 = no broker stop-loss on the master position.</div></div>'
+    + '<div class="field"><label>Max Layers</label><input type="number" id="f-maxLayers" value="'+esc(s.maxLayers)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = broker/margin limited (no software cap)</div></div>'
+    + '<div class="field"><label>UNLIMITED Profile Multiplier</label><input type="number" id="f-layerMultiplier" value="'+esc(s.layerMultiplier)+'" '+(disabled?'disabled':'')+'><div class="hint">Only applies to the UNLIMITED account profile.</div></div>'
+    + '</div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-sl" '+(disabled?'disabled':'')+'>Save</button></div>'
+    + '</div>';
+
+  html += '<div class="card"><h3>Master Break-Even Protection</h3>'
+    + '<div class="toggle-row"><div><div class="lbl">Master Break-Even</div><div class="hint">When the whole Apex campaign reaches the trigger profit relative to campaign-start balance, the L1/master stop-loss is tightened to the original L1 entry price. One-way — it is never widened back out.</div></div>'
+    + '<label class="switch"><input type="checkbox" id="f-masterBreakEvenEnabled" '+(s.masterBreakEvenEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
+    + '<div class="field" style="margin-top:14px"><label>Move master SL to entry at (%)</label><input type="number" step="any" id="f-masterBreakEvenTriggerPct" value="'+esc(s.masterBreakEvenTriggerPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Whole-basket campaign profit, as % of campaign-start balance.</div></div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-be" '+(disabled?'disabled':'')+'>Save Break-Even</button></div>'
     + '</div>';
 
   html += '<div class="card"><h3>Profit Ratchet</h3>'
@@ -761,13 +790,35 @@ function wireSettings(me){
   if (save1) save1.addEventListener('click', function(){
     var payload = {
       accountProfile: document.getElementById('f-accountProfile').value,
-      normalTargetProfitPct: Number(document.getElementById('f-normalTargetProfitPct').value),
-      baseMarginPct: Number(document.getElementById('f-baseMarginPct').value),
-      normalFixedSLGoldMove: Number(document.getElementById('f-normalFixedSLGoldMove').value),
-      layerMultiplier: Number(document.getElementById('f-layerMultiplier').value),
-      maxLayers: Number(document.getElementById('f-maxLayers').value)
+      normalTargetProfitPct: Number(document.getElementById('f-normalTargetProfitPct').value)
     };
     saveConfig(payload, 'save-settings', 'Save Settings');
+  });
+  var saveMargin = document.getElementById('save-margin');
+  if (saveMargin) saveMargin.addEventListener('click', function(){
+    var payload = {
+      normalL1MarginPct: Number(document.getElementById('f-normalL1MarginPct').value),
+      normalL2MarginPct: Number(document.getElementById('f-normalL2MarginPct').value),
+      normalL3PlusMarginPct: Number(document.getElementById('f-normalL3PlusMarginPct').value)
+    };
+    saveConfig(payload, 'save-margin', 'Save Margin Allocation');
+  });
+  var saveSl = document.getElementById('save-sl');
+  if (saveSl) saveSl.addEventListener('click', function(){
+    var payload = {
+      normalFixedSLGoldMove: Number(document.getElementById('f-normalFixedSLGoldMove').value),
+      maxLayers: Number(document.getElementById('f-maxLayers').value),
+      layerMultiplier: Number(document.getElementById('f-layerMultiplier').value)
+    };
+    saveConfig(payload, 'save-sl', 'Save');
+  });
+  var saveBe = document.getElementById('save-be');
+  if (saveBe) saveBe.addEventListener('click', function(){
+    var payload = {
+      masterBreakEvenEnabled: document.getElementById('f-masterBreakEvenEnabled').checked,
+      masterBreakEvenTriggerPct: Number(document.getElementById('f-masterBreakEvenTriggerPct').value)
+    };
+    saveConfig(payload, 'save-be', 'Save Break-Even');
   });
   var saveRatchet = document.getElementById('save-ratchet');
   if (saveRatchet) saveRatchet.addEventListener('click', function(){

@@ -14,6 +14,8 @@ const CONFIG=path.join(DATA,'config.json');
 const LICENSE_CONFIGS=path.join(DATA,'license-configs.json');
 const EVENTS=path.join(DATA,'events.ndjson');
 const LICENSES=path.join(DATA,'licenses.json');
+const XAUCLOUD_BASE_URL=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
+const APEX_BRIDGE_SECRET=String(process.env.APEX_BRIDGE_SECRET||'');
 
 const DEFAULT={
   armed:false,account:'0',symbolContains:'XAUUSD',
@@ -105,7 +107,7 @@ function clientIp(req){
   const f=req.headers['x-forwarded-for'];
   return f?String(f).split(',')[0].trim():(req.socket.remoteAddress||'unknown');
 }
-function maskLicense(k){k=String(k||'');return k.length<=8?'***':k.slice(0,5)+'…'+k.slice(-4)}
+function maskLicense(k){k=String(k||'');return k.length<=8?'***':k.slice(0,5)+'...'+k.slice(-4)}
 function licenseStatusFor(lic){
   if(!lic)return 'LICENSE_NOT_FOUND';
   if(lic.status==='DISABLED')return 'LICENSE_DISABLED';
@@ -128,18 +130,90 @@ async function saveLicenseConfig(key,partial,{bumpRevision=true}={}){
   const lic=licenses[key];
   if(!lic)throw Object.assign(new Error('license_not_found'),{httpStatus:404});
   all[key]=next;
-  await atomic(LICENSE_CONFIGS,all);
+  const revision=bumpRevision?Number(lic.commandRevision||0)+1:Number(lic.commandRevision||0);
   if(bumpRevision){
-    lic.commandRevision=Number(lic.commandRevision||0)+1;
+    lic.commandRevision=revision;
     lic.pendingCommand=next.armed?'ARM':'DISARM';
     lic.commandUpdatedAt=new Date().toISOString();
     lic.updatedAt=lic.commandUpdatedAt;
     licenses[key]=lic;
-    await writeLicenses(licenses);
   }
+  await syncBridgeConfig(key,next,revision);
+  await atomic(LICENSE_CONFIGS,all);
+  if(bumpRevision)await writeLicenses(licenses);
   return next;
 }
-function normalizeLicense(v){return String(v||'').trim().toUpperCase()}
+export function normalizeLicense(v){return String(v||'').trim().toUpperCase().replace(/ /g,'')}
+function bridgeConfigured(){return Boolean(XAUCLOUD_BASE_URL&&APEX_BRIDGE_SECRET)}
+function bridgeFailure(message,status=502,detail=null){
+  return Object.assign(new Error(message),{httpStatus:status,detail});
+}
+async function bridgeRequest(route,{method='GET',payload}={}){
+  if(!APEX_BRIDGE_SECRET)throw bridgeFailure('APEX_BRIDGE_SECRET_NOT_CONFIGURED',503);
+  let response;
+  try{
+    response=await fetch(XAUCLOUD_BASE_URL+route,{
+      method,
+      headers:{'accept':'application/json','content-type':'application/json','x-apex-bridge-secret':APEX_BRIDGE_SECRET},
+      body:payload===undefined?undefined:JSON.stringify(payload)
+    });
+  }catch(e){
+    throw bridgeFailure('XAUCLOUD_BRIDGE_UNREACHABLE',502,{message:String(e?.message||e)});
+  }
+  const text=await response.text();
+  let data;
+  try{data=text?JSON.parse(text):{}}catch{throw bridgeFailure('XAUCLOUD_BRIDGE_NON_JSON_RESPONSE',502,{status:response.status})}
+  if(!response.ok||data?.ok===false){
+    throw bridgeFailure(String(data?.error||'XAUCLOUD_BRIDGE_REQUEST_FAILED'),response.status>=400?response.status:502,data);
+  }
+  return data;
+}
+async function syncBridgeLicense(key,lic,{resetAccount=false}={}){
+  if(!bridgeConfigured())return null;
+  return bridgeRequest('/api/cloud/apex/bridge/license/upsert',{method:'POST',payload:{
+    license:normalizeLicense(key),active:licenseStatusFor(lic)==='ACTIVE',account:String(lic?.account||''),
+    customer:String(lic?.customer||''),expiresAt:lic?.expiresAt??null,resetAccount:Boolean(resetAccount)
+  }});
+}
+async function syncBridgeConfig(key,config,commandRevision=0){
+  if(!bridgeConfigured())return null;
+  return bridgeRequest('/api/cloud/apex/bridge/config/upsert',{method:'POST',payload:{
+    license:normalizeLicense(key),config:clean(config),commandRevision:Number(commandRevision||0)
+  }});
+}
+async function readBridgeStatus(key){
+  return bridgeRequest('/api/cloud/apex/bridge/status?license='+encodeURIComponent(normalizeLicense(key)));
+}
+async function bridgeSelfTest(key,lic){
+  const remote=await readBridgeStatus(key);
+  const localActive=licenseStatusFor(lic)==='ACTIVE';
+  const localAccount=String(lic?.account||'').trim();
+  const remoteAccount=String(remote?.license?.account||'').trim();
+  return {
+    bridgeConfigured:bridgeConfigured(),localLicenseExists:Boolean(lic),mirrorExists:remote?.license?.exists===true,
+    activeMatches:remote?.license?.active===localActive,
+    accountExactMatch:remoteAccount===localAccount,
+    accountBindingCompatible:!localAccount||remoteAccount===localAccount,
+    bridgeConfigExists:remote?.configExists===true,
+    localActive,remoteActive:remote?.license?.active===true,
+    localAccount,remoteAccount
+  };
+}
+async function syncAllLicensesAtStartup(){
+  if(!bridgeConfigured())throw bridgeFailure('APEX_BRIDGE_SECRET_NOT_CONFIGURED',503);
+  const licenses=await readLicenses();
+  for(const [rawKey,lic] of Object.entries(licenses)){
+    const key=normalizeLicense(rawKey);
+    if(!key)continue;
+    await syncBridgeLicense(key,lic);
+    await syncBridgeConfig(key,await getLicenseConfig(key),Number(lic.commandRevision||0));
+    const check=await bridgeSelfTest(key,lic);
+    if(!check.mirrorExists||!check.activeMatches||!check.accountBindingCompatible||!check.bridgeConfigExists)
+      throw bridgeFailure('XAUCLOUD_BRIDGE_SELF_TEST_FAILED',502,{license:maskLicense(key),check});
+    console.log(`APEX_BRIDGE_SYNC_OK license=${maskLicense(key)} active=${check.localActive} accountBound=${Boolean(check.remoteAccount)} config=true`);
+  }
+  console.log(`APEX_BRIDGE_STARTUP_OK licenses=${Object.keys(licenses).length}`);
+}
 async function validateEa(licenseKey,account){
   const key=normalizeLicense(licenseKey), accountS=String(account||'');
   const licenses=await readLicenses();
@@ -349,13 +423,25 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&u.pathname==='/api/admin/licenses'){
       if(!adminOk(req))return json(res,401,{error:'unauthorized'});
       const b=await body(req),ls=await readLicenses(),key=normalizeLicense(b.key)||genLicense(),old=ls[key]||{},now=new Date().toISOString();
-      ls[key]={...old,status:['ACTIVE','DISABLED'].includes(b.status)?b.status:(old.status||'ACTIVE'),
+      const next={...old,status:['ACTIVE','DISABLED'].includes(b.status)?b.status:(old.status||'ACTIVE'),
         account:b.account!==undefined?String(b.account||''):(old.account||''),
         customer:b.customer!==undefined?String(b.customer||''):(old.customer||''),
         accountProfile:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(old.accountProfile||'NORMAL'),
         expiresAt:b.expiresAt!==undefined?(b.expiresAt||null):(old.expiresAt||null),
         commandRevision:Number(old.commandRevision||0),createdAt:old.createdAt||now,updatedAt:now};
+      await syncBridgeLicense(key,next,{resetAccount:b.account!==undefined&&!String(b.account||'')});
+      await syncBridgeConfig(key,await getLicenseConfig(key),Number(next.commandRevision||0));
+      ls[key]=next;
       await writeLicenses(ls);return json(res,200,{ok:true,license:{key,...ls[key],status:licenseStatusFor(ls[key])}});
+    }
+    if(req.method==='GET'&&u.pathname==='/api/admin/bridge/status'){
+      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
+      const key=normalizeLicense(u.searchParams.get('license')||'');
+      if(!key)return json(res,400,{ok:false,error:'license_required'});
+      const licenses=await readLicenses(),lic=licenses[key];
+      if(!lic)return json(res,404,{ok:false,error:'local_license_not_found',license:maskLicense(key)});
+      const check=await bridgeSelfTest(key,lic);
+      return json(res,200,{ok:true,license:maskLicense(key),...check});
     }
     if(req.method==='GET'&&u.pathname==='/api/admin/status'){
       if(!adminOk(req))return json(res,401,{error:'unauthorized'});
@@ -375,5 +461,8 @@ const server=http.createServer(async(req,res)=>{
 });
 
 await ensure();
-if(process.env.NODE_ENV!=='test')server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v3.7 listening on ${PORT}`));
-export {server};
+if(process.env.NODE_ENV!=='test'){
+  await syncAllLicensesAtStartup();
+  server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v3.7 listening on ${PORT}`));
+}
+export {server,syncAllLicensesAtStartup};

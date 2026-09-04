@@ -1,12 +1,12 @@
 #property copyright "XauCloud Apex"
-#property version   "3.700"
+#property version   "3.710"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.7.0-CommandCenterLink"
+#define APEX_VERSION "XauCloud-Apex_v3.7.1-XauCloudLink"
 #define APEX_MAGIC 8620260903
-input string InpCloudURL="https://apex.xaucloud.io"; // same-origin site/API, like XauCloud Command Center
+input string InpCloudURL="https://xaucloud.io";      // canonical XauCloud license/heartbeat infrastructure
 input string InpApexLicense="";                        // ONLY credential customer enters
 input int InpConfigPollSeconds=8;                      // remote command/config sync
 input int InpCloudTimeoutMs=5000;
@@ -101,6 +101,7 @@ bool LoadCloudCache(){
 }
 
 string trim(string s){StringTrimLeft(s);StringTrimRight(s);return s;} string raw(string j,string k){string n="\""+k+"\":";int p=StringFind(j,n);if(p<0)return"";p+=StringLen(n);while(p<StringLen(j)&&StringGetCharacter(j,p)==' ')p++;ushort c=StringGetCharacter(j,p);if(c=='\"'){int e=p+1;while(e<StringLen(j)&&StringGetCharacter(j,e)!='\"')e++;return StringSubstr(j,p+1,e-p-1);}int e=p;while(e<StringLen(j)){ushort x=StringGetCharacter(j,e);if(x==','||x=='}'||x==']')break;e++;}return trim(StringSubstr(j,p,e-p));}
+string NormalizeLicense(string s){s=trim(s);StringToUpper(s);StringReplace(s," ","");return s;}
 double jd(string j,string k,double d){string v=raw(j,k);return v==""?d:StringToDouble(v);} int ji(string j,string k,int d){string v=raw(j,k);return v==""?d:(int)StringToInteger(v);} bool jb(string j,string k,bool d){string v=raw(j,k);if(v=="true")return true;if(v=="false")return false;return d;} string js(string j,string k,string d){string v=raw(j,k);return v==""?d:v;} ulong ju(string j,string k,ulong d){string v=raw(j,k);return v==""?d:(ulong)StringToInteger(v);}
 
 bool Http(string method,string ep,string body,string &resp,int &httpCode,int &mt5Err){
@@ -134,10 +135,10 @@ string BoolJson(bool v){return v?"true":"false";}
 
 void AckCommand(long revision,string status){
    if(IsTester()||revision<=0)return;
-   string b=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"revision\":%I64d,\"status\":\"%s\",\"eaVersion\":\"%s\"}",
-      InpApexLicense,AccountInfoInteger(ACCOUNT_LOGIN),revision,status,APEX_VERSION);
+   string b=StringFormat("{\"license_key\":\"%s\",\"account\":\"%I64d\",\"type\":\"COMMAND_ACK\",\"revision\":%I64d,\"status\":\"%s\",\"eaVersion\":\"%s\"}",
+      NormalizeLicense(InpApexLicense),AccountInfoInteger(ACCOUNT_LOGIN),revision,status,APEX_VERSION);
    string r;int code=0,err=0;
-   if(!Http("POST","/api/apex/command/ack",b,r,code,err))CloudFailure("COMMAND_ACK",code,err,r);
+   if(!Http("POST","/api/cloud/apex/event",b,r,code,err))CloudFailure("COMMAND_ACK",code,err,r);
 }
 
 void ApplyRemoteConfig(string r){
@@ -170,26 +171,31 @@ void ApplyRemoteConfig(string r){
 
 bool CloudSync(){
    if(IsTester()){C.armed=true;return true;}
-   if(StringLen(InpApexLicense)<8){
+   string license=NormalizeLicense(InpApexLicense);
+   if(StringLen(license)<8){
       g_cloudLastStatus="LICENSE_MISSING";
       if(!g_cloudEverValidated&&!g_cloudUsingCache)C.armed=false;
       if(InpCloudDiagnostics)Print("APEX LICENSE MISSING | enter Apex license in EA Inputs");
       return false;
    }
-   long tradeMode=(long)AccountInfoInteger(ACCOUNT_TRADE_MODE);
    string b=StringFormat(
-      "{\"license\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"server\":\"%s\",\"currency\":\"%s\","
-      "\"symbol\":\"%s\",\"timeframe\":%d,\"eaVersion\":\"%s\",\"tradeMode\":%I64d,"
-      "\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f,\"campaignActive\":%s,\"layers\":%d}",
-      InpApexLicense,AccountInfoInteger(ACCOUNT_LOGIN),
-      AccountInfoString(ACCOUNT_COMPANY),AccountInfoString(ACCOUNT_SERVER),AccountInfoString(ACCOUNT_CURRENCY),
-      _Symbol,(int)_Period,APEX_VERSION,tradeMode,
-      AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),AccountInfoDouble(ACCOUNT_MARGIN_FREE),
-      BoolJson(camp||CountPos()>0),layers);
+      "{\"license_key\":\"%s\",\"account_number\":\"%I64d\",\"broker_server\":\"%s\","
+      "\"symbol\":\"%s\",\"timeframe\":\"%d\",\"ea_version\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
+      "\"algo_trading\":%s,\"trading_allowed\":%s,\"mt5_connected\":true,\"account_connected\":true,\"ea_active\":true,\"bot_state\":\"APEX\"}",
+      license,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_SERVER),_Symbol,(int)_Period,APEX_VERSION,
+      AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),
+      BoolJson((bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)),BoolJson((bool)MQLInfoInteger(MQL_TRADE_ALLOWED)));
    string r;int code=0,err=0;
-   if(!Http("POST","/api/apex/heartbeat",b,r,code,err)){
+   if(!Http("POST","/api/cloud/monitor/heartbeat",b,r,code,err)){
       CloudFailure("HEARTBEAT",code,err,r);
       // Critical XauCloud behavior: communication failure does not alter C.armed or trading state.
+      return false;
+   }
+   string configPath=StringFormat("/api/cloud/apex/config?license_key=%s&account=%I64d",license,AccountInfoInteger(ACCOUNT_LOGIN));
+   if(!Http("GET",configPath,"",r,code,err)){
+      string reason=js(r,"reason","LICENSE_DENIED");
+      if(code==403){g_cloudExplicitDenied=true;g_cloudLastStatus=reason;C.armed=false;Print("APEX LICENSE DENIED BY XAUCLOUD | http=",code," | reason=",reason);}
+      else CloudFailure("CONFIG",code,err,r);
       return false;
    }
    string ls=js(r,"licenseStatus","");
@@ -203,6 +209,7 @@ bool CloudSync(){
    ApplyRemoteConfig(r);
    long revision=(long)jd(r,"commandRevision",(double)g_cloudLastCommandRevision);
    CloudSuccess();
+   if(InpCloudDiagnostics)Print("APEX XAUCLOUD LINK OK | http=200 | license=ACTIVE | account=",AccountInfoInteger(ACCOUNT_LOGIN)," | armed=",C.armed?"true":"false");
    if(revision>g_cloudLastCommandRevision){
       g_cloudLastCommandRevision=revision;
       SaveCloudCache();
@@ -214,15 +221,15 @@ bool CloudSync(){
 void Emit(string type,string extra=""){
    if(IsTester())return;
    string b=StringFormat(
-      "{\"license\":\"%s\",\"type\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"currency\":\"%s\","
+      "{\"license_key\":\"%s\",\"type\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"currency\":\"%s\","
       "\"symbol\":\"%s\",\"version\":\"%s\",\"campaignId\":\"%s\",\"signature\":\"%s\",\"direction\":%d,"
       "\"layers\":%d,\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f%s}",
-      InpApexLicense,type,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),
+      NormalizeLicense(InpApexLicense),type,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),
       AccountInfoString(ACCOUNT_CURRENCY),_Symbol,APEX_VERSION,campId,campSig,campDir,layers,
       AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),extra);
    string r;int code=0,err=0;
-   if(!Http("POST","/api/apex/event",b,r,code,err))CloudFailure("EVENT",code,err,r);
+   if(!Http("POST","/api/cloud/apex/event",b,r,code,err))CloudFailure("EVENT",code,err,r);
    else CloudSuccess();
 }
 void Defaults(){

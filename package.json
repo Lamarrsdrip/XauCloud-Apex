@@ -1,8 +1,12 @@
 {
-  "name":"xaucloud-apex",
-  "version":"3.6.0",
-  "private":true,
-  "type":"module",
-  "scripts":{"start":"node server.mjs","pretest":"rm -rf .test-data","test":"NODE_ENV=test DATA_DIR=$PWD/.test-data node --test tests/*.test.mjs"},
-  "engines":{"node":">=22"}
+  "name": "xaucloud-apex",
+  "version": "3.7.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

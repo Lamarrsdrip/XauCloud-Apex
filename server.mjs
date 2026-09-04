@@ -7,15 +7,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const PORT=Number(process.env.PORT||8787);
 const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-// EA_TOKEN is no longer required from customer EAs as of v3.5.2 — the Apex license alone
-// authenticates /api/ea/config and /api/ea/event (see checkEaLicense()). The env var can stay
-// defined in the hosting panel without effect; nothing in this file reads it anymore.
 const SESSION_SECRET=process.env.SESSION_SECRET||'change-me-session-secret';
 const SESSION_TTL_MS=30*24*60*60*1000;
 const DATA=path.resolve(process.env.DATA_DIR||path.join(__dirname,'data'));
 const CONFIG=path.join(DATA,'config.json');
+const LICENSE_CONFIGS=path.join(DATA,'license-configs.json');
 const EVENTS=path.join(DATA,'events.ndjson');
-const STATE=path.join(DATA,'state.json');
 const LICENSES=path.join(DATA,'licenses.json');
 
 const DEFAULT={
@@ -36,41 +33,8 @@ const DEFAULT={
   learningMaxScoreAdjustment:5
 };
 
-const OBSOLETE_FIELDS=[
-  'normalAccountMaxMultiplier','enableInvalidationExit','invalidationGivebackPct',
-  'normalProfitFloorEnabled',
-  'ratchetTriggerMoney','ratchetLockMoney','ratchetStepMoney','ratchetLockStepMoney'
-];
-
-export async function atomic(file,obj){
-  // A mid-deploy version-directory swap can delete the temp file between writeFile and rename
-  // (observed in production as a transient ENOENT here) — the request already caught/handled
-  // this as a 500, but retry once with the dir re-created so a save isn't silently lost.
-  const t=file+'.tmp'+process.pid;
-  const body=JSON.stringify(obj,null,2);
-  try{
-    await fs.writeFile(t,body);
-    await fs.rename(t,file);
-  }catch(e){
-    if(e&&e.code==='ENOENT'){
-      await fs.mkdir(path.dirname(file),{recursive:true});
-      await fs.writeFile(t,body);
-      await fs.rename(t,file);
-      return;
-    }
-    throw e;
-  }
-}
-async function ensure(){
-  await fs.mkdir(DATA,{recursive:true});
-  try{await fs.access(CONFIG)}catch{await atomic(CONFIG,DEFAULT)}
-  try{await fs.access(LICENSES)}catch{await atomic(LICENSES,{})}
-}
-async function read(file,fallback){try{return JSON.parse(await fs.readFile(file,'utf8'))}catch{return fallback}}
 const num=(v,d,a,b)=>{v=Number(v);return Number.isFinite(v)?Math.max(a,Math.min(b,v)):d};
-
 export function clean(x={}){
-  for(const f of OBSOLETE_FIELDS) delete x[f];
   return {
     ...DEFAULT,...x,
     armed:Boolean(x.armed),
@@ -114,592 +78,302 @@ export function clean(x={}){
   };
 }
 
+async function atomic(file,obj){
+  await fs.mkdir(path.dirname(file),{recursive:true});
+  const tmp=file+'.tmp-'+process.pid+'-'+Date.now();
+  await fs.writeFile(tmp,JSON.stringify(obj,null,2));
+  await fs.rename(tmp,file);
+}
+async function read(file,fallback){try{return JSON.parse(await fs.readFile(file,'utf8'))}catch{return fallback}}
+async function ensure(){
+  await fs.mkdir(DATA,{recursive:true});
+  try{await fs.access(CONFIG)}catch{await atomic(CONFIG,DEFAULT)}
+  try{await fs.access(LICENSES)}catch{await atomic(LICENSES,{})}
+  try{await fs.access(LICENSE_CONFIGS)}catch{await atomic(LICENSE_CONFIGS,{})}
+}
 async function body(req){
   let s='';
   for await(const c of req){s+=c;if(s.length>2e6)throw Object.assign(new Error('too_large'),{httpStatus:413})}
   if(!s)return {};
   try{return JSON.parse(s)}catch{throw Object.assign(new Error('invalid_json'),{httpStatus:400})}
 }
-function auth(req,token){return req.headers.authorization===`Bearer ${token}`}
-function json(res,code,obj){res.writeHead(code,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(obj))}
-async function event(e){await fs.appendFile(EVENTS,JSON.stringify({ts:new Date().toISOString(),...e})+'\n')}
-async function allEvents(){try{return (await fs.readFile(EVENTS,'utf8')).trim().split('\n').filter(Boolean).map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean)}catch{return[]}}
-
-// ---------- rate limiting (login brute-force protection) ----------
-const loginAttempts=new Map();
-function rateLimited(ip){
-  const now=Date.now(),windowMs=10*60*1000,max=10;
-  const rec=loginAttempts.get(ip);
-  if(!rec||now>rec.resetAt){loginAttempts.set(ip,{count:1,resetAt:now+windowMs});return false}
-  rec.count++;
-  return rec.count>max;
+function json(res,code,obj){
+  res.writeHead(code,{'content-type':'application/json','cache-control':'no-store'});
+  res.end(JSON.stringify(obj));
 }
 function clientIp(req){
-  const fwd=req.headers['x-forwarded-for'];
-  if(fwd)return String(fwd).split(',')[0].trim();
-  return req.socket.remoteAddress||'unknown';
-}
-
-// ---------- EA license-auth brute-force protection ----------
-// A legitimate EA polls its own valid license every ~8s indefinitely — that must never trip
-// this. Only FAILED license lookups (wrong/unknown/expired/disabled/mismatched) count against
-// the limit, so this only throttles someone guessing many different license values from one IP.
-const eaAuthFails=new Map();
-function eaAuthLimited(ip){
-  const rec=eaAuthFails.get(ip);
-  return !!(rec&&Date.now()<rec.resetAt&&rec.count>30);
-}
-function recordEaAuthFailure(ip){
-  const now=Date.now(),windowMs=10*60*1000;
-  const rec=eaAuthFails.get(ip);
-  if(!rec||now>rec.resetAt){eaAuthFails.set(ip,{count:1,resetAt:now+windowMs});return}
-  rec.count++;
-}
-function logEaAuthFailure(ip,licenseKey,code){
-  console.warn(`EA_AUTH_FAIL ip=${ip} license=${maskLicense(licenseKey)} reason=${code}`);
+  const f=req.headers['x-forwarded-for'];
+  return f?String(f).split(',')[0].trim():(req.socket.remoteAddress||'unknown');
 }
 function maskLicense(k){k=String(k||'');return k.length<=8?'***':k.slice(0,5)+'…'+k.slice(-4)}
-
-// ---------- admin-token brute-force lockout ----------
-const adminFails=new Map();
-const ADMIN_FAIL_WINDOW_MS=10*60*1000,ADMIN_FAIL_MAX=8,ADMIN_LOCKOUT_MS=15*60*1000;
-function adminAuthOk(req){
-  const ip=clientIp(req),now=Date.now();
-  const rec=adminFails.get(ip);
-  if(rec&&rec.blockedUntil>now)return false;
-  const ok=auth(req,ADMIN_TOKEN);
-  if(ok){adminFails.delete(ip);return true}
-  const count=(rec&&rec.resetAt>now?rec.count:0)+1;
-  adminFails.set(ip,{count,resetAt:now+ADMIN_FAIL_WINDOW_MS,blockedUntil:count>=ADMIN_FAIL_MAX?now+ADMIN_LOCKOUT_MS:0});
-  return false;
-}
-
-// ---------- sessions (HMAC-signed, HttpOnly cookie) ----------
-function b64u(buf){return buf.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
-function fromB64u(s){return Buffer.from(s.replace(/-/g,'+').replace(/_/g,'/'),'base64')}
-function sign(payloadB64){return b64u(crypto.createHmac('sha256',SESSION_SECRET).update(payloadB64).digest())}
-function makeSession(licenseKey){
-  const now=Date.now();
-  const p=b64u(Buffer.from(JSON.stringify({lic:licenseKey,iat:now,exp:now+SESSION_TTL_MS})));
-  return p+'.'+sign(p);
-}
-function verifySession(token){
-  if(!token)return null;
-  const i=token.lastIndexOf('.');
-  if(i<0)return null;
-  const p=token.slice(0,i),sig=token.slice(i+1);
-  const expected=sign(p);
-  const a=Buffer.from(sig),b=Buffer.from(expected);
-  if(a.length!==b.length||!crypto.timingSafeEqual(a,b))return null;
-  let payload;
-  try{payload=JSON.parse(fromB64u(p).toString('utf8'))}catch{return null}
-  if(!payload.exp||Date.now()>payload.exp)return null;
-  return payload;
-}
-function parseCookies(req){
-  const out={},h=req.headers.cookie;
-  if(!h)return out;
-  for(const part of h.split(';')){
-    const idx=part.indexOf('=');
-    if(idx<0)continue;
-    out[part.slice(0,idx).trim()]=decodeURIComponent(part.slice(idx+1).trim());
-  }
-  return out;
-}
-function setSessionCookie(res,token){
-  res.setHeader('Set-Cookie',`apex_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS/1000)}`);
-}
-function clearSessionCookie(res){
-  res.setHeader('Set-Cookie','apex_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');
-}
-
-// ---------- licenses ----------
-async function readLicenses(){return await read(LICENSES,{})}
-async function writeLicenses(obj){await atomic(LICENSES,obj)}
-function genLicenseKey(){
-  const seg=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `APEX-${seg()}-${seg()}-${seg()}`;
-}
 function licenseStatusFor(lic){
   if(!lic)return 'LICENSE_NOT_FOUND';
   if(lic.status==='DISABLED')return 'LICENSE_DISABLED';
   if(lic.expiresAt&&Date.now()>Date.parse(lic.expiresAt))return 'LICENSE_EXPIRED';
-  if(lic.status!=='ACTIVE')return 'LICENSE_DISABLED';
-  return 'ACTIVE';
+  return lic.status==='ACTIVE'?'ACTIVE':'LICENSE_DISABLED';
 }
-async function checkEaLicense(licenseKey,account){
-  if(!licenseKey)return {ok:false,code:'LICENSE_NOT_FOUND'};
+async function readLicenses(){return read(LICENSES,{})}
+async function writeLicenses(x){await atomic(LICENSES,x)}
+async function readLicenseConfigs(){return read(LICENSE_CONFIGS,{})}
+async function getLicenseConfig(key){
+  const all=await readLicenseConfigs();
+  const global=clean(await read(CONFIG,DEFAULT));
+  return clean({...global,...(all[key]||{})});
+}
+async function saveLicenseConfig(key,partial,{bumpRevision=true}={}){
+  const all=await readLicenseConfigs();
+  const prev=await getLicenseConfig(key);
+  const next=clean({...prev,...partial});
   const licenses=await readLicenses();
-  const lic=licenses[licenseKey];
+  const lic=licenses[key];
+  if(!lic)throw Object.assign(new Error('license_not_found'),{httpStatus:404});
+  all[key]=next;
+  await atomic(LICENSE_CONFIGS,all);
+  if(bumpRevision){
+    lic.commandRevision=Number(lic.commandRevision||0)+1;
+    lic.pendingCommand=next.armed?'ARM':'DISARM';
+    lic.commandUpdatedAt=new Date().toISOString();
+    lic.updatedAt=lic.commandUpdatedAt;
+    licenses[key]=lic;
+    await writeLicenses(licenses);
+  }
+  return next;
+}
+function normalizeLicense(v){return String(v||'').trim().toUpperCase()}
+async function validateEa(licenseKey,account){
+  const key=normalizeLicense(licenseKey), accountS=String(account||'');
+  const licenses=await readLicenses();
+  const lic=licenses[key];
   const status=licenseStatusFor(lic);
-  if(status!=='ACTIVE')return {ok:false,code:status};
-  if(lic.account&&lic.account!==account)return {ok:false,code:'ACCOUNT_MISMATCH'};
-  // Any successful, authenticated contact from a matching account is a valid EA heartbeat —
-  // stamped here so a config poll alone (no trade/event required) proves the EA is alive.
-  const now=new Date().toISOString();
-  if(!lic.account)lic.account=account;
+  if(status!=='ACTIVE')return {ok:false,status,key,licenses};
+  // An explicitly admin-bound account is enforced. Blank account means license works on demo or live.
+  if(lic.account&&String(lic.account)!==accountS)return {ok:false,status:'ACCOUNT_MISMATCH',key,licenses};
+  return {ok:true,status:'ACTIVE',key,lic,licenses};
+}
+async function stampHeartbeat(v,payload){
+  const now=new Date().toISOString(), lic=v.lic;
   lic.lastSeen=now;
+  lic.lastAccount=String(payload.account||'');
+  lic.broker=String(payload.broker||'').slice(0,120);
+  lic.server=String(payload.server||'').slice(0,120);
+  lic.currency=String(payload.currency||'').slice(0,20);
+  lic.eaVersion=String(payload.eaVersion||payload.version||'').slice(0,120);
+  lic.tradeMode=Number(payload.tradeMode||0);
+  lic.symbol=String(payload.symbol||'').slice(0,40);
+  lic.balance=Number(payload.balance||0);
+  lic.equity=Number(payload.equity||0);
+  lic.freeMargin=Number(payload.freeMargin||0);
+  lic.campaignActive=Boolean(payload.campaignActive);
+  lic.layers=Number(payload.layers||0);
   lic.updatedAt=now;
-  licenses[licenseKey]=lic;
-  await writeLicenses(licenses);
-  return {ok:true,license:lic};
+  v.licenses[v.key]=lic;
+  await writeLicenses(v.licenses);
+  return lic;
 }
-async function touchLicenseTelemetry(licenseKey,fields){
-  const licenses=await readLicenses();
-  const lic=licenses[licenseKey];
-  if(!lic)return;
-  let changed=false;
-  for(const k of ['eaVersion','broker','currency','configSource']){
-    const v=fields[k];
-    if(v!==undefined&&v!==null&&v!==''&&lic[k]!==v){lic[k]=v;changed=true;}
-  }
-  if(changed){lic.updatedAt=new Date().toISOString();licenses[licenseKey]=lic;await writeLicenses(licenses);}
+async function appendEvent(e){
+  await fs.mkdir(DATA,{recursive:true});
+  await fs.appendFile(EVENTS,JSON.stringify({ts:new Date().toISOString(),...e})+'\n');
+}
+async function allEvents(){
+  try{return (await fs.readFile(EVENTS,'utf8')).trim().split('\n').filter(Boolean).map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean)}
+  catch{return[]}
 }
 
-// ---------- learning ----------
-const FEATURE_MIN_SAMPLE=5;
-function bucketImpulse(v){if(v<1)return'impulse_low(<1x_ATR)';if(v<2)return'impulse_mid(1-2x_ATR)';return'impulse_high(>=2x_ATR)'}
-function bucketWick(v){if(v<1.5)return'wick_low(<1.5x_body)';if(v<3)return'wick_mid(1.5-3x_body)';return'wick_high(>=3x_body)'}
-function addToBucket(buckets,name,key,win){const b=buckets[name]??={};const c=b[key]??={campaigns:0,wins:0};c.campaigns++;if(win)c.wins++;b[key]=c;buckets[name]=b}
-
-export function learn(events,cfg){
-  const starts={};
-  for(const e of events) if(e.type==='CAMPAIGN_START'&&e.campaignId) starts[e.campaignId]=e;
-  const ends=events.filter(e=>e.type==='CAMPAIGN_END');
-  const rows=ends.map(e=>({...e,start:starts[e.campaignId]||null}));
-  const targetHits=rows.filter(r=>r.outcome==='TARGET_HIT').length;
-  const protectedExits=rows.filter(r=>r.outcome==='PROFIT_FLOOR_HIT').length;
-  const genuineFailures=rows.filter(r=>!['TARGET_HIT','PROFIT_FLOOR_HIT'].includes(r.outcome)).length;
-  const completed=rows.length;
-  const positive=targetHits+protectedExits;
-  const positiveRate=completed?positive/completed:0;
-
-  let entryAdj=0,addAdj=0;
-  if(cfg.learningEnabled&&completed>=cfg.learningMinCampaigns){
-    const centered=(.60-positiveRate)*10;
-    entryAdj=Math.max(-cfg.learningMaxScoreAdjustment,Math.min(cfg.learningMaxScoreAdjustment,centered));
-    const addCentered=(.55-positiveRate)*8;
-    addAdj=Math.max(-cfg.learningMaxScoreAdjustment,Math.min(cfg.learningMaxScoreAdjustment,addCentered));
-  }
-
-  const by={};
-  for(const r of rows){
-    const k=r.signature||'UNKNOWN';
-    const b=by[k]??={campaigns:0,targetHits:0,protectedExits:0,failures:0,mfe:0,mae:0,layers:0};
-    b.campaigns++;
-    if(r.outcome==='TARGET_HIT') b.targetHits++;
-    else if(r.outcome==='PROFIT_FLOOR_HIT') b.protectedExits++;
-    else b.failures++;
-    b.mfe+=Number(r.mfe||0); b.mae+=Number(r.mae||0); b.layers+=Number(r.layers||0);
-    by[k]=b;
-  }
-  for(const b of Object.values(by)){
-    b.positiveRate=b.campaigns?(b.targetHits+b.protectedExits)/b.campaigns:0;
-    b.avgMfe=b.campaigns?b.mfe/b.campaigns:0;
-    b.avgMae=b.campaigns?b.mae/b.campaigns:0;
-    b.avgLayers=b.campaigns?b.layers/b.campaigns:0;
-  }
-
-  const buckets={};
-  for(const r of rows){
-    if(!r.start)continue;
-    const win=['TARGET_HIT','PROFIT_FLOOR_HIT'].includes(r.outcome);
-    const im=Number(r.start.impulseMult),wk=Number(r.start.wickRatio),m3=r.start.m3,m5=r.start.m5;
-    if(Number.isFinite(im))addToBucket(buckets,'impulseMult',bucketImpulse(im),win);
-    if(Number.isFinite(wk))addToBucket(buckets,'wickRatio',bucketWick(wk),win);
-    if(m3!==undefined)addToBucket(buckets,'m3Confirmed',String(m3),win);
-    if(m5!==undefined)addToBucket(buckets,'m5Context',String(m5),win);
-  }
-  const featureInsights={};
-  for(const[name,vals]of Object.entries(buckets)){
-    featureInsights[name]={};
-    for(const[key,c]of Object.entries(vals)){
-      featureInsights[name][key]=c.campaigns>=FEATURE_MIN_SAMPLE
-        ?{campaigns:c.campaigns,positiveRate:Number((c.wins/c.campaigns).toFixed(3))}
-        :{campaigns:c.campaigns,positiveRate:null,note:`insufficient_sample_min_${FEATURE_MIN_SAMPLE}`};
-    }
-  }
-
-  return {
-    schema:4,
-    completedCampaigns:completed,
-    targetHits,
-    protectedExits,
-    genuineFailures,
-    positiveOutcomeRate:positiveRate,
-    entryScoreAdjustment:Number(entryAdj.toFixed(2)),
-    addScoreAdjustment:Number(addAdj.toFixed(2)),
-    authority:completed>=cfg.learningMinCampaigns?'BOUNDED_ADAPTIVE':'OBSERVATION_ONLY',
-    bySignature:by,
-    featureInsights
-  };
+// --- Website sessions ---
+function b64u(buf){return buf.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function fromB64u(s){return Buffer.from(s.replace(/-/g,'+').replace(/_/g,'/'),'base64')}
+function sign(p){return b64u(crypto.createHmac('sha256',SESSION_SECRET).update(p).digest())}
+function makeSession(licenseKey){
+  const now=Date.now(),p=b64u(Buffer.from(JSON.stringify({lic:licenseKey,iat:now,exp:now+SESSION_TTL_MS})));
+  return p+'.'+sign(p);
 }
-
-function publicState(cfg,state,learning,recent){
-  const last=state?.lastEA||{};
-  const latestStart=recent.find(e=>e.type==='CAMPAIGN_START');
-  const latestEnd=recent.find(e=>e.type==='CAMPAIGN_END');
-  const campaignActive=Boolean(last.campaignId)&&(!latestEnd||!latestStart||new Date(latestStart.ts)>new Date(latestEnd.ts));
-  return {
-    config:cfg,
-    state:{updatedAt:state?.updatedAt||null,lastSeen:state?.lastSeen||null,lastEA:last,campaignActive},
-    learning,
-    recent:recent.slice(0,50)
-  };
+function verifySession(token){
+  if(!token)return null;
+  const i=token.lastIndexOf('.');if(i<0)return null;
+  const p=token.slice(0,i),sig=token.slice(i+1),exp=sign(p);
+  const a=Buffer.from(sig),b=Buffer.from(exp);if(a.length!==b.length||!crypto.timingSafeEqual(a,b))return null;
+  let x;try{x=JSON.parse(fromB64u(p).toString('utf8'))}catch{return null}
+  return x.exp&&Date.now()<x.exp?x:null;
 }
+function cookies(req){
+  const out={};for(const part of String(req.headers.cookie||'').split(';')){
+    const i=part.indexOf('=');if(i>0)out[part.slice(0,i).trim()]=decodeURIComponent(part.slice(i+1).trim());
+  }return out;
+}
+function setSession(res,t){res.setHeader('Set-Cookie',`apex_session=${encodeURIComponent(t)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS/1000)}`)}
+function clearSession(res){res.setHeader('Set-Cookie','apex_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0')}
 
-// ---------- human-readable dashboard shaping ----------
-export function classifyMt5(lastSeenIso){
-  if(!lastSeenIso)return 'DISCONNECTED';
-  const ageSec=(Date.now()-Date.parse(lastSeenIso))/1000;
-  if(ageSec<45)return 'CONNECTED';
-  if(ageSec<300)return 'STALE';
-  return 'DISCONNECTED';
+export function classifyMt5(lastSeen){
+  if(!lastSeen)return 'DISCONNECTED';
+  const a=(Date.now()-Date.parse(lastSeen))/1000;
+  return a<45?'CONNECTED':a<180?'STALE':'DISCONNECTED';
 }
 function humanEvent(e){
-  const dir=e.direction>0?'BUY':e.direction<0?'SELL':'';
+  const d=e.direction>0?'BUY':e.direction<0?'SELL':'';
   switch(e.type){
-    case 'WATCH_ARMED': return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
-    case 'CAMPAIGN_START': return `${dir} campaign started`;
-    case 'LAYER_OPEN': return `Market confirmed continuation — added position ${e.layer}`;
-    case 'PROFIT_RATCHET_EXIT': return `Protected profit secured at ${Number(e.protectedPct||0).toFixed(0)}% — closing campaign`;
-    case 'MASTER_SL_MOVED': return 'Master position stop-loss updated';
-    case 'MASTER_BE_ARMED': return 'Break-even secured — master stop-loss moved to entry price';
-    case 'RECOVERY_EXIT_ARMED': return `Setup marked damaged — ${Number(e.adversePctOfSL||0).toFixed(0)}% adverse move reached, will exit if price recovers to entry`;
-    case 'RECOVERY_TO_ENTRY_EXIT': return 'Damaged setup recovered to entry — closing campaign to wait for a fresh setup';
-    case 'CAMPAIGN_END':
-      if(e.outcome==='TARGET_HIT')return `${dir} campaign complete — target reached`;
-      if(e.outcome==='PROFIT_FLOOR_HIT')return 'Protected profit secured — campaign closed';
-      if(e.outcome==='MASTER_SL_BASKET_EXIT')return `${dir} campaign closed — stop loss hit`;
-      if(e.outcome==='MASTER_LEG_CLOSED')return `${dir} campaign closed — master position closed`;
-      if(e.outcome==='RECOVERY_TO_ENTRY_EXIT')return `${dir} campaign closed — damaged setup recovered to entry`;
-      return `${dir} campaign ended — broker/margin stop-out`;
-    case 'CAMPAIGN_RECOVERED': return 'Apex reconnected to an in-progress campaign after a restart';
-    case 'ADD_BLOCKED': return 'Add skipped — no available margin capacity';
-    case 'ORDER_FAIL': return `Order failed (broker rejected, code ${e.retcode})`;
-    case 'MASTER_SL_MOVE_FAIL': return 'Master stop-loss update failed';
-    case 'CONFIG_SYNC': case 'MARGIN_CALC': return null;
-    default: return e.type;
+    case 'WATCH_ARMED':return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
+    case 'CAMPAIGN_START':return `${d} campaign started`;
+    case 'LAYER_OPEN':return `Market confirmed continuation — added position ${e.layer}`;
+    case 'CAMPAIGN_END':return `${d} campaign ended — ${e.outcome||'closed'}`;
+    case 'ORDER_FAIL':return `Order failed — broker code ${e.retcode||''}`;
+    case 'CAMPAIGN_RECOVERED':return 'Apex recovered an open campaign after restart';
+    default:return null;
   }
-}
-function findActiveCampaign(events){
-  let lastStart=null,lastEnd=null;
-  for(const e of events){
-    if(e.type==='CAMPAIGN_START')lastStart=e;
-    if(e.type==='CAMPAIGN_END')lastEnd=e;
-  }
-  if(!lastStart)return null;
-  if(lastEnd&&Date.parse(lastEnd.ts)>=Date.parse(lastStart.ts))return null;
-  const campaignId=lastStart.campaignId;
-  const layerEvents=events.filter(e=>e.type==='LAYER_OPEN'&&e.campaignId===campaignId);
-  const totalVolume=layerEvents.reduce((s,e)=>s+Number(e.volume||0),0);
-  const latest=events[events.length-1];
-  const startEquity=Number(lastStart.equity??lastStart.balance??0);
-  const currentEquity=Number(latest.equity??latest.balance??startEquity);
-  const targetEquity=Number(lastStart.targetEquity??0);
-  const profitPct=startEquity?((currentEquity-startEquity)/startEquity)*100:0;
-  const targetPct=startEquity&&targetEquity?((targetEquity-startEquity)/startEquity)*100:0;
-  const progressPct=targetPct>0?Math.max(0,Math.min(100,(profitPct/targetPct)*100)):0;
-  return {
-    campaignId,
-    direction:lastStart.direction>0?'BUY':'SELL',
-    signature:lastStart.signature||null,
-    startedAt:lastStart.ts,
-    startEquity,currentEquity,targetEquity,
-    profitPct,targetPct,progressPct,
-    layers:latest.layers??layerEvents.length,
-    totalVolume,
-    floatingPL:currentEquity-startEquity,
-    asOf:latest.ts,
-    layerDetail:layerEvents.map(e=>({layer:e.layer,volume:e.volume,marginPct:e.marginPct,price:e.price,reason:e.reason,ts:e.ts}))
-  };
 }
 function buildHistory(events){
-  const starts={};
-  for(const e of events) if(e.type==='CAMPAIGN_START'&&e.campaignId) starts[e.campaignId]=e;
-  return events.filter(e=>e.type==='CAMPAIGN_END').map(e=>{
-    const start=starts[e.campaignId]||null;
-    const startEquity=start?Number(start.equity??start.balance??0):null;
-    const endEquity=Number(e.equity??e.balance??0);
-    const profitPct=startEquity?((endEquity-startEquity)/startEquity)*100:null;
-    return {
-      campaignId:e.campaignId,
-      direction:e.direction>0?'BUY':'SELL',
-      signature:e.signature||null,
-      startedAt:start?.ts||null,
-      endedAt:e.ts,
-      startEquity,endEquity,profitPct,
-      layers:e.layers,
-      outcome:e.outcome,
-      outcomeLabel:e.outcome==='TARGET_HIT'?'TARGET HIT':e.outcome==='PROFIT_FLOOR_HIT'?'PROFIT PROTECTED':e.outcome==='MASTER_SL_BASKET_EXIT'?'STOP LOSS HIT':e.outcome==='MASTER_LEG_CLOSED'?'MASTER POSITION CLOSED':'BROKER/MARGIN STOP-OUT',
-      reason:e.reason||null,
-      mfe:e.mfe,mae:e.mae,durationSec:e.durationSec
-    };
-  }).reverse();
+  const starts={};for(const e of events)if(e.type==='CAMPAIGN_START'&&e.campaignId)starts[e.campaignId]=e;
+  return events.filter(e=>e.type==='CAMPAIGN_END').slice(-50).reverse().map(e=>({
+    campaignId:e.campaignId,direction:e.direction>0?'BUY':'SELL',startedAt:starts[e.campaignId]?.ts||null,
+    endedAt:e.ts,layers:e.layers,outcome:e.outcome,mfe:e.mfe,mae:e.mae
+  }));
 }
-function settingsView(cfg){
+function learningShape(events){
+  const ends=events.filter(e=>e.type==='CAMPAIGN_END');
+  const positive=ends.filter(e=>['TARGET_HIT','PROFIT_FLOOR_HIT'].includes(e.outcome)).length;
+  return {schema:4,completedCampaigns:ends.length,positiveOutcomeRate:ends.length?positive/ends.length:0,
+    entryScoreAdjustment:0,addScoreAdjustment:0,authority:'OBSERVATION_ONLY',bySignature:{},featureInsights:{}};
+}
+function settingsView(c){return {
+  accountProfile:c.accountProfile,normalTargetProfitPct:c.normalTargetProfitPct,baseMarginPct:c.baseMarginPct,
+  layerMultiplier:c.layerMultiplier,maxLayers:c.maxLayers,normalL1MarginPct:c.normalL1MarginPct,
+  normalL2MarginPct:c.normalL2MarginPct,normalL3PlusMarginPct:c.normalL3PlusMarginPct,
+  normalFixedSLGoldMove:c.normalFixedSLGoldMove,profitRatchetEnabled:c.profitRatchetEnabled,
+  ratchetTriggerPct:c.ratchetTriggerPct,ratchetLockPct:c.ratchetLockPct,ratchetStepPct:c.ratchetStepPct,
+  ratchetLockStepPct:c.ratchetLockStepPct,masterBreakEvenEnabled:c.masterBreakEvenEnabled,
+  masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,
+  recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
+  advanced:{entryScore:c.entryScore,addScore:c.addScore,impulseAtr:c.impulseAtr,sweepAtr:c.sweepAtr,
+    rejectionBars:c.rejectionBars,watchExpiryMinutes:c.watchExpiryMinutes,rejectionZoneAtr:c.rejectionZoneAtr,
+    addSpacingAtr:c.addSpacingAtr,requireM3Confirm:c.requireM3Confirm,requireM5Context:c.requireM5Context}
+}}
+async function buildMe(key){
+  const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
+  const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,accountProfile:lic?.accountProfile||cfg.accountProfile,expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
+  if(status!=='ACTIVE')return {license:base,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},settings:settingsView(cfg)};
+  const all=await allEvents(),acct=lic.lastAccount||lic.account||'';
+  const events=acct?all.filter(e=>String(e.account)===String(acct)):all.filter(e=>normalizeLicense(e.license)===key);
+  const mt5=classifyMt5(lic.lastSeen);
   return {
-    accountProfile:cfg.accountProfile,
-    normalTargetProfitPct:cfg.normalTargetProfitPct,
-    baseMarginPct:cfg.baseMarginPct,
-    layerMultiplier:cfg.layerMultiplier,
-    maxLayers:cfg.maxLayers,
-    normalL1MarginPct:cfg.normalL1MarginPct,
-    normalL2MarginPct:cfg.normalL2MarginPct,
-    normalL3PlusMarginPct:cfg.normalL3PlusMarginPct,
-    normalFixedSLGoldMove:cfg.normalFixedSLGoldMove,
-    profitRatchetEnabled:cfg.profitRatchetEnabled,
-    ratchetTriggerPct:cfg.ratchetTriggerPct,
-    ratchetLockPct:cfg.ratchetLockPct,
-    ratchetStepPct:cfg.ratchetStepPct,
-    ratchetLockStepPct:cfg.ratchetLockStepPct,
-    masterBreakEvenEnabled:cfg.masterBreakEvenEnabled,
-    masterBreakEvenTriggerPct:cfg.masterBreakEvenTriggerPct,
-    recoveryExitEnabled:cfg.recoveryExitEnabled,
-    recoveryExitArmPctOfSL:cfg.recoveryExitArmPctOfSL,
-    advanced:{
-      entryScore:cfg.entryScore,addScore:cfg.addScore,impulseAtr:cfg.impulseAtr,sweepAtr:cfg.sweepAtr,
-      rejectionBars:cfg.rejectionBars,watchExpiryMinutes:cfg.watchExpiryMinutes,rejectionZoneAtr:cfg.rejectionZoneAtr,
-      addSpacingAtr:cfg.addSpacingAtr,requireM3Confirm:cfg.requireM3Confirm,requireM5Context:cfg.requireM5Context
-    }
+    license:base,dataAvailable:Boolean(lic.lastSeen),waitingForFirstContact:!lic.lastSeen,
+    armed:cfg.armed,accountProfile:cfg.accountProfile,
+    mt5:{status:mt5,lastSeen:lic.lastSeen||null},
+    command:{revision:Number(lic.commandRevision||0),pending:lic.pendingCommand||null,lastAckRevision:Number(lic.lastAckRevision||0),lastAckStatus:lic.lastAckStatus||null,lastAckAt:lic.lastAckAt||null},
+    account:{account:lic.lastAccount||lic.account||null,broker:lic.broker||null,server:lic.server||null,currency:lic.currency||null,
+      balance:lic.balance??null,equity:lic.equity??null,freeMargin:lic.freeMargin??null,asOf:lic.lastSeen||null,tradeMode:lic.tradeMode??null},
+    campaign:null,history:buildHistory(events),learning:learningShape(events),
+    recentHuman:events.slice(-60).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(x=>x.text).slice(0,30),
+    effectiveConfig:lic.eaVersion?{eaVersion:lic.eaVersion,configSource:'REMOTE/CACHED_LOCAL',asOf:lic.lastSeen}:null,
+    settings:settingsView(cfg)
   };
 }
-async function buildMe(licenseKey){
-  const licenses=await readLicenses();
-  const lic=licenses[licenseKey];
-  const status=licenseStatusFor(lic);
-  const baseLicense={key:licenseKey,status,account:lic?.account||null,accountProfile:lic?.accountProfile||null,expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
-  if(status!=='ACTIVE')return {license:baseLicense,dataAvailable:false};
-
-  // The saved/effective-default config is always visible to an ACTIVE license, even before
-  // the EA has ever made contact — settings must never depend on live EA data to render.
-  const cfg=clean(await read(CONFIG,DEFAULT));
-  const settings=settingsView(cfg);
-
-  // A successful, authenticated /api/ea/config poll or /api/ea/event already proves the EA is
-  // alive — checkEaLicense() stamps lic.lastSeen on every valid contact for THIS license/account,
-  // independent of whether any trade/campaign event has ever fired. MT5 connectivity must be
-  // derived from that heartbeat alone, never from the presence of an event.
-  if(!lic.lastSeen){
-    return {license:baseLicense,dataAvailable:false,mt5:{status:'DISCONNECTED',lastSeen:null},waitingForFirstContact:true,settings};
-  }
-
-  const allEv=await allEvents();
-  const events=lic.account?allEv.filter(e=>String(e.account)===String(lic.account)):allEv;
-  const latest=events[events.length-1]||null;
-  const mt5Status=classifyMt5(lic.lastSeen);
-  const campaign=findActiveCampaign(events);
-  const history=buildHistory(events).slice(0,50);
-  const learning=learn(events,cfg);
-  const recentHuman=events.slice(-60).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(e=>e.text!==null).slice(0,30);
-
-  return {
-    license:baseLicense,
-    dataAvailable:true,
-    armed:cfg.armed,
-    accountProfile:cfg.accountProfile,
-    mt5:{status:mt5Status,lastSeen:lic.lastSeen},
-    account:{
-      account:lic.account||(latest?latest.account:null),
-      broker:(latest&&latest.broker)||lic.broker||null,
-      currency:(latest&&latest.currency)||lic.currency||null,
-      balance:latest?latest.balance:null,
-      equity:latest?latest.equity:null,
-      freeMargin:latest?latest.freeMargin:null,
-      asOf:latest?latest.ts:lic.lastSeen
-    },
-    campaign,
-    history,
-    learning,
-    recentHuman,
-    effectiveConfig:latest?{
-      l1MarginPct:latest.l1MarginPct,
-      l2MarginPct:latest.l2MarginPct,
-      l3PlusMarginPct:latest.l3PlusMarginPct,
-      takeProfitPct:latest.takeProfitPct,
-      fixedSLGoldMove:latest.fixedSLGoldMove,
-      beEnabled:latest.beEnabled,
-      beTriggerPct:latest.beTriggerPct,
-      recoveryExitEnabled:latest.recoveryExitEnabled,
-      recoveryArmPctOfSL:latest.recoveryArmPctOfSL,
-      ratchetEnabled:latest.ratchetEnabled,
-      ratchetTriggerPct:latest.ratchetTriggerPct,
-      ratchetLockPct:latest.ratchetLockPct,
-      ratchetStepPct:latest.ratchetStepPct,
-      ratchetLockStepPct:latest.ratchetLockStepPct,
-      configSource:latest.configSource||lic.configSource||null,
-      eaVersion:latest.eaVersion||lic.eaVersion||null,
-      asOf:latest.ts
-    }:(lic.eaVersion?{eaVersion:lic.eaVersion,configSource:lic.configSource||null,asOf:lic.lastSeen}:null),
-    settings
-  };
+function genLicense(){
+  const seg=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
+  return `APEX-${seg()}-${seg()}-${seg()}`;
 }
-async function writeConfigMerge(partial){
-  for(const f of OBSOLETE_FIELDS) delete partial[f];
-  const current=clean(await read(CONFIG,DEFAULT));
-  const cfg=clean({...current,...partial});
-  await atomic(CONFIG,cfg);
-  await event({type:'CONFIG',config:cfg});
-  return cfg;
-}
+function adminOk(req){return req.headers.authorization===`Bearer ${ADMIN_TOKEN}`}
 
 const server=http.createServer(async(req,res)=>{
   try{
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Referrer-Policy','no-referrer');
-
     const u=new URL(req.url,'http://localhost');
 
-    if(u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.6.0'});
+    if(req.method==='GET'&&u.pathname==='/health')
+      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.7.0',link:'command-center-style'});
 
-    // ---------- EA contract ----------
-    // Customer-facing auth is the Apex license alone — no separate infrastructure token.
-    // License is read from the X-Apex-License header (preferred) with a query-string/body
-    // fallback kept only so an already-running older EA build doesn't go dark mid-migration.
+    // New canonical MT5 heartbeat. JSON body only: avoids fragile custom auth headers.
+    if(req.method==='POST'&&u.pathname==='/api/apex/heartbeat'){
+      const b=await body(req),v=await validateEa(b.license,b.account);
+      if(!v.ok){console.warn(`APEX_HEARTBEAT_DENIED ip=${clientIp(req)} license=${maskLicense(b.license)} status=${v.status}`);return json(res,200,{ok:false,licenseStatus:v.status,armed:false})}
+      const lic=await stampHeartbeat(v,b),cfg=await getLicenseConfig(v.key);
+      return json(res,200,{ok:true,licenseStatus:'ACTIVE',...cfg,commandRevision:Number(lic.commandRevision||0),serverTime:new Date().toISOString()});
+    }
+
+    if(req.method==='POST'&&u.pathname==='/api/apex/command/ack'){
+      const b=await body(req),v=await validateEa(b.license,b.account);
+      if(!v.ok)return json(res,403,{ok:false,error:v.status});
+      const lic=v.lic,rev=Number(b.revision||0);
+      if(rev>=Number(lic.lastAckRevision||0)){lic.lastAckRevision=rev;lic.lastAckStatus=String(b.status||'ACK');lic.lastAckAt=new Date().toISOString();v.licenses[v.key]=lic;await writeLicenses(v.licenses)}
+      return json(res,200,{ok:true});
+    }
+
+    if(req.method==='POST'&&u.pathname==='/api/apex/event'){
+      const b=await body(req),v=await validateEa(b.license,b.account);
+      if(!v.ok)return json(res,403,{ok:false,error:v.status});
+      await stampHeartbeat(v,b);
+      await appendEvent({...b,license:v.key});
+      return json(res,200,{ok:true});
+    }
+
+    // Compatibility for already-attached older EA versions.
     if(req.method==='GET'&&u.pathname==='/api/ea/config'){
-      const ip=clientIp(req);
-      if(eaAuthLimited(ip))return json(res,429,{error:'too_many_attempts'});
-      const cfg=clean(await read(CONFIG,DEFAULT));
-      const account=u.searchParams.get('account')||'0';
-      if(cfg.account!=='0'&&cfg.account!==account)return json(res,403,{error:'account_not_allowed'});
-      const licenseKey=req.headers['x-apex-license']||u.searchParams.get('license')||'';
-      const lic=await checkEaLicense(licenseKey,account);
-      if(!lic.ok){recordEaAuthFailure(ip);logEaAuthFailure(ip,licenseKey,lic.code);}
-      const st=await read(STATE,{});
-      st.lastSeen=new Date().toISOString();
-      atomic(STATE,st).catch(()=>{});
-      const out={...cfg,learning:learn(await allEvents(),cfg),licenseStatus:lic.ok?'ACTIVE':lic.code};
-      if(!lic.ok)out.armed=false;
-      return json(res,200,out);
+      const license=normalizeLicense(req.headers['x-apex-license']||u.searchParams.get('license')||'');
+      const account=String(u.searchParams.get('account')||'');
+      const v=await validateEa(license,account);
+      if(!v.ok)return json(res,200,{...DEFAULT,armed:false,licenseStatus:v.status});
+      const lic=await stampHeartbeat(v,{account}),cfg=await getLicenseConfig(v.key);
+      return json(res,200,{...cfg,licenseStatus:'ACTIVE',commandRevision:Number(lic.commandRevision||0),learning:learningShape(await allEvents())});
     }
-
     if(req.method==='POST'&&u.pathname==='/api/ea/event'){
-      const ip=clientIp(req);
-      if(eaAuthLimited(ip))return json(res,429,{error:'too_many_attempts'});
       const b=await body(req);
-      // Validate license/account the same way as a config poll — an event under an unknown,
-      // inactive, or mismatched license/account is not blindly accepted as this license's activity.
-      const licenseKey=String(req.headers['x-apex-license']||b.license||'');
-      const account=String(b.account||'');
-      const lic=await checkEaLicense(licenseKey,account);
-      if(!lic.ok){recordEaAuthFailure(ip);logEaAuthFailure(ip,licenseKey,lic.code);return json(res,403,{error:lic.code});}
-      await touchLicenseTelemetry(licenseKey,{eaVersion:b.eaVersion,broker:b.broker,currency:b.currency,configSource:b.configSource});
-      await event({type:String(b.type||'EA_EVENT'),...b});
-      const st=await read(STATE,{});
-      st.updatedAt=new Date().toISOString();
-      st.lastSeen=st.updatedAt;
-      st.lastEA=b;
-      await atomic(STATE,st);
-      return json(res,200,{ok:true});
+      const license=normalizeLicense(req.headers['x-apex-license']||b.license||'');
+      const v=await validateEa(license,b.account);
+      if(!v.ok)return json(res,403,{error:v.status});
+      await stampHeartbeat(v,b);await appendEvent({...b,license:v.key});return json(res,200,{ok:true});
     }
 
-    // ---------- admin (raw debug + license issuance) ----------
-    if(req.method==='GET'&&u.pathname==='/api/admin/status'){
-      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
-      const cfg=clean(await read(CONFIG,DEFAULT)),events=await allEvents(),state=await read(STATE,{});
-      return json(res,200,publicState(cfg,state,learn(events,cfg),events.slice().reverse()));
-    }
-
-    if(req.method==='POST'&&u.pathname==='/api/admin/config'){
-      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
-      const incoming=await body(req);
-      const cfg=await writeConfigMerge(incoming);
-      return json(res,200,{ok:true,config:cfg});
-    }
-
-    if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
-      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
-      const licenses=await readLicenses();
-      return json(res,200,{licenses:Object.entries(licenses).map(([key,l])=>({key,...l,status:licenseStatusFor(l)}))});
-    }
-
-    if(req.method==='POST'&&u.pathname==='/api/admin/licenses'){
-      if(!adminAuthOk(req))return json(res,401,{error:'unauthorized'});
-      const b=await body(req);
-      const licenses=await readLicenses();
-      const key=b.key&&licenses[b.key]?b.key:(b.key||genLicenseKey());
-      const existing=licenses[key]||{};
-      const now=new Date().toISOString();
-      const rec={
-        status:['ACTIVE','DISABLED'].includes(b.status)?b.status:(existing.status||'ACTIVE'),
-        account:b.account!==undefined?String(b.account||''):(existing.account||''),
-        accountProfile:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(existing.accountProfile||'NORMAL'),
-        expiresAt:b.expiresAt!==undefined?(b.expiresAt||null):(existing.expiresAt||null),
-        customer:b.customer!==undefined?String(b.customer||''):(existing.customer||''),
-        // preserve heartbeat/telemetry across admin edits — this endpoint must never silently
-        // wipe a license's live EA contact state when only e.g. accountProfile is being changed.
-        lastSeen:existing.lastSeen||null,
-        eaVersion:existing.eaVersion||null,
-        broker:existing.broker||null,
-        currency:existing.currency||null,
-        configSource:existing.configSource||null,
-        createdAt:existing.createdAt||now,
-        updatedAt:now
-      };
-      licenses[key]=rec;
-      await writeLicenses(licenses);
-      return json(res,200,{ok:true,license:{key,...rec,status:licenseStatusFor(rec)}});
-    }
-
-    // ---------- license auth (public user login) ----------
+    // Website auth.
     if(req.method==='POST'&&u.pathname==='/api/auth/login'){
-      const ip=clientIp(req);
-      if(rateLimited(ip))return json(res,429,{error:'too_many_attempts'});
-      const b=await body(req);
-      const licenseKey=String(b.license||'').trim().toUpperCase();
-      if(!licenseKey)return json(res,400,{error:'license_required'});
-      const licenses=await readLicenses();
-      const lic=licenses[licenseKey];
-      const status=licenseStatusFor(lic);
-      if(status!=='ACTIVE')return json(res,401,{error:status});
-      setSessionCookie(res,makeSession(licenseKey));
-      return json(res,200,{ok:true});
+      const b=await body(req),key=normalizeLicense(b.license),licenses=await readLicenses();
+      if(licenseStatusFor(licenses[key])!=='ACTIVE')return json(res,401,{error:'LICENSE_NOT_ACTIVE'});
+      setSession(res,makeSession(key));return json(res,200,{ok:true});
     }
-
-    if(req.method==='POST'&&u.pathname==='/api/auth/logout'){
-      clearSessionCookie(res);
-      return json(res,200,{ok:true});
-    }
-
+    if(req.method==='POST'&&u.pathname==='/api/auth/logout'){clearSession(res);return json(res,200,{ok:true})}
     if(req.method==='GET'&&u.pathname==='/api/auth/me'){
-      const cookies=parseCookies(req);
-      const session=verifySession(cookies.apex_session);
-      if(!session)return json(res,401,{error:'no_session'});
-      return json(res,200,await buildMe(session.lic));
+      const s=verifySession(cookies(req).apex_session);if(!s)return json(res,401,{error:'no_session'});
+      return json(res,200,await buildMe(s.lic));
     }
-
     if(req.method==='POST'&&u.pathname==='/api/session/config'){
-      const cookies=parseCookies(req);
-      const session=verifySession(cookies.apex_session);
-      if(!session)return json(res,401,{error:'no_session'});
-      const licenses=await readLicenses();
-      const lic=licenses[session.lic];
-      if(licenseStatusFor(lic)!=='ACTIVE')return json(res,403,{error:'license_not_active'});
-      const b=await body(req);
-      const cfg=await writeConfigMerge(b);
-      return json(res,200,{ok:true,config:cfg});
+      const s=verifySession(cookies(req).apex_session);if(!s)return json(res,401,{error:'no_session'});
+      const licenses=await readLicenses();if(licenseStatusFor(licenses[s.lic])!=='ACTIVE')return json(res,403,{error:'license_not_active'});
+      const b=await body(req),cfg=await saveLicenseConfig(s.lic,b,{bumpRevision:true});
+      return json(res,200,{ok:true,config:cfg,commandRevision:Number((await readLicenses())[s.lic].commandRevision||0)});
     }
 
-    // ---------- static shell ----------
+    // Admin.
+    if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
+      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
+      const ls=await readLicenses();return json(res,200,{licenses:Object.entries(ls).map(([key,v])=>({key,...v,status:licenseStatusFor(v)}))});
+    }
+    if(req.method==='POST'&&u.pathname==='/api/admin/licenses'){
+      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
+      const b=await body(req),ls=await readLicenses(),key=normalizeLicense(b.key)||genLicense(),old=ls[key]||{},now=new Date().toISOString();
+      ls[key]={...old,status:['ACTIVE','DISABLED'].includes(b.status)?b.status:(old.status||'ACTIVE'),
+        account:b.account!==undefined?String(b.account||''):(old.account||''),
+        customer:b.customer!==undefined?String(b.customer||''):(old.customer||''),
+        accountProfile:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(old.accountProfile||'NORMAL'),
+        expiresAt:b.expiresAt!==undefined?(b.expiresAt||null):(old.expiresAt||null),
+        commandRevision:Number(old.commandRevision||0),createdAt:old.createdAt||now,updatedAt:now};
+      await writeLicenses(ls);return json(res,200,{ok:true,license:{key,...ls[key],status:licenseStatusFor(ls[key])}});
+    }
+    if(req.method==='GET'&&u.pathname==='/api/admin/status'){
+      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
+      return json(res,200,{ok:true,licenses:(await readLicenses()),configs:(await readLicenseConfigs())});
+    }
+
     if(req.method==='GET'&&u.pathname==='/'){
       const html=await fs.readFile(path.join(__dirname,'public','index.html'));
       res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
       return res.end(html);
     }
-
     return json(res,404,{error:'not_found'});
   }catch(e){
-    if(e&&e.httpStatus)return json(res,e.httpStatus,{error:e.message});
     console.error(e);
-    return json(res,500,{error:'internal_error'});
+    return json(res,e?.httpStatus||500,{error:e?.message||'internal_error'});
   }
 });
 
-await fs.mkdir(DATA,{recursive:true});
-if(process.env.NODE_ENV!=='test'){
-  await ensure();
-  server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex listening on 0.0.0.0:${PORT}`));
-}
-export{server};
+await ensure();
+if(process.env.NODE_ENV!=='test')server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v3.7 listening on ${PORT}`));
+export {server};

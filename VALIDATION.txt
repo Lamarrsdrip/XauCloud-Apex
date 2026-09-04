@@ -1,0 +1,34 @@
+XauCloud Apex v3.7 connectivity rebuild validation
+==================================================
+Root cause found in current repo:
+- Canonical EA v3.6.0 uses https://api.apex.xaucloud.io.
+- Live MT5 receives HTTP 403 at the transport/edge layer, while Strategy Tester bypasses WebRequest.
+- Current backend config is global, so website arm/config is not cleanly scoped per license.
+
+Rebuild:
+- Same-origin MT5 API: https://apex.xaucloud.io
+- License in JSON body, no separate EA token and no X-Apex-License requirement for the canonical heartbeat.
+- POST /api/apex/heartbeat
+- POST /api/apex/event
+- POST /api/apex/command/ack
+- Per-license config/arm command revision and EA acknowledgement.
+- Last-known-valid MT5 config cached locally.
+- Transport failure does not disarm validated local trading.
+- Explicit DISABLED / EXPIRED / ACCOUNT_MISMATCH still blocks new campaigns.
+- Demo and live trade modes accepted; optional admin account binding remains enforceable.
+- Strategy/exit/pyramiding logic not redesigned by this connectivity rebuild.
+
+Automated validation:
+- node --check server.mjs: PASS
+- npm test: 9/9 PASS
+- MQL structural brace check: PASS
+- MQL structural parenthesis check: PASS
+- Old InpEaToken: REMOVED
+- Direct api.apex.xaucloud.io endpoint: REMOVED
+- New same-origin heartbeat: PRESENT
+
+Still requires on the Mac:
+- Compile in MetaEditor (not installed in this runtime).
+- Allow WebRequest for https://apex.xaucloud.io.
+- Attach to demo/live XAU chart, enter license, enable Algo Trading.
+- Verify journal heartbeat and site command acknowledgement.

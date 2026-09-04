@@ -553,6 +553,7 @@ function configSyncCard(me){
     + '<div class="row"><span class="k">Hard TP</span><span class="v">'+(ec.takeProfitPct>0? esc(ec.takeProfitPct)+'%' : 'Disabled')+'</span></div>'
     + '<div class="row"><span class="k">Fixed Master SL</span><span class="v">'+(ec.fixedSLGoldMove>0? esc(ec.fixedSLGoldMove)+' XAU move' : 'Disabled')+'</span></div>'
     + '<div class="row"><span class="k">Master BE Trigger</span><span class="v">'+(ec.beEnabled? '+'+esc(ec.beTriggerPct)+'%' : 'Off')+'</span></div>'
+    + '<div class="row"><span class="k">Recovery-To-Entry</span><span class="v">'+(ec.recoveryExitEnabled? 'Arm at '+esc(ec.recoveryArmPctOfSL)+'% of SL' : 'Off')+'</span></div>'
     + '<div class="row"><span class="k">Profit Ratchet</span><span class="v">'+(ec.ratchetEnabled? 'On' : 'Off')+'</span></div>'
     + '<div class="row"><span class="k">Ratchet Trigger</span><span class="v">+'+esc(ec.ratchetTriggerPct)+'%</span></div>'
     + '<div class="row"><span class="k">Ratchet Lock</span><span class="v">+'+esc(ec.ratchetLockPct)+'%</span></div>'
@@ -724,6 +725,13 @@ function pageSettings(me){
     + '<div class="form-row"><button class="btn btn-primary" id="save-be" '+(disabled?'disabled':'')+'>Save Break-Even</button></div>'
     + '</div>';
 
+  html += '<div class="card"><h3>Recovery-To-Entry Protection</h3>'
+    + '<div class="toggle-row"><div><div class="lbl">Recovery-To-Entry Protection</div><div class="hint">If the L1/master trade moves 40% or more toward its original stop-loss, Apex marks the setup as damaged. If price later recovers to the original L1 entry, the whole basket closes so Apex can wait for a fresh setup.</div></div>'
+    + '<label class="switch"><input type="checkbox" id="f-recoveryExitEnabled" '+(s.recoveryExitEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
+    + '<div class="field" style="margin-top:14px"><label>Arm after adverse move reaches (% of Master SL)</label><input type="number" step="any" id="f-recoveryExitArmPctOfSL" value="'+esc(s.recoveryExitArmPctOfSL)+'" '+(disabled?'disabled':'')+'><div class="hint">% of the ORIGINAL fixed master SL distance, measured from the L1 entry price at campaign start.</div></div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-recovery" '+(disabled?'disabled':'')+'>Save Recovery-To-Entry</button></div>'
+    + '</div>';
+
   html += '<div class="card"><h3>Profit Ratchet</h3>'
     + '<div class="toggle-row"><div><div class="lbl">Profit Ratchet</div><div class="hint">Protects basket profit in stages as it grows. The floor only ever moves up — it never decreases when profit retraces.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-profitRatchetEnabled" '+(s.profitRatchetEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
@@ -819,6 +827,14 @@ function wireSettings(me){
       masterBreakEvenTriggerPct: Number(document.getElementById('f-masterBreakEvenTriggerPct').value)
     };
     saveConfig(payload, 'save-be', 'Save Break-Even');
+  });
+  var saveRecovery = document.getElementById('save-recovery');
+  if (saveRecovery) saveRecovery.addEventListener('click', function(){
+    var payload = {
+      recoveryExitEnabled: document.getElementById('f-recoveryExitEnabled').checked,
+      recoveryExitArmPctOfSL: Number(document.getElementById('f-recoveryExitArmPctOfSL').value)
+    };
+    saveConfig(payload, 'save-recovery', 'Save Recovery-To-Entry');
   });
   var saveRatchet = document.getElementById('save-ratchet');
   if (saveRatchet) saveRatchet.addEventListener('click', function(){

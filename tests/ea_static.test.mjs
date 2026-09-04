@@ -130,7 +130,64 @@ test('Strategy Tester can actually run the EA: WebRequest is skipped and it self
 test('rejection/structure-break confirmation cannot resolve on the same candle that triggered the sweep — requires a later closed bar',()=>{assert.match(s,/watchSweepBarTime=m1\[1\]\.time/);assert.match(s,/if\(m1\[i\]\.time<=watchSweepBarTime\)continue;/);assert.match(s,/if\(m1\[1\]\.time>watchSweepBarTime\)\{if\(s\.dir<0\)bos=/)});
 test('no setup-invalidation exit and no old money-ratchet — only target hit, profit ratchet, master SL, or broker/margin close end a campaign',()=>{assert.doesNotMatch(s,/Invalidated\(/);assert.doesNotMatch(s,/enableInvalidationExit/);assert.doesNotMatch(s,/invalidationGivebackPct/);assert.doesNotMatch(s,/INVALIDATED_PROFIT|INVALIDATED_LOSS/);assert.doesNotMatch(s,/normalAccountMaxMultiplier/)});
 test('EA license is wired into config polling and event telemetry for backend/EA enforcement, without touching strategy logic',()=>{assert.match(s,/input string InpApexLicense=""/);assert.match(s,/license=%s.*InpApexLicense/);assert.match(s,/\\"license\\":\\"%s\\".*InpApexLicense/)});
-test('customer-facing identity is clean (XauCloud Apex), internal version metadata retained for traceability as v3.4.x',()=>{
+test('customer-facing identity is clean (XauCloud Apex), internal version metadata retained for traceability as v3.5.x, and no internal dev codenames leak into customer-facing constants',()=>{
  assert.match(s,/#property copyright "XauCloud Apex"/);
- assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.4\.1"/);
+ assert.match(s,/#property version   "3\.510"/);
+ assert.match(s,/#define APEX_VERSION "XauCloud-Apex_v3\.5\.1"/);
+ assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.1-RecoveryExit40"/);
+ assert.doesNotMatch(s,/APEX_VERSION "XauCloud-Apex_v3\.5\.0/);
+ assert.doesNotMatch(s,/Default180-BE50|15-50-100-MarginLadder|TraderSync/);
+});
+
+test('v3.5.1 Recovery-To-Entry exit: enabled by default, arms at 40% of the ORIGINAL fixed SL distance',()=>{
+ assert.match(s,/InpRecoveryExitEnabled=true/);
+ assert.match(s,/InpRecoveryExitArmPctOfSL=40\.0/);
+});
+test('Recovery-To-Entry: original SL distance is captured once at L1 open (firstInitialSLPrice) and never mutated afterward — independent of any later break-even SL move',()=>{
+ assert.match(s,/firstInitialSLPrice=sl;/);
+ assert.match(s,/double originalSLDist=MathAbs\(firstEntryPrice-firstInitialSLPrice\);/);
+ // firstSLPrice (current, BE-mutable) and firstInitialSLPrice (frozen at open) must be distinct fields
+ assert.match(s,/double.*firstSLPrice=0,firstInitialSLPrice=0/);
+});
+test('Recovery-To-Entry: arms only once adverse move reaches the configured % of original SL, measured from the L1 entry price, and never disarms once armed',()=>{
+ assert.match(s,/double adverseDist=campDir>0\?MathMax\(0\.0,firstEntryPrice-masterPx\):MathMax\(0\.0,masterPx-firstEntryPrice\);/);
+ assert.match(s,/double adversePctOfSL=\(adverseDist\/originalSLDist\)\*100\.0;/);
+ assert.match(s,/if\(!recoveryExitArmed&&adversePctOfSL>=MathMax\(0\.0,C\.recoveryExitArmPctOfSL\)\)\{/);
+ assert.match(s,/recoveryExitArmed=true;/);
+ // no code path ever sets recoveryExitArmed back to false except a fresh campaign (Start/Finish/OnTimer recovery-scan reset)
+ const falseSites = (s.match(/recoveryExitArmed=false;/g)||[]).length;
+ assert.equal(falseSites, 5); // global initializer, OpenLayer(new L1), Start(), Finish(), OnTimer POSITION_SCAN_ONLY branch
+});
+test('Recovery-To-Entry: once armed, closes the WHOLE basket the moment price recovers to the original L1 entry price — does not wait for profit',()=>{
+ assert.match(s,/if\(recoveryExitArmed\)\{/);
+ assert.match(s,/bool recoveredToEntry=\(campDir>0\?masterPx>=firstEntryPrice:masterPx<=firstEntryPrice\);/);
+ assert.match(s,/if\(recoveredToEntry\)\{\s*\n\s*if\(n>0\)CloseAll\(\);/);
+ assert.match(s,/Finish\("RECOVERY_TO_ENTRY_EXIT","DEEP_ADVERSE_MOVE_RECOVERED_TO_MASTER_ENTRY"\)/);
+});
+test('Recovery-To-Entry emits RECOVERY_EXIT_ARMED with entry price, original SL price, current price, adverse distance, adverse % of SL, and the threshold',()=>{
+ assert.match(s,/Emit\("RECOVERY_EXIT_ARMED",StringFormat\(",\\"entryPrice\\":%\.5f,\\"originalSLPrice\\":%\.5f,\\"currentPrice\\":%\.5f,\\"adverseDist\\":%\.5f,\\"adversePctOfSL\\":%\.2f,\\"armThresholdPct\\":%\.2f"/);
+});
+test('Recovery-To-Entry emits RECOVERY_TO_ENTRY_EXIT on the actual exit',()=>{
+ assert.match(s,/Emit\("RECOVERY_TO_ENTRY_EXIT",StringFormat\(",\\"entryPrice\\":%\.5f,\\"originalSLPrice\\":%\.5f,\\"currentPrice\\":%\.5f,\\"armThresholdPct\\":%\.2f"/);
+});
+test('Recovery-To-Entry runs before break-even, fixed-SL guard, and ratchet in Manage() so a damaged-then-recovered setup is never misread as a normal profitable exit',()=>{
+ const recoveryIdx=s.indexOf('Recovery-To-Entry Exit:');
+ const beIdx=s.indexOf('Master break-even: once the WHOLE Apex basket');
+ const guardIdx=s.indexOf('Synthetic master/L1 fixed SL guard');
+ const ratchetIdx=s.indexOf('Percentage profit ratchet, based on campaign-start balance');
+ assert.ok(recoveryIdx>0&&beIdx>recoveryIdx&&guardIdx>beIdx&&ratchetIdx>guardIdx);
+});
+test('Recovery-To-Entry state (firstInitialSLPrice, recoveryExitArmed) persists through SaveState/LoadState so a restart mid-armed-state still closes on recovery',()=>{
+ assert.match(s,/\\"firstInitialSLPrice\\":%\.5f,\\"recoveryExitArmed\\":%s/);
+ assert.match(s,/firstInitialSLPrice=jd\(j,"firstInitialSLPrice",0\);recoveryExitArmed=jb\(j,"recoveryExitArmed",false\);/);
+});
+test('remote config sync includes the Recovery-To-Entry fields, not just UI-only local inputs',()=>{
+ assert.match(s,/C\.recoveryExitEnabled=jb\(r,"recoveryExitEnabled",C\.recoveryExitEnabled\);/);
+ assert.match(s,/C\.recoveryExitArmPctOfSL=jd\(r,"recoveryExitArmPctOfSL",C\.recoveryExitArmPctOfSL\);/);
+});
+test('effective-config telemetry (Emit cfgFields and APEX_EFFECTIVE_CONFIG print) includes the Recovery-To-Entry fields',()=>{
+ assert.match(s,/\\"recoveryExitEnabled\\":%s,\\"recoveryArmPctOfSL\\":%\.2f/);
+ assert.match(s,/" recoveryExit=",\(C\.recoveryExitEnabled\?"true":"false"\)/);
+ assert.match(s,/" recoveryArmPctOfSL=",DoubleToString\(C\.recoveryExitArmPctOfSL,2\)/);
+ assert.match(s,/" hardTP=",DoubleToString\(C\.normalTargetProfitPct,2\)/);
 });

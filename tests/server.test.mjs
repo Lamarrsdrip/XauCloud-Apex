@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {clean,learn} from '../server.mjs';
 
-test('defaults match the v3.4 NORMAL plan: 15/50/100 margin ladder, hard TP disabled, $30 fixed SL, 180% ratchet trigger, +50% break-even',()=>{
+test('defaults match the v3.5 NORMAL plan: 15/50/100 margin ladder, hard TP disabled, $30 fixed SL, 180% ratchet trigger, +50% break-even, 40% recovery-to-entry',()=>{
  const c=JSON.parse(fs.readFileSync(new URL('../data/config.json',import.meta.url)));
  assert.equal(c.baseMarginPct,100);
  assert.equal(c.layerMultiplier,2);
@@ -20,6 +20,8 @@ test('defaults match the v3.4 NORMAL plan: 15/50/100 margin ladder, hard TP disa
  assert.equal(c.ratchetLockStepPct,100);
  assert.equal(c.masterBreakEvenEnabled,true);
  assert.equal(c.masterBreakEvenTriggerPct,50);
+ assert.equal(c.recoveryExitEnabled,true);
+ assert.equal(c.recoveryExitArmPctOfSL,40);
 });
 
 test('clean() bounds and defaults untrusted input',()=>{
@@ -81,6 +83,15 @@ test('clean() master break-even: trigger held above 0, non-finite falls back to 
  assert.equal(clean({}).masterBreakEvenEnabled,true);
  assert.equal(clean({masterBreakEvenEnabled:false}).masterBreakEvenEnabled,false);
  assert.equal(clean({masterBreakEvenEnabled:'nonsense'}).masterBreakEvenEnabled,true);
+});
+
+test('clean() recovery-to-entry exit: threshold held above 0, non-finite falls back to default 40; enabled defaults true and only an explicit false disables it',()=>{
+ assert.equal(clean({recoveryExitArmPctOfSL:0}).recoveryExitArmPctOfSL,.01);
+ assert.equal(clean({recoveryExitArmPctOfSL:-10}).recoveryExitArmPctOfSL,.01);
+ assert.equal(clean({recoveryExitArmPctOfSL:'abc'}).recoveryExitArmPctOfSL,40);
+ assert.equal(clean({}).recoveryExitEnabled,true);
+ assert.equal(clean({recoveryExitEnabled:false}).recoveryExitEnabled,false);
+ assert.equal(clean({recoveryExitEnabled:'nonsense'}).recoveryExitEnabled,true);
 });
 
 test('clean() strips obsolete removed fields (normalAccountMaxMultiplier, enableInvalidationExit, invalidationGivebackPct, normalProfitFloorEnabled) instead of persisting them',()=>{
@@ -280,6 +291,8 @@ test('full license lifecycle: admin issues a license, user logs in, session read
   assert.equal(meBeforeContact.body.settings.ratchetTriggerPct,180);
   assert.equal(meBeforeContact.body.settings.masterBreakEvenEnabled,true);
   assert.equal(meBeforeContact.body.settings.masterBreakEvenTriggerPct,50);
+  assert.equal(meBeforeContact.body.settings.recoveryExitEnabled,true);
+  assert.equal(meBeforeContact.body.settings.recoveryExitArmPctOfSL,40);
 
   // EA contacts with this license and account 111 -> auto-binds
   const eaConfig=await req(base,`/api/ea/config?account=111&license=${key}`,{headers:{authorization:`Bearer ${EA_TOKEN}`}});

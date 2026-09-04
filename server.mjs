@@ -26,6 +26,7 @@ const DEFAULT={
   normalFixedSLGoldMove:30,
   profitRatchetEnabled:true,ratchetTriggerPct:180,ratchetLockPct:100,ratchetStepPct:100,ratchetLockStepPct:100,
   masterBreakEvenEnabled:true,masterBreakEvenTriggerPct:50,
+  recoveryExitEnabled:true,recoveryExitArmPctOfSL:40,
   entryScore:76,addScore:70,impulseAtr:1.8,sweepAtr:.05,
   rejectionBars:5,watchExpiryMinutes:12,addSpacingAtr:.22,
   rejectionZoneAtr:.12,requireM3Confirm:true,requireM5Context:false,
@@ -74,6 +75,8 @@ export function clean(x={}){
     ratchetLockStepPct:num(x.ratchetLockStepPct,100,0,1e6),
     masterBreakEvenEnabled:x.masterBreakEvenEnabled!==false,
     masterBreakEvenTriggerPct:num(x.masterBreakEvenTriggerPct,50,.01,1e6),
+    recoveryExitEnabled:x.recoveryExitEnabled!==false,
+    recoveryExitArmPctOfSL:num(x.recoveryExitArmPctOfSL,40,.01,1e6),
     entryScore:num(x.entryScore,76,40,100),
     addScore:num(x.addScore,70,40,100),
     impulseAtr:num(x.impulseAtr,1.8,.5,10),
@@ -309,11 +312,14 @@ function humanEvent(e){
     case 'PROFIT_RATCHET_EXIT': return `Protected profit secured at ${Number(e.protectedPct||0).toFixed(0)}% — closing campaign`;
     case 'MASTER_SL_MOVED': return 'Master position stop-loss updated';
     case 'MASTER_BE_ARMED': return 'Break-even secured — master stop-loss moved to entry price';
+    case 'RECOVERY_EXIT_ARMED': return `Setup marked damaged — ${Number(e.adversePctOfSL||0).toFixed(0)}% adverse move reached, will exit if price recovers to entry`;
+    case 'RECOVERY_TO_ENTRY_EXIT': return 'Damaged setup recovered to entry — closing campaign to wait for a fresh setup';
     case 'CAMPAIGN_END':
       if(e.outcome==='TARGET_HIT')return `${dir} campaign complete — target reached`;
       if(e.outcome==='PROFIT_FLOOR_HIT')return 'Protected profit secured — campaign closed';
       if(e.outcome==='MASTER_SL_BASKET_EXIT')return `${dir} campaign closed — stop loss hit`;
       if(e.outcome==='MASTER_LEG_CLOSED')return `${dir} campaign closed — master position closed`;
+      if(e.outcome==='RECOVERY_TO_ENTRY_EXIT')return `${dir} campaign closed — damaged setup recovered to entry`;
       return `${dir} campaign ended — broker/margin stop-out`;
     case 'CAMPAIGN_RECOVERED': return 'Apex reconnected to an in-progress campaign after a restart';
     case 'ADD_BLOCKED': return 'Add skipped — no available margin capacity';
@@ -396,6 +402,8 @@ function settingsView(cfg){
     ratchetLockStepPct:cfg.ratchetLockStepPct,
     masterBreakEvenEnabled:cfg.masterBreakEvenEnabled,
     masterBreakEvenTriggerPct:cfg.masterBreakEvenTriggerPct,
+    recoveryExitEnabled:cfg.recoveryExitEnabled,
+    recoveryExitArmPctOfSL:cfg.recoveryExitArmPctOfSL,
     advanced:{
       entryScore:cfg.entryScore,addScore:cfg.addScore,impulseAtr:cfg.impulseAtr,sweepAtr:cfg.sweepAtr,
       rejectionBars:cfg.rejectionBars,watchExpiryMinutes:cfg.watchExpiryMinutes,rejectionZoneAtr:cfg.rejectionZoneAtr,
@@ -451,6 +459,8 @@ async function buildMe(licenseKey){
       fixedSLGoldMove:latest.fixedSLGoldMove,
       beEnabled:latest.beEnabled,
       beTriggerPct:latest.beTriggerPct,
+      recoveryExitEnabled:latest.recoveryExitEnabled,
+      recoveryArmPctOfSL:latest.recoveryArmPctOfSL,
       ratchetEnabled:latest.ratchetEnabled,
       ratchetTriggerPct:latest.ratchetTriggerPct,
       ratchetLockPct:latest.ratchetLockPct,
@@ -481,7 +491,7 @@ const server=http.createServer(async(req,res)=>{
     const u=new URL(req.url,'http://localhost');
 
     if(u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.4.1'});
+      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.5.1'});
 
     // ---------- EA contract ----------
     if(req.method==='GET'&&u.pathname==='/api/ea/config'){

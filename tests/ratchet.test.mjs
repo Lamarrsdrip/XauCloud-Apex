@@ -184,3 +184,85 @@ test('break-even SL target is the campaign\'s own entry price, not an offset (tr
   const beSL = firstEntryPrice; // EA sets beSL=firstEntryPrice directly
   assert.equal(beSL, 4700);
 });
+
+// ---------- v3.5.1 Recovery-To-Entry exit (mirrors Manage()'s recovery block) ----------
+// originalSLDist is frozen at campaign start (firstEntryPrice - firstInitialSLPrice), independent
+// of any later break-even SL move. Arms once adverse move >= armPctOfSL of that original distance;
+// once armed, never disarms; closes the whole basket the moment price recovers to firstEntryPrice.
+function recoveryStep({dir, entryPrice, initialSLPrice, currentPrice, armPctOfSL, enabled, alreadyArmed}){
+  if(!enabled) return {armed:alreadyArmed, closes:false};
+  const originalSLDist = Math.abs(entryPrice - initialSLPrice);
+  if(!(originalSLDist>0)) return {armed:alreadyArmed, closes:false};
+  const adverseDist = dir>0 ? Math.max(0, entryPrice-currentPrice) : Math.max(0, currentPrice-entryPrice);
+  const adversePctOfSL = (adverseDist/originalSLDist)*100;
+  let armed = alreadyArmed;
+  if(!armed && adversePctOfSL>=armPctOfSL) armed = true;
+  const recoveredToEntry = armed && (dir>0 ? currentPrice>=entryPrice : currentPrice<=entryPrice);
+  return {armed, closes:recoveredToEntry, adversePctOfSL};
+}
+
+test('BUY example from spec: entry 4700, SL 4670 (30 XAU dist), 40% = 12 -> price at 4688 or lower arms the exit', ()=>{
+  const r39 = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4688.01, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r39.armed, false); // 4688.01 is 11.99 adverse = 39.9666...% < 40%
+  const r40 = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4688, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r40.armed, true); // 4688 is exactly 12 adverse = 40% of 30
+  assert.equal(r40.adversePctOfSL, 40);
+});
+test('SELL mirrors: entry 4700, SL 4730 (30 XAU dist), price at 4712 or higher arms the exit', ()=>{
+  const r39 = recoveryStep({dir:-1, entryPrice:4700, initialSLPrice:4730, currentPrice:4711.99, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r39.armed, false);
+  const r40 = recoveryStep({dir:-1, entryPrice:4700, initialSLPrice:4730, currentPrice:4712, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r40.armed, true);
+  assert.equal(r40.adversePctOfSL, 40);
+});
+test('at 39.99% adverse: does NOT arm (spec: "At 39.99% adverse: do NOT arm")', ()=>{
+  // 30 XAU dist, 39.99% = 11.997 adverse -> price 4688.003
+  const r = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4700-11.997, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r.armed, false);
+});
+test('at exactly 40% adverse: arms (spec: "At 40% or more: arm")', ()=>{
+  const r = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4688, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r.armed, true);
+});
+test('QA case A: goes 40% adverse, then back to entry -> closes the whole basket as recovery exit', ()=>{
+  const armed = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4688, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(armed.armed, true);
+  const backAtEntry = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4700, armPctOfSL:40, enabled:true, alreadyArmed:true});
+  assert.equal(backAtEntry.closes, true);
+});
+test('QA case B: never reaches 40% adverse -> recovery must never trigger even if price later returns to entry', ()=>{
+  const shallow = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4695, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(shallow.armed, false);
+  const backAtEntry = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4700, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(backAtEntry.armed, false);
+  assert.equal(backAtEntry.closes, false);
+});
+test('QA case D: reaches deep profit without ever suffering 40% adverse -> never misclassified as damaged (armed stays false)', ()=>{
+  // price ran straight up from entry to a big winner, never went adverse at all
+  const r = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4900, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r.armed, false);
+});
+test('QA case E: armed earlier, then setup recovers to entry -> closes as recovery exit even though price merely came back (not a profit exit)', ()=>{
+  const r = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4700, armPctOfSL:40, enabled:true, alreadyArmed:true});
+  assert.equal(r.closes, true);
+});
+test('70% adverse then recovery to entry also closes (deeper adverse excursions still arm and still close on recovery)', ()=>{
+  // 30 XAU dist, 70% = 21 adverse -> price 4679
+  const armed = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4679, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(armed.armed, true);
+  const backAtEntry = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4700, armPctOfSL:40, enabled:true, alreadyArmed:true});
+  assert.equal(backAtEntry.closes, true);
+});
+test('recovery exit disabled entirely: never arms or closes regardless of adverse move or recovery', ()=>{
+  const r = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4688, armPctOfSL:40, enabled:false, alreadyArmed:false});
+  assert.equal(r.armed, false);
+  assert.equal(r.closes, false);
+});
+test('original SL distance is fixed at campaign start and is NOT recalculated from a later break-even-moved SL', ()=>{
+  // Even though the "current" SL may later move to breakeven (4700), the recovery math must keep
+  // using the ORIGINAL captured distance (firstInitialSLPrice=4670), not the current firstSLPrice.
+  const originalDistUsed = Math.abs(4700 - 4670); // firstInitialSLPrice, frozen
+  assert.equal(originalDistUsed, 30);
+  const r = recoveryStep({dir:1, entryPrice:4700, initialSLPrice:4670, currentPrice:4688, armPctOfSL:40, enabled:true, alreadyArmed:false});
+  assert.equal(r.adversePctOfSL, 40); // computed from the frozen 30, not any post-BE SL value
+});

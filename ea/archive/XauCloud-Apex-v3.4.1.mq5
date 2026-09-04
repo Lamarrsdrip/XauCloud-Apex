@@ -1,11 +1,10 @@
 #property copyright "XauCloud Apex"
-#property version   "3.510"
+#property version   "3.410"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
-// Internal build lineage: v3.5.1 (dev codename RecoveryExit40) — adds the Recovery-To-Entry exit.
 #include <Trade/Trade.mqh>
 CTrade trade;
-#define APEX_VERSION "XauCloud-Apex_v3.5.1"
+#define APEX_VERSION "XauCloud-Apex_v3.4.1"
 #define APEX_MAGIC 8620260903
 input string InpApiBase="https://apex.xaucloud.io";
 input string InpEaToken="REPLACE_EA_TOKEN";
@@ -26,11 +25,9 @@ input double InpRatchetStepPct=100.0;             // Every additional +100% peak
 input double InpRatchetLockStepPct=100.0;         // ...raises the protected floor another +100%
 input bool   InpMasterBreakEvenEnabled=true;      // Move L1/master SL to its own entry price once triggered
 input double InpMasterBreakEvenTriggerPct=50.0;   // Trigger: +50% whole-basket campaign profit
-input bool   InpRecoveryExitEnabled=true;         // Arm once L1 suffers this % of its ORIGINAL fixed SL distance
-input double InpRecoveryExitArmPctOfSL=40.0;      // Then close the whole basket if price recovers to the L1 entry
-struct Config{bool armed;string account;string symbolContains;string targetMode,accountProfile;double targetEquity,targetMultiplier,normalTargetProfitPct,baseMarginPct,layerMultiplier;int maxLayers;double entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;int rejectionBars,watchExpiryMinutes,cooldownMinutes;bool requireM3Confirm,requireM5Context,learningEnabled;double learnEntryAdj,learnAddAdj;double normalL1MarginPct,normalL2MarginPct,normalL3PlusMarginPct,normalFixedSLGoldMove,ratchetTriggerPct,ratchetLockPct,ratchetStepPct,ratchetLockStepPct,masterBreakEvenTriggerPct,recoveryExitArmPctOfSL;bool profitRatchetEnabled,masterBreakEvenEnabled,recoveryExitEnabled;};
+struct Config{bool armed;string account;string symbolContains;string targetMode,accountProfile;double targetEquity,targetMultiplier,normalTargetProfitPct,baseMarginPct,layerMultiplier;int maxLayers;double entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;int rejectionBars,watchExpiryMinutes,cooldownMinutes;bool requireM3Confirm,requireM5Context,learningEnabled;double learnEntryAdj,learnAddAdj;double normalL1MarginPct,normalL2MarginPct,normalL3PlusMarginPct,normalFixedSLGoldMove,ratchetTriggerPct,ratchetLockPct,ratchetStepPct,ratchetLockStepPct,masterBreakEvenTriggerPct;bool profitRatchetEnabled,masterBreakEvenEnabled;};
 struct Snap{bool valid;int dir;double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;bool swept,rejected,microBreak,m3,m5,continuation,pullbackFail;string sig,reason;};
-Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,firstEntryPrice=0,firstSLPrice=0,firstInitialSLPrice=0;bool recoveryExitArmed=false;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
+Config C;int hAtr=INVALID_HANDLE;datetime lastCfg=0,lastEnd=0;bool camp=false;int campDir=0,layers=0;double cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,firstEntryPrice=0,firstSLPrice=0;ulong masterTicket=0;int masterGuardStage=0;datetime campStart=0;string campId="",campSig="";
 bool watch=false;int watchDir=0;datetime watchStart=0,watchSweepBarTime=0;double watchExtreme=0,watchPrior=0,watchAtr=0;string watchSig="";
 bool everSyncedRemote=false;string lastConfigSig="";
 string trim(string s){StringTrimLeft(s);StringTrimRight(s);return s;} string raw(string j,string k){string n="\""+k+"\":";int p=StringFind(j,n);if(p<0)return"";p+=StringLen(n);while(p<StringLen(j)&&StringGetCharacter(j,p)==' ')p++;ushort c=StringGetCharacter(j,p);if(c=='\"'){int e=p+1;while(e<StringLen(j)&&StringGetCharacter(j,e)!='\"')e++;return StringSubstr(j,p+1,e-p-1);}int e=p;while(e<StringLen(j)){ushort x=StringGetCharacter(j,e);if(x==','||x=='}'||x==']')break;e++;}return trim(StringSubstr(j,p,e-p));}
@@ -38,14 +35,13 @@ double jd(string j,string k,double d){string v=raw(j,k);return v==""?d:StringToD
 bool Http(string method,string ep,string body,string &resp){if((bool)MQLInfoInteger(MQL_TESTER))return false;string hdr="Authorization: Bearer "+InpEaToken+"\r\nContent-Type: application/json\r\n";char d[],r[];string rh;StringToCharArray(body,d,0,WHOLE_ARRAY,CP_UTF8);ResetLastError();int code=WebRequest(method,InpApiBase+ep,hdr,7000,d,r,rh);if(code<0){Print("APEX_HTTP_ERROR ",GetLastError());return false;}resp=CharArrayToString(r,0,-1,CP_UTF8);return code>=200&&code<300;}
 string ConfigSource(){return everSyncedRemote?"REMOTE":"LOCAL_INPUT";}
 void Emit(string type,string extra=""){
- string cfgFields=StringFormat(",\"l1MarginPct\":%.2f,\"l2MarginPct\":%.2f,\"l3PlusMarginPct\":%.2f,\"takeProfitPct\":%.2f,\"fixedSLGoldMove\":%.2f,\"beEnabled\":%s,\"beTriggerPct\":%.2f,\"recoveryExitEnabled\":%s,\"recoveryArmPctOfSL\":%.2f,\"ratchetEnabled\":%s,\"ratchetTriggerPct\":%.2f,\"ratchetLockPct\":%.2f,\"ratchetStepPct\":%.2f,\"ratchetLockStepPct\":%.2f,\"configSource\":\"%s\",\"eaVersion\":\"%s\"",
-  C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"true":"false",C.masterBreakEvenTriggerPct,C.recoveryExitEnabled?"true":"false",C.recoveryExitArmPctOfSL,C.profitRatchetEnabled?"true":"false",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource(),APEX_VERSION);
+ string cfgFields=StringFormat(",\"l1MarginPct\":%.2f,\"l2MarginPct\":%.2f,\"l3PlusMarginPct\":%.2f,\"takeProfitPct\":%.2f,\"fixedSLGoldMove\":%.2f,\"beEnabled\":%s,\"beTriggerPct\":%.2f,\"ratchetEnabled\":%s,\"ratchetTriggerPct\":%.2f,\"ratchetLockPct\":%.2f,\"ratchetStepPct\":%.2f,\"ratchetLockStepPct\":%.2f,\"configSource\":\"%s\",\"eaVersion\":\"%s\"",
+  C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"true":"false",C.masterBreakEvenTriggerPct,C.profitRatchetEnabled?"true":"false",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource(),APEX_VERSION);
  string b=StringFormat("{\"type\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"currency\":\"%s\",\"license\":\"%s\",\"symbol\":\"%s\",\"version\":\"%s\",\"campaignId\":\"%s\",\"signature\":\"%s\",\"direction\":%d,\"layers\":%d,\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f%s%s}",type,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),AccountInfoString(ACCOUNT_CURRENCY),InpApexLicense,_Symbol,APEX_VERSION,campId,campSig,campDir,layers,AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),AccountInfoDouble(ACCOUNT_MARGIN_FREE),cfgFields,extra);
  string r;Http("POST","/api/ea/event",b,r);
 }
 void PrintEffectiveConfig(){
  Print("APEX_EFFECTIVE_CONFIG",
-  " version=",APEX_VERSION,
   " profile=",C.accountProfile,
   " l1MarginPct=",DoubleToString(C.normalL1MarginPct,2),
   " l2MarginPct=",DoubleToString(C.normalL2MarginPct,2),
@@ -54,14 +50,11 @@ void PrintEffectiveConfig(){
   " fixedSLGoldMove=",DoubleToString(C.normalFixedSLGoldMove,2),
   " masterBEEnabled=",(C.masterBreakEvenEnabled?"true":"false"),
   " masterBETriggerPct=",DoubleToString(C.masterBreakEvenTriggerPct,2),
-  " recoveryExit=",(C.recoveryExitEnabled?"true":"false"),
-  " recoveryArmPctOfSL=",DoubleToString(C.recoveryExitArmPctOfSL,2),
   " ratchetEnabled=",(C.profitRatchetEnabled?"true":"false"),
   " ratchetTriggerPct=",DoubleToString(C.ratchetTriggerPct,2),
   " ratchetLockPct=",DoubleToString(C.ratchetLockPct,2),
   " ratchetStepPct=",DoubleToString(C.ratchetStepPct,2),
   " ratchetLockStepPct=",DoubleToString(C.ratchetLockStepPct,2),
-  " hardTP=",DoubleToString(C.normalTargetProfitPct,2),
   " source=",ConfigSource());
 }
 void Defaults(){
@@ -81,10 +74,8 @@ void Defaults(){
  C.ratchetLockStepPct=InpRatchetLockStepPct;
  C.masterBreakEvenEnabled=InpMasterBreakEvenEnabled;
  C.masterBreakEvenTriggerPct=InpMasterBreakEvenTriggerPct;
- C.recoveryExitEnabled=InpRecoveryExitEnabled;
- C.recoveryExitArmPctOfSL=InpRecoveryExitArmPctOfSL;
 }
-string ConfigSignature(){return StringFormat("%.2f|%.2f|%.2f|%.2f|%.2f|%s|%.2f|%s|%.2f|%s|%.2f|%.2f|%.2f|%.2f|%s",C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"1":"0",C.masterBreakEvenTriggerPct,C.recoveryExitEnabled?"1":"0",C.recoveryExitArmPctOfSL,C.profitRatchetEnabled?"1":"0",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource());}
+string ConfigSignature(){return StringFormat("%.2f|%.2f|%.2f|%.2f|%.2f|%s|%.2f|%s|%.2f|%.2f|%.2f|%.2f|%s",C.normalL1MarginPct,C.normalL2MarginPct,C.normalL3PlusMarginPct,C.normalTargetProfitPct,C.normalFixedSLGoldMove,C.masterBreakEvenEnabled?"1":"0",C.masterBreakEvenTriggerPct,C.profitRatchetEnabled?"1":"0",C.ratchetTriggerPct,C.ratchetLockPct,C.ratchetStepPct,C.ratchetLockStepPct,ConfigSource());}
 bool ConfigPoll(){
  string r,ep=StringFormat("/api/ea/config?account=%I64d&license=%s",AccountInfoInteger(ACCOUNT_LOGIN),InpApexLicense);
  if(!Http("GET",ep,"",r))return false;
@@ -103,8 +94,6 @@ bool ConfigPoll(){
  C.ratchetLockStepPct=jd(r,"ratchetLockStepPct",C.ratchetLockStepPct);
  C.masterBreakEvenEnabled=jb(r,"masterBreakEvenEnabled",C.masterBreakEvenEnabled);
  C.masterBreakEvenTriggerPct=jd(r,"masterBreakEvenTriggerPct",C.masterBreakEvenTriggerPct);
- C.recoveryExitEnabled=jb(r,"recoveryExitEnabled",C.recoveryExitEnabled);
- C.recoveryExitArmPctOfSL=jd(r,"recoveryExitArmPctOfSL",C.recoveryExitArmPctOfSL);
  everSyncedRemote=true;
  string sig=ConfigSignature();
  if(sig!=lastConfigSig){lastConfigSig=sig;PrintEffectiveConfig();Emit("CONFIG_SYNC");}
@@ -147,7 +136,7 @@ double VolumeForMargin(int dir,double pct){
 int CountPos(){int n=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(t&&PositionGetString(POSITION_SYMBOL)==_Symbol&&PositionGetInteger(POSITION_MAGIC)==InpMagic)n++;}return n;} double BasketProfit(){double p=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(t&&PositionGetString(POSITION_SYMBOL)==_Symbol&&PositionGetInteger(POSITION_MAGIC)==InpMagic)p+=PositionGetDouble(POSITION_PROFIT)+PositionGetDouble(POSITION_SWAP);}return p;}
 bool NewestMagicPosition(int &dir,double &price,int &count){count=0;dir=0;price=0;datetime best=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(!t||PositionGetString(POSITION_SYMBOL)!=_Symbol||PositionGetInteger(POSITION_MAGIC)!=InpMagic)continue;count++;datetime ot=(datetime)PositionGetInteger(POSITION_TIME);if(ot>=best){best=ot;dir=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY?1:-1;price=PositionGetDouble(POSITION_PRICE_OPEN);}}return count>0;}
 string StateFile(){return StringFormat("ApexState_%I64d.json",InpMagic);}
-void SaveState(){int h=FileOpen(StateFile(),FILE_WRITE|FILE_TXT|FILE_ANSI);if(h==INVALID_HANDLE)return;FileWriteString(h,StringFormat("{\"campId\":\"%s\",\"campSig\":\"%s\",\"campDir\":%d,\"layers\":%d,\"cycleStart\":%.2f,\"targetEq\":%.2f,\"campStart\":%I64d,\"lastAdd\":%.5f,\"mfe\":%.2f,\"mae\":%.2f,\"firstEntryPrice\":%.5f,\"firstSLPrice\":%.5f,\"firstInitialSLPrice\":%.5f,\"recoveryExitArmed\":%s,\"masterTicket\":%I64u,\"masterGuardStage\":%d}",campId,campSig,campDir,layers,cycleStart,targetEq,(long)campStart,lastAdd,mfe,mae,firstEntryPrice,firstSLPrice,firstInitialSLPrice,recoveryExitArmed?"true":"false",masterTicket,masterGuardStage));FileClose(h);}
+void SaveState(){int h=FileOpen(StateFile(),FILE_WRITE|FILE_TXT|FILE_ANSI);if(h==INVALID_HANDLE)return;FileWriteString(h,StringFormat("{\"campId\":\"%s\",\"campSig\":\"%s\",\"campDir\":%d,\"layers\":%d,\"cycleStart\":%.2f,\"targetEq\":%.2f,\"campStart\":%I64d,\"lastAdd\":%.5f,\"mfe\":%.2f,\"mae\":%.2f,\"firstEntryPrice\":%.5f,\"firstSLPrice\":%.5f,\"masterTicket\":%I64u,\"masterGuardStage\":%d}",campId,campSig,campDir,layers,cycleStart,targetEq,(long)campStart,lastAdd,mfe,mae,firstEntryPrice,firstSLPrice,masterTicket,masterGuardStage));FileClose(h);}
 void ClearState(){FileDelete(StateFile());}
 bool LoadState(string &j){int h=FileOpen(StateFile(),FILE_READ|FILE_TXT|FILE_ANSI);if(h==INVALID_HANDLE)return false;j="";while(!FileIsEnding(h))j+=FileReadString(h);FileClose(h);return StringLen(j)>0;}
 
@@ -213,8 +202,6 @@ bool OpenLayer(int dir,double score,string why){
  if(firstNormal){
    firstEntryPrice=trade.ResultPrice()>0?trade.ResultPrice():reqPrice;
    firstSLPrice=sl;
-   firstInitialSLPrice=sl;
-   recoveryExitArmed=false;
    masterTicket=FindOldestApexPosition();
    masterGuardStage=0;
    Emit("FIRST_ENTRY_GUARD",StringFormat(",\"entryPrice\":%.5f,\"slPrice\":%.5f,\"goldMove\":%.2f,\"masterTicket\":%I64u",firstEntryPrice,firstSLPrice,C.normalFixedSLGoldMove,masterTicket));
@@ -227,12 +214,12 @@ bool CloseAll(){trade.SetExpertMagicNumber(InpMagic);for(int pass=0;pass<6;pass+
 void Start(Snap &s){
  camp=true;campDir=s.dir;layers=0;cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
  targetEq=C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0):cycleStart*C.targetMultiplier);
- firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;masterTicket=0;masterGuardStage=0;campStart=TimeCurrent();campId=StringFormat("%I64d-%I64d",AccountInfoInteger(ACCOUNT_LOGIN),(long)campStart);campSig=s.sig;mfe=0;mae=0;
+ firstEntryPrice=0;firstSLPrice=0;masterTicket=0;masterGuardStage=0;campStart=TimeCurrent();campId=StringFormat("%I64d-%I64d",AccountInfoInteger(ACCOUNT_LOGIN),(long)campStart);campSig=s.sig;mfe=0;mae=0;
  Emit("CAMPAIGN_START",StringFormat(",\"score\":%.2f,\"targetEquity\":%.2f,\"entryPrice\":%.5f,\"impulseMult\":%.3f,\"wickRatio\":%.3f,\"m3\":%s,\"m5\":%s,\"atr\":%.5f",s.score,targetEq,s.price,s.impulseMult,s.wickRatio,s.m3?"true":"false",s.m5?"true":"false",s.atr));
  if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED")){camp=false;campId="";ClearState();}
  watch=false;
 }
-void Finish(string outcome,string why){Emit("CAMPAIGN_END",StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"mfe\":%.2f,\"mae\":%.2f,\"durationSec\":%d",outcome,why,mfe,mae,(int)(TimeCurrent()-campStart)));camp=false;campDir=0;layers=0;lastAdd=0;firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";watch=false;ClearState();}
+void Finish(string outcome,string why){Emit("CAMPAIGN_END",StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"mfe\":%.2f,\"mae\":%.2f,\"durationSec\":%d",outcome,why,mfe,mae,(int)(TimeCurrent()-campStart)));camp=false;campDir=0;layers=0;lastAdd=0;firstEntryPrice=0;firstSLPrice=0;masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";watch=false;ClearState();}
 Snap AddSignal(){Snap s=Observe();if(s.dir!=campDir){s.valid=false;MqlRates m1[];if(!Rates(PERIOD_M1,30,m1))return s;s.atr=ATR();s.dir=campDir;s.price=campDir>0?SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK);bool cont=campDir<0?(m1[1].close<m1[2].low&&m1[2].close<m1[3].low):(m1[1].close>m1[2].high&&m1[2].close>m1[3].high);bool pf=campDir<0?(m1[2].close>m1[2].open&&m1[1].close<m1[2].low):(m1[2].close<m1[2].open&&m1[1].close>m1[2].high);s.continuation=cont;s.pullbackFail=pf;s.score=60+(cont?20:0)+(pf?15:0);s.sig=campSig;s.reason=cont?"CONTINUATION_BREAK":pf?"FAILED_PULLBACK":"NO_NEW_CONFIRMATION";}return s;}
 void Manage(){
  int n=CountPos();
@@ -252,37 +239,6 @@ void Manage(){
 
  double p=BasketProfit(),campEq=cycleStart+p;
  mfe=MathMax(mfe,p);mae=MathMin(mae,p);
-
- // Recovery-To-Entry Exit: if the master/L1 leg suffers an adverse move of at least the
- // configured % of its ORIGINAL fixed SL distance (captured at campaign start, before any
- // later break-even SL move), the setup is marked damaged. If price later recovers to the
- // original L1 entry price, close the WHOLE basket rather than keep trusting a setup that
- // already went deeply wrong — do not wait for profit. Once armed, this never disarms on
- // its own; only a fresh campaign (Start()) resets it. Runs before break-even/fixed-SL/ratchet
- // so a damaged-then-recovered setup is never misread as a normal profitable exit.
- if(C.accountProfile=="NORMAL"&&C.recoveryExitEnabled&&masterTicket>0&&
-    firstEntryPrice>0&&firstInitialSLPrice>0){
-   double originalSLDist=MathAbs(firstEntryPrice-firstInitialSLPrice);
-   if(originalSLDist>0){
-     double masterPx=campDir>0?SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-     double adverseDist=campDir>0?MathMax(0.0,firstEntryPrice-masterPx):MathMax(0.0,masterPx-firstEntryPrice);
-     double adversePctOfSL=(adverseDist/originalSLDist)*100.0;
-     if(!recoveryExitArmed&&adversePctOfSL>=MathMax(0.0,C.recoveryExitArmPctOfSL)){
-       recoveryExitArmed=true;
-       SaveState();
-       Emit("RECOVERY_EXIT_ARMED",StringFormat(",\"entryPrice\":%.5f,\"originalSLPrice\":%.5f,\"currentPrice\":%.5f,\"adverseDist\":%.5f,\"adversePctOfSL\":%.2f,\"armThresholdPct\":%.2f",firstEntryPrice,firstInitialSLPrice,masterPx,adverseDist,adversePctOfSL,C.recoveryExitArmPctOfSL));
-     }
-     if(recoveryExitArmed){
-       bool recoveredToEntry=(campDir>0?masterPx>=firstEntryPrice:masterPx<=firstEntryPrice);
-       if(recoveredToEntry){
-         if(n>0)CloseAll();
-         Emit("RECOVERY_TO_ENTRY_EXIT",StringFormat(",\"entryPrice\":%.5f,\"originalSLPrice\":%.5f,\"currentPrice\":%.5f,\"armThresholdPct\":%.2f",firstEntryPrice,firstInitialSLPrice,masterPx,C.recoveryExitArmPctOfSL));
-         Finish("RECOVERY_TO_ENTRY_EXIT","DEEP_ADVERSE_MOVE_RECOVERED_TO_MASTER_ENTRY");
-         return;
-       }
-     }
-   }
- }
 
  // Master break-even: once the WHOLE Apex basket reaches the configured campaign-profit
  // threshold, tighten ONLY the master/L1 broker SL to its own entry price. One-way — once
@@ -379,13 +335,13 @@ void OnTimer(){
        camp=true;campId=js(j,"campId","");campSig=js(j,"campSig","RECOVERED");campDir=nDir;layers=(int)MathMax(nCount,ji(j,"layers",nCount));
        cycleStart=jd(j,"cycleStart",AccountInfoDouble(ACCOUNT_BALANCE));
        targetEq=jd(j,"targetEq",C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0):cycleStart*C.targetMultiplier));
-       firstEntryPrice=jd(j,"firstEntryPrice",0);firstSLPrice=jd(j,"firstSLPrice",0);firstInitialSLPrice=jd(j,"firstInitialSLPrice",0);recoveryExitArmed=jb(j,"recoveryExitArmed",false);masterTicket=ju(j,"masterTicket",0);masterGuardStage=ji(j,"masterGuardStage",0);
+       firstEntryPrice=jd(j,"firstEntryPrice",0);firstSLPrice=jd(j,"firstSLPrice",0);masterTicket=ju(j,"masterTicket",0);masterGuardStage=ji(j,"masterGuardStage",0);
        campStart=(datetime)ji(j,"campStart",(int)now);lastAdd=nPrice;mfe=jd(j,"mfe",0);mae=jd(j,"mae",0);
        Emit("CAMPAIGN_RECOVERED",StringFormat(",\"source\":\"STATE_FILE\",\"layers\":%d",layers));
      }else if(nCount>0){
        camp=true;campDir=nDir;layers=nCount;cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
        targetEq=C.targetMode=="EQUITY"?C.targetEquity:(C.accountProfile=="NORMAL"?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0):cycleStart*C.targetMultiplier);
-       masterTicket=FindOldestApexPosition();masterGuardStage=0;firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;
+       masterTicket=FindOldestApexPosition();masterGuardStage=0;firstEntryPrice=0;firstSLPrice=0;
        campStart=now;campId=StringFormat("RECOVER-%I64d",(long)now);campSig="RECOVERED_NO_STATE";lastAdd=nPrice;mfe=0;mae=0;
        Emit("CAMPAIGN_RECOVERED",",\"source\":\"POSITION_SCAN_ONLY\",\"warning\":\"CYCLE_START_EQUITY_AND_RATCHET_PEAK_ESTIMATED_FROM_RESTART_BALANCE_STATE_FILE_MISSING\"");
      }

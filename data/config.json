@@ -21,6 +21,8 @@
   "ratchetLockStepPct": 100,
   "masterBreakEvenEnabled": true,
   "masterBreakEvenTriggerPct": 50,
+  "recoveryExitEnabled": true,
+  "recoveryExitArmPctOfSL": 40,
   "entryScore": 76,
   "addScore": 70,
   "impulseAtr": 1.8,

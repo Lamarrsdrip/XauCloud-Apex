@@ -184,6 +184,19 @@ async function syncBridgeConfig(key,config,commandRevision=0){
 async function readBridgeStatus(key){
   return bridgeRequest('/api/cloud/apex/bridge/status?license='+encodeURIComponent(normalizeLicense(key)));
 }
+// Never throws: the dashboard must still render (falling back to local telemetry, if any)
+// when the XauCloud bridge is unreachable or unconfigured, instead of 500ing the whole page.
+async function readBridgeStatusSafe(key){
+  if(!bridgeConfigured())return {ok:false,reason:'BRIDGE_NOT_CONFIGURED',data:null};
+  try{return {ok:true,reason:null,data:await readBridgeStatus(key)}}
+  catch(e){return {ok:false,reason:String(e?.message||'BRIDGE_REQUEST_FAILED'),data:null}}
+}
+function newerIso(a,b){
+  const ta=a?Date.parse(a):NaN,tb=b?Date.parse(b):NaN;
+  if(!Number.isFinite(ta))return Number.isFinite(tb)?b:null;
+  if(!Number.isFinite(tb))return a;
+  return ta>=tb?a:b;
+}
 async function bridgeSelfTest(key,lic){
   const remote=await readBridgeStatus(key);
   const localActive=licenseStatusFor(lic)==='ACTIVE';
@@ -324,20 +337,54 @@ async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,accountProfile:lic?.accountProfile||cfg.accountProfile,expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
   if(status!=='ACTIVE')return {license:base,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},settings:settingsView(cfg)};
-  const all=await allEvents(),acct=lic.lastAccount||lic.account||'';
+
+  // As of EA v3.7.1-XauCloudLink the EA no longer calls this server's own
+  // /api/apex/heartbeat — it POSTs straight to XauCloud's canonical
+  // /api/cloud/monitor/heartbeat. lic.lastSeen (stamped only by the legacy
+  // /api/apex/*  and /api/ea/* compat routes below) therefore goes stale for
+  // any license using the current EA build. The XauCloud bridge status is
+  // the live source of truth now; local lastSeen is kept only as a fallback
+  // for an already-attached EA still on an older build that never migrated.
+  const bridge=await readBridgeStatusSafe(key);
+  const remote=bridge.data;
+  const remoteLastSeen=remote?.mt5?.lastSeen||null;
+  const lastSeen=newerIso(remoteLastSeen,lic.lastSeen||null);
+  const mt5=classifyMt5(lastSeen);
+  const hb=(remote?.heartbeat&&typeof remote.heartbeat==='object')?remote.heartbeat:null;
+  const remoteAccount=String(remote?.license?.account||'').trim();
+
+  const all=await allEvents(),acct=lic.lastAccount||lic.account||remoteAccount||'';
   const events=acct?all.filter(e=>String(e.account)===String(acct)):all.filter(e=>normalizeLicense(e.license)===key);
-  const mt5=classifyMt5(lic.lastSeen);
+
+  console.log(`APEX_BRIDGE_STATUS_CHECK license=${maskLicense(key)} bridgeOk=${bridge.ok} heartbeatFound=${Boolean(remoteLastSeen)} ageSec=${remoteLastSeen?Math.max(0,Math.round((Date.now()-Date.parse(remoteLastSeen))/1000)):'n/a'} resolved=${mt5}`);
+
   return {
-    license:base,dataAvailable:Boolean(lic.lastSeen),waitingForFirstContact:!lic.lastSeen,
+    license:base,dataAvailable:Boolean(lastSeen),waitingForFirstContact:!lastSeen,
     armed:cfg.armed,accountProfile:cfg.accountProfile,
-    mt5:{status:mt5,lastSeen:lic.lastSeen||null},
+    mt5:{status:mt5,lastSeen:lastSeen||null},
     command:{revision:Number(lic.commandRevision||0),pending:lic.pendingCommand||null,lastAckRevision:Number(lic.lastAckRevision||0),lastAckStatus:lic.lastAckStatus||null,lastAckAt:lic.lastAckAt||null},
-    account:{account:lic.lastAccount||lic.account||null,broker:lic.broker||null,server:lic.server||null,currency:lic.currency||null,
-      balance:lic.balance??null,equity:lic.equity??null,freeMargin:lic.freeMargin??null,asOf:lic.lastSeen||null,tradeMode:lic.tradeMode??null},
+    account:{
+      account:String(hb?.account_number||remoteAccount||lic.lastAccount||lic.account||'')||null,
+      broker:hb?.broker_server||lic.broker||null,
+      server:hb?.broker_server||lic.server||null,
+      currency:lic.currency||null,
+      balance:hb?.balance??lic.balance??null,
+      equity:hb?.equity??lic.equity??null,
+      freeMargin:lic.freeMargin??null,
+      openPositions:hb?.open_positions??null,
+      asOf:lastSeen||null,
+      tradeMode:lic.tradeMode??null
+    },
     campaign:null,history:buildHistory(events),learning:learningShape(events),
     recentHuman:events.slice(-60).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(x=>x.text).slice(0,30),
-    effectiveConfig:lic.eaVersion?{eaVersion:lic.eaVersion,configSource:'REMOTE/CACHED_LOCAL',asOf:lic.lastSeen}:null,
-    settings:settingsView(cfg)
+    effectiveConfig:(hb?.ea_version||lic.eaVersion)?{eaVersion:hb?.ea_version||lic.eaVersion,configSource:remote?'XAUCLOUD_BRIDGE':'REMOTE/CACHED_LOCAL',asOf:lastSeen||lic.lastSeen||null}:null,
+    settings:settingsView(cfg),
+    bridge:{
+      configured:bridgeConfigured(),ok:bridge.ok,reason:bridge.ok?null:bridge.reason,
+      heartbeatFound:Boolean(remoteLastSeen),
+      heartbeatAgeSec:remoteLastSeen?Math.max(0,Math.round((Date.now()-Date.parse(remoteLastSeen))/1000)):null,
+      resolvedState:mt5,license:maskLicense(key)
+    }
   };
 }
 function genLicense(){

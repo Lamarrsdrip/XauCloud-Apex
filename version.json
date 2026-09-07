@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.7.2",
-  "buildId": "3.7.2-stable",
-  "eaVersion": "XauCloud-Apex_v3.7.2-OperationalFixOnly-v2",
+  "version": "3.8.1",
+  "buildId": "3.8.1-live-ready",
+  "eaVersion": "XauCloud-Apex_v3.8.1-LiveReady",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.7.2.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.1-LiveReady.mq5",
   "configSchema": 2,
   "stateSchema": 3,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.7.2 is the current stable Apex trading build. v3.8 is experimental and must not replace stable until validated."
+  "notes": "Apex v3.8.1 LiveReady is the canonical main trading build. Preserves tested v3.8 trading behaviour with live/demo operational fixes."
 }

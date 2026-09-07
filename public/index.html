@@ -295,6 +295,15 @@ function toast(msg, isErr){
 
 // ---------- session bootstrap ----------
 function boot(){
+  // ADMIN IS SEPARATE FROM CUSTOMER LICENSE LOGIN.
+  // #admin goes directly to the owner/admin authentication screen.
+  if ((location.hash || '').replace('#','').indexOf('admin') === 0) {
+    document.getElementById('login').style.display = 'none';
+    renderAdmin();
+    return;
+  }
+
+  // Normal Apex users authenticate with the license created by Admin.
   api('/api/auth/me').then(function(me){
     STATE.me = me;
     showApp();

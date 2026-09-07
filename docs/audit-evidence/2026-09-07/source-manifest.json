@@ -1,0 +1,100 @@
+{
+  "commit": "3ebfc49ce67058ab5aa915c6335ed75b10093075",
+  "files": [
+    {
+      "file": ".env.example",
+      "sha256": "fe08e9aa4f3dbd7ab251334c3f6e06f06a1e37a1d5113ab1f900143154b6f907",
+      "bytes": 203
+    },
+    {
+      "file": ".gitignore",
+      "sha256": "fc4cd50296a5ae746e37dcfc873dd2e3fad27a5e88e7dbef827787c654046ea7",
+      "bytes": 73
+    },
+    {
+      "file": "README.md",
+      "sha256": "92a836170df3537e7467ef18e1fc2d1bad50ceba05bd06b787f46fcdcb7d6879",
+      "bytes": 2315
+    },
+    {
+      "file": "VALIDATION.txt",
+      "sha256": "771263f610a6e0067b62286897bac4b21f0924fe22717ac8ee71bf11df43a73f",
+      "bytes": 1577
+    },
+    {
+      "file": "data/config.json",
+      "sha256": "eaab03603deade1cfb847eb42a022221c93d0a7ef6bcdba872a83e0bc7ef2f33",
+      "bytes": 1018
+    },
+    {
+      "file": "data/license-configs.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "bytes": 3
+    },
+    {
+      "file": "deploy/xaucloud-apex.service",
+      "sha256": "50a41f95e3dc1f89391c7c64a790047c628912a4d61e5577262deaeb02db4956",
+      "bytes": 271
+    },
+    {
+      "file": "docs/STRATEGY_SPEC.md",
+      "sha256": "e05527bd880a124ed9aac854d22c0a5f70b49ffa3b9f07822d03118d45aa4eac",
+      "bytes": 29450
+    },
+    {
+      "file": "ea/XauCloud-Apex.mq5",
+      "sha256": "1301096c357d7f94e50bb6166ca8d8ccbc5a66a1c1995b56e5942586aea1096c",
+      "bytes": 37011
+    },
+    {
+      "file": "ea/archive/XauCloud-Apex-v2.2.0.ex5",
+      "sha256": "f8cd4db0cc8d7674605e081c5478e5f7b303426a5cd46ed8ee85ffa38f9afbe1",
+      "bytes": 58082
+    },
+    {
+      "file": "ea/archive/XauCloud-Apex-v2.2.0.mq5",
+      "sha256": "fe2cb76d78867db4587339ae12d5be69662b22073344a867c02b9713a6e8f60c",
+      "bytes": 18492
+    },
+    {
+      "file": "ea/archive/XauCloud-Apex-v3.1.1.mq5",
+      "sha256": "c4ef997f9d12cce1a59a6093b628765105c35723d5246de19c6483fa121d2635",
+      "bytes": 27525
+    },
+    {
+      "file": "ea/archive/XauCloud-Apex-v3.4.1.mq5",
+      "sha256": "ebfadcd5329b30bfd43475d2dc710d7501bdb0ba8b510fd23d73de663b2acbcd",
+      "bytes": 31372
+    },
+    {
+      "file": "package.json",
+      "sha256": "6fbfa35a2ff3b84c4ae1b68eff80af4bd680788e49e4c51697016da9c29d9c11",
+      "bytes": 206
+    },
+    {
+      "file": "public/index.html",
+      "sha256": "f233bb46093f41658d1572bbecfa073bed5a87bf540be1ed189365be3d84bae1",
+      "bytes": 61572
+    },
+    {
+      "file": "server.mjs",
+      "sha256": "0daaa62bdcae230ef8fbe6c97c268210a298ca02cad78ff35c60c04c1cfe6f10",
+      "bytes": 27914
+    },
+    {
+      "file": "tests/ea_static.test.mjs",
+      "sha256": "3d2bf80c86a5099f5a5f8d14e7a8b405e0a3246782c44cb8f3f5ad64dae02404",
+      "bytes": 6255
+    },
+    {
+      "file": "tests/ratchet.test.mjs",
+      "sha256": "16f9eab1afff68f4563d341b3343bf316c7b3e28dd8c4aa818e82f36fbac29fd",
+      "bytes": 20652
+    },
+    {
+      "file": "tests/server.test.mjs",
+      "sha256": "71ad93aa9bf16fcb927d8861046b072f70dc28aacce5790dad9dd2a5c0db0ad9",
+      "bytes": 18545
+    }
+  ]
+}

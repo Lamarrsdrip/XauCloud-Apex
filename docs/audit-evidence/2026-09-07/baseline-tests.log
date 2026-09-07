@@ -1,0 +1,108 @@
+✔ EA uses canonical XauCloud routes with one normalized license value (9.400019ms)
+✔ cloud failure explicitly preserves local trading state (0.781965ms)
+✔ tester stays independent (0.732373ms)
+✔ active campaign management occurs before armed gate (1.023719ms)
+✔ Config struct carries all six basket profit-exit fields (1.061475ms)
+✔ ApplyRemoteConfig() parses all six fields from the backend JSON response into C.* (2.280458ms)
+✔ Start() computes the hard basket TP target from C.normalTargetProfitPct, not the local Input (0.6815ms)
+✔ Manage() ratchet block reads C.profitRatchetEnabled / C.ratchet* exclusively, never the Inputs (2.871578ms)
+✔ InpNormalTakeProfitPct appears exactly twice in the whole file: the input declaration and the Defaults() seed -- every runtime consumer (Start(), both OnTimer() restart-recovery targetEq recomputations) uses C.normalTargetProfitPct instead (2.695682ms)
+✔ InpNormalTakeProfitPct and the five InpRatchet* inputs are still declared (compat) and seed Defaults() only (1.5835ms)
+✔ SaveCloudCache/LoadCloudCache round-trip the ratchet config so a restart before the first fresh poll keeps the dashboard-saved ratchet, not the compiled default (2.923349ms)
+✔ exit ordering: the ratchet check runs before the Basket TP check, so a tick where both would fire is decided deterministically (ratchet wins, matching "protects profit and exits" semantics) (28.220563ms)
+✔ server.mjs config schema uses the exact same six field names the EA parses (179.717406ms)
+✔ below trigger: $1,799 peak on a $1,000 campaign (179.9%) does not activate the ratchet (30.204875ms)
+✔ exactly at trigger: $1,800 peak = 180% -> floor is $1,000 (100%), but does NOT close at $1,800 current (0.703103ms)
+✔ peak continues to $2,800 (280%): floor becomes $2,000 (200%) (0.611394ms)
+✔ retrace from $2,800 peak down to exactly $2,000 current: closes the whole basket (16.240499ms)
+✔ retrace from $2,800 peak to $2,200 current (still above the $2,000 floor): stays open (6.683115ms)
+✔ peak $3,800 (380%) -> floor $3,000 (300%) (1.030122ms)
+✔ peak $4,800 (480%) -> floor $4,000 (400%) (27.00342ms)
+✔ ratchet only ratchets forward: floor computed from peak, not current, and never decreases as current retraces short of the floor (2.581551ms)
+✔ disabled ratchet never activates regardless of peak (3.889965ms)
+✔ custom ladder: trigger 50%, lock 25%, step 50%, lockStep 25% (Strategy Tester config D shape) (16.394261ms)
+✔ C: +179% peak -> no protected floor (3.179656ms)
+✔ C: +180% peak -> +100% floor (0.385814ms)
+✔ C: +279% peak -> still +100% (has not reached the next step yet) (0.701421ms)
+✔ C: +280% peak -> +200% floor (0.332801ms)
+✔ C: +380% peak -> +300% floor (0.26016ms)
+✔ C: +480% peak -> +400% floor (0.252406ms)
+✔ A: Basket TP = 0 -> never closes on the hard target, at any profit level (0.353321ms)
+✔ B: Basket TP = 500% does not close at +499% campaign profit (0.237121ms)
+✔ B: Basket TP = 500% closes at exactly +500% campaign profit (0.455552ms)
+✔ E: Basket TP 500% + ratchet enabled -- peak +380% (protects +300%), retrace to +300% closes by RATCHET, not Basket TP (0.546139ms)
+✔ F: Basket TP 500% + ratchet enabled -- profit rises straight through to +500% closes by BASKET_TP, not ratchet (0.314938ms)
+✔ E/F: neither setting disables the other -- ratchet still protects profit even with a Basket TP configured above the current ratchet floor (0.397367ms)
+✔ H: restart preserves the intended ratchet floor because it is a pure function of persisted cycleStart+peak+config, not separately stored state (14.369348ms)
+✔ TP 0 disables the hard target (Start() computes targetEq=0, so the check never fires) (0.427311ms)
+✔ TP 50% on a $1,000 campaign targets $1,500 balance ($500 profit) (0.272845ms)
+✔ TP 100% on a $1,000 campaign targets $2,000 balance ($1,000 profit) (0.636843ms)
+✔ TP 200% on a $1,000 campaign targets $3,000 balance ($2,000 profit) (0.387308ms)
+✔ fixed SL 10: BUY @4700 -> 4690, SELL @4700 -> 4710 (1.068301ms)
+✔ fixed SL 5: BUY @4700 -> 4695, SELL @4700 -> 4705 (0.377258ms)
+✔ fixed SL 0 means no broker SL (returns the no-SL sentinel 0) (0.578307ms)
+✔ v3.4 default fixed SL is 30: BUY @4700 -> 4670, SELL @4700 -> 4730 (0.446884ms)
+✔ L1 (master, layers<=0) uses the L1 margin tier (0.629416ms)
+✔ L2 (first add, layers==1) uses the L2 margin tier (0.369629ms)
+✔ L3 and every subsequent add (layers>=2) uses the L3+ margin tier (0.617262ms)
+✔ break-even does not arm below the +50% whole-basket trigger (0.477903ms)
+✔ break-even arms at exactly +50% whole-basket campaign profit (1.011808ms)
+✔ break-even arms above +50% too (e.g. skipped straight to +75% on a fast-moving campaign) (7.263078ms)
+✔ break-even never re-arms once already active, even if profit is still above trigger (one-way, cannot widen back) (28.14249ms)
+✔ break-even is disabled entirely when masterBreakEvenEnabled is false, regardless of profit (13.803493ms)
+✔ break-even SL target is the campaign's own entry price, not an offset (true breakeven, zero risk on the master leg) (1.291636ms)
+✔ BUY example from spec: entry 4700, SL 4670 (30 XAU dist), 40% = 12 -> price at 4688 or lower arms the exit (1.167568ms)
+✔ SELL mirrors: entry 4700, SL 4730 (30 XAU dist), price at 4712 or higher arms the exit (0.569846ms)
+✔ at 39.99% adverse: does NOT arm (spec: "At 39.99% adverse: do NOT arm") (0.647166ms)
+✔ at exactly 40% adverse: arms (spec: "At 40% or more: arm") (0.85782ms)
+✔ QA case A: goes 40% adverse, then back to entry -> closes the whole basket as recovery exit (0.606488ms)
+✔ QA case B: never reaches 40% adverse -> recovery must never trigger even if price later returns to entry (0.636025ms)
+✔ QA case D: reaches deep profit without ever suffering 40% adverse -> never misclassified as damaged (armed stays false) (0.340297ms)
+✔ QA case E: armed earlier, then setup recovers to entry -> closes as recovery exit even though price merely came back (not a profit exit) (0.250337ms)
+✔ 70% adverse then recovery to entry also closes (deeper adverse excursions still arm and still close on recovery) (0.41867ms)
+✔ recovery exit disabled entirely: never arms or closes regardless of adverse move or recovery (0.477958ms)
+✔ original SL distance is fixed at campaign start and is NOT recalculated from a later break-even-moved SL (3.493489ms)
+✔ health (590.231451ms)
+✔ demo/live-style heartbeat authenticates by license in JSON and becomes connected (180.775971ms)
+APEX_BRIDGE_STATUS_CHECK license=APEX-...9ABC bridgeOk=false heartbeatFound=false ageSec=n/a resolved=CONNECTED
+✔ site arm command is per-license and heartbeat receives revision (368.883716ms)
+✔ explicit admin-bound account rejects mismatch but blank account supports demo/live accounts (152.224233ms)
+✔ legacy config endpoint remains compatible (119.41575ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_SYNC_OK license=APEX-...0002 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=2
+✔ startup, create, config, disable, enable, and restart stay synchronized through the authenticated bridge (456.371321ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_STATUS_CHECK license=APEX-...0001 bridgeOk=true heartbeatFound=true ageSec=2 resolved=CONNECTED
+✔ A+B+C+D+E: active Apex license + fresh canonical XauCloud heartbeat -> dashboard resolves CONNECTED with live account data (148.119058ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_STATUS_CHECK license=APEX-...0001 bridgeOk=true heartbeatFound=true ageSec=90 resolved=STALE
+✔ H: stale canonical heartbeat (90s old) resolves STALE, not CONNECTED or DISCONNECTED (139.290419ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_STATUS_CHECK license=APEX-...0001 bridgeOk=true heartbeatFound=true ageSec=600 resolved=DISCONNECTED
+✔ I: expired/old canonical heartbeat (10 minutes old) resolves DISCONNECTED (146.778921ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_STATUS_CHECK license=APEX-...0001 bridgeOk=true heartbeatFound=false ageSec=n/a resolved=DISCONNECTED
+✔ J: no canonical heartbeat at all -> waitingForFirstContact, DISCONNECTED, dataAvailable=false (131.179356ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...0001 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_STATUS_CHECK license=APEX-...0001 bridgeOk=false heartbeatFound=false ageSec=n/a resolved=CONNECTED
+✔ bridge unreachable falls back to local lastSeen instead of breaking the dashboard (119.838312ms)
+APEX_BRIDGE_SYNC_OK license=APEX-...T-01 active=true accountBound=false config=true
+APEX_BRIDGE_STARTUP_OK licenses=1
+APEX_BRIDGE_STATUS_CHECK license=APEX-...T-01 bridgeOk=true heartbeatFound=false ageSec=n/a resolved=DISCONNECTED
+✔ G: Basket TP + Profit Ratchet settings saved from the dashboard propagate through session/config -> bridge config/upsert -> exactly what the EA would poll (158.244931ms)
+ℹ tests 76
+ℹ suites 0
+ℹ pass 76
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5114.121081

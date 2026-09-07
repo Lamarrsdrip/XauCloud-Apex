@@ -1,0 +1,22 @@
+[
+  {
+    "test": "canonical_events_dashboard",
+    "remoteEvents": 2,
+    "connected": "CONNECTED",
+    "campaign": null,
+    "history": [],
+    "lastAckRevision": 0
+  },
+  {
+    "test": "config_validation",
+    "stringFalseArms": true,
+    "unknownProtocolKeyRetained": "ACTIVE",
+    "trigger": 100,
+    "lock": 500
+  },
+  {
+    "test": "admin_profile_mismatch",
+    "licenseProfile": "UNLIMITED",
+    "executionConfigProfile": "NORMAL"
+  }
+]

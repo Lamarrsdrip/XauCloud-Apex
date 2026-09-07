@@ -1,0 +1,6 @@
+{"test":"current_price_revalidation","normalValid":1,"reclaimedExtremeValid":1,"farChaseValid":1,"score":95.3333}
+{"test":"pre_sweep_m3","valid":1}
+{"test":"same_closed_bar_adds","opened":2,"signalBarTime":9940}
+{"test":"minimum_volume_budget","budget":1.5,"volume":0.1,"requiredMargin":10}
+{"test":"failed_basket_close","remainingPositions":1,"campaignActive":0,"finishCalls":1}
+{"test":"ratchet_config_loosen","remainingPositions":1,"profitBelowPreviouslyEarnedFloor":50}

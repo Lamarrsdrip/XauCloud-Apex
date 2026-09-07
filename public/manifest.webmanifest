@@ -1,0 +1,18 @@
+{
+  "name": "XauCloud Apex",
+  "short_name": "Apex",
+  "description": "XauCloud Apex trading command center and execution notifications",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07090d",
+  "theme_color": "#d8b15a",
+  "icons": [
+    {
+      "src": "/apex-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

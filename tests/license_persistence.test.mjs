@@ -7,7 +7,7 @@ test('license/session persistence contract is deployment-safe', () => {
   const service = fs.readFileSync(new URL('../deploy/xaucloud-apex.service', import.meta.url), 'utf8');
 
   assert.match(server, /const LEGACY_DATA=path\.join\(__dirname,'data'\)/);
-  assert.match(server, /process\.env\.DATA_DIR\|\|LEGACY_DATA/);
+  assert.match(server, /resolvePersistentDataDir\(\{legacyDataDir:LEGACY_DATA,env:process\.env/);
   assert.match(server, /SESSION_TTL_DAYS/);
   assert.match(server, /async function migrateLegacyData/);
   assert.match(server, /licenseStatusFor\(licenses\[s\.lic\]\)/);

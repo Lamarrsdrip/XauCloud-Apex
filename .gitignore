@@ -6,3 +6,8 @@ data/state.json
 .test-data/
 build/
 *.bak
+data/push-subscriptions.json
+data/notification-preferences.json
+data/notification-outbox.json
+data/notification-delivery-state.json
+data/vapid.json

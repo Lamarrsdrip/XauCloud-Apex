@@ -192,6 +192,11 @@ button{cursor:pointer}
 .container{max-width:640px}
 .center-note{text-align:center;color:var(--text-faint);font-size:12.5px;margin-top:18px}
 </style>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#d8b15a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Apex">
 </head>
 <body>
 
@@ -760,6 +765,8 @@ function pageSettings(me){
     + '<div class="form-row"><button class="btn btn-primary" id="save-ratchet" '+(disabled?'disabled':'')+'>Save Profit Ratchet</button></div>'
     + '</div>';
 
+  html += '<div id="apex-notifications-card"></div>';
+
   html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Advanced Strategy</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
     + '<div id="advanced-body">'
     + '<div class="warn-banner">Advanced settings affect Apex setup recognition. Only change them if you understand the strategy.</div>'
@@ -1005,5 +1012,6 @@ function renderAdminLicenses(licenses){
 boot();
 })();
 </script>
+  <script src="/notifications-ui.js" defer></script>
 </body>
 </html>

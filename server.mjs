@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createNotificationEngine } from './notifications.mjs';
+import { resolvePersistentDataDir, preparePersistentRuntimeData } from './runtime-data.mjs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
@@ -43,12 +45,14 @@ export function assertProductionSecrets(env=process.env){
 const SESSION_TTL_DAYS=Math.max(1,Number(process.env.SESSION_TTL_DAYS||3650));
 const SESSION_TTL_MS=SESSION_TTL_DAYS*24*60*60*1000;
 const LEGACY_DATA=path.join(__dirname,'data');
-const DATA=path.resolve(process.env.DATA_DIR||LEGACY_DATA);
+const DATA=resolvePersistentDataDir({legacyDataDir:LEGACY_DATA,env:process.env,isProduction:process.env.NODE_ENV!=='test'});
 const CONFIG=path.join(DATA,'config.json');
 const LICENSE_CONFIGS=path.join(DATA,'license-configs.json');
 const EVENTS=path.join(DATA,'events.ndjson');
 const LICENSES=path.join(DATA,'licenses.json');
 const OUTBOX=path.join(DATA,'bridge-outbox.ndjson');
+const APEX_PUBLIC_ORIGIN=String(process.env.APEX_PUBLIC_ORIGIN||'https://apex.xaucloud.io').trim().replace(/\/+$/,'');
+const NOTIFICATIONS=createNotificationEngine({dataDir:DATA,origin:APEX_PUBLIC_ORIGIN,logger:console});
 const XAUCLOUD_BASE_URL=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
 const APEX_BRIDGE_SECRET=String(process.env.APEX_BRIDGE_SECRET||'');
 // APEX-AUDIT-021: every remote call is deadline-bounded.
@@ -214,6 +218,9 @@ async function migrateLegacyData(){
   }
 }
 async function ensure(){
+  // Production identity/config data is prepared in persistent storage BEFORE normal startup.
+  // Existing persistent licenses always win merge conflicts; no release can seed over them.
+  await preparePersistentRuntimeData({dataDir:DATA,legacyDataDir:LEGACY_DATA,logger:console});
   await migrateLegacyData();
   await fs.mkdir(DATA,{recursive:true});
   try{await fs.access(CONFIG)}catch{await atomic(CONFIG,DEFAULT)}
@@ -378,6 +385,30 @@ async function readBridgeStatusSafe(key){
   if(!bridgeConfigured())return {ok:false,reason:'BRIDGE_NOT_CONFIGURED',data:null};
   try{return {ok:true,reason:null,data:await readBridgeStatus(key)}}
   catch(e){return {ok:false,reason:String(e?.message||'BRIDGE_REQUEST_FAILED'),data:null}}
+}
+
+// Server-side notification reconciler. The website does NOT need to be open.
+// It consumes the same canonical XauCloud bridge events already produced by Apex 3.8.1.
+let notificationBridgeBusy=false;
+async function reconcileNotificationBridgeEvents(){
+  if(notificationBridgeBusy)return {checked:0,events:0,skipped:'already_running'};
+  notificationBridgeBusy=true;
+  let checked=0,events=0;
+  try{
+    const licenses=await readLicenses();
+    for(const [rawKey,lic] of Object.entries(licenses)){
+      if(licenseStatusFor(lic)!=='ACTIVE')continue;
+      const key=normalizeLicense(rawKey);
+      if(!key)continue;
+      checked++;
+      const bridge=await readBridgeStatusSafe(key);
+      if(!bridge.ok||!Array.isArray(bridge.data?.recentEvents))continue;
+      const r=await NOTIFICATIONS.reconcileCanonicalEvents(key,bridge.data.recentEvents)
+        .catch(e=>{console.error('APEX_PUSH_BRIDGE_EVENT_FAILED',String(e?.message||e));return {queued:0}});
+      events+=Number(r?.queued||0);
+    }
+    return {checked,events};
+  }finally{notificationBridgeBusy=false}
 }
 
 //======================= config persistence ===========================
@@ -555,6 +586,8 @@ async function appendEvent(e){
   const row={ts:new Date().toISOString(),...e};
   row.eventId=eventId(row);
   await fs.appendFile(EVENTS,JSON.stringify(row)+'\n');
+  // Push is best-effort and fully decoupled from trading/event acceptance.
+  NOTIFICATIONS.ingest(row).catch(e=>console.error('APEX_PUSH_INGEST_FAILED',String(e?.message||e)));
   return row;
 }
 async function allEvents(){
@@ -856,6 +889,15 @@ function genLicense(){
   const seg=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
   return `APEX-${seg()}-${seg()}-${seg()}`;
 }
+
+async function notificationSession(req,res){
+  const s=verifySession(cookies(req).apex_session);
+  if(!s){json(res,401,{error:'no_session'});return null}
+  const licenses=await readLicenses();
+  const status=licenseStatusFor(licenses[s.lic]);
+  if(status!=='ACTIVE'){clearSession(res);json(res,401,{error:'license_not_active',reason:status});return null}
+  return s;
+}
 function adminOk(req){
   const supplied=String(req.headers.authorization||'');
   const expected=`Bearer ${ADMIN_TOKEN}`;
@@ -981,6 +1023,38 @@ const server=http.createServer(async(req,res)=>{
         configHash:saved.configHash,delivery:saved.delivery?.queued?'QUEUED_FOR_BRIDGE':'DELIVERED'});
     }
 
+    // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
+    if(req.method==='GET'&&u.pathname==='/api/notifications/key'){
+      const s=await notificationSession(req,res);if(!s)return;
+      return json(res,200,{ok:true,publicKey:await NOTIFICATIONS.publicKey()});
+    }
+    if(req.method==='GET'&&u.pathname==='/api/notifications/status'){
+      const s=await notificationSession(req,res);if(!s)return;
+      const st=await NOTIFICATIONS.status();
+      return json(res,200,{ok:true,configured:st.configured,preferences:await NOTIFICATIONS.getPreferences(s.lic),devices:await NOTIFICATIONS.listDeviceSummary(s.lic)});
+    }
+    if(req.method==='POST'&&u.pathname==='/api/notifications/subscribe'){
+      const s=await notificationSession(req,res);if(!s)return;
+      const b=await body(req);
+      const result=await NOTIFICATIONS.subscribe(s.lic,b.subscription,{userAgent:req.headers['user-agent']||''});
+      return json(res,200,result);
+    }
+    if(req.method==='POST'&&u.pathname==='/api/notifications/unsubscribe'){
+      const s=await notificationSession(req,res);if(!s)return;
+      const b=await body(req);if(!b.endpoint)return json(res,400,{error:'endpoint_required'});
+      return json(res,200,await NOTIFICATIONS.unsubscribe(s.lic,String(b.endpoint)));
+    }
+    if(req.method==='POST'&&u.pathname==='/api/notifications/preferences'){
+      const s=await notificationSession(req,res);if(!s)return;
+      const b=await body(req);
+      return json(res,200,{ok:true,preferences:await NOTIFICATIONS.setPreferences(s.lic,b)});
+    }
+    if(req.method==='POST'&&u.pathname==='/api/notifications/test'){
+      const s=await notificationSession(req,res);if(!s)return;
+      if(!throttle('push-test',ip,5,60_000))return json(res,429,{error:'too_many_test_notifications'});
+      return json(res,200,await NOTIFICATIONS.sendTest(s.lic));
+    }
+
     // --- admin ---
     if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
       if(!adminOk(req)){
@@ -1070,6 +1144,14 @@ const server=http.createServer(async(req,res)=>{
         licenses:(await readLicenses()),configs:(await readLicenseConfigs())});
     }
 
+    if(req.method==='GET'&&['/push-sw.js','/manifest.webmanifest','/apex-icon.svg','/notifications-ui.js'].includes(u.pathname)){
+      const file=u.pathname.slice(1);
+      const types={'push-sw.js':'application/javascript; charset=utf-8','notifications-ui.js':'application/javascript; charset=utf-8','manifest.webmanifest':'application/manifest+json; charset=utf-8','apex-icon.svg':'image/svg+xml'};
+      const data=await fs.readFile(path.join(__dirname,'public',file));
+      res.writeHead(200,{'content-type':types[file]||'application/octet-stream','cache-control':file==='push-sw.js'?'no-cache':'public, max-age=300'});
+      return res.end(data);
+    }
+
     if(req.method==='GET'&&u.pathname==='/'){
       const html=await fs.readFile(path.join(__dirname,'public','index.html'));
       res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
@@ -1083,6 +1165,7 @@ const server=http.createServer(async(req,res)=>{
 });
 
 await ensure();
+await NOTIFICATIONS.ensure().catch(e=>console.error('APEX_PUSH_STARTUP_DEFERRED',String(e?.message||e)));
 if(process.env.NODE_ENV!=='test'){
   console.warn("APEX production secret startup check bypassed");
   // APEX-AUDIT-021: the local service comes up FIRST. Bridge reconciliation runs in the
@@ -1090,6 +1173,9 @@ if(process.env.NODE_ENV!=='test'){
   // it never blocks startup or a dashboard request.
   server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v${MANIFEST.version} listening on ${PORT}`));
   syncAllLicensesAtStartup().catch(e=>console.error('APEX_BRIDGE_STARTUP_DEFERRED',String(e?.message||e)));
+  NOTIFICATIONS.start({intervalMs:5000});
+  setTimeout(()=>{reconcileNotificationBridgeEvents().catch(e=>console.error('APEX_PUSH_BRIDGE_RECONCILE_FAILED',String(e?.message||e)))},1500).unref?.();
+  setInterval(()=>{reconcileNotificationBridgeEvents().catch(e=>console.error('APEX_PUSH_BRIDGE_RECONCILE_FAILED',String(e?.message||e)))},8000).unref?.();
   setInterval(()=>{drainOutbox().catch(e=>console.error('APEX_OUTBOX_DRAIN_FAILED',String(e?.message||e)))},15_000).unref?.();
 }
 export {server};

@@ -1,102 +1,177 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-const s=await fs.readFile(new URL('../ea/XauCloud-Apex.mq5',import.meta.url),'utf8');
-test('EA uses canonical XauCloud routes with one normalized license value',()=>{
- assert.match(s,/InpCloudURL="https:\/\/xaucloud\.io"/);
- assert.match(s,/\/api\/cloud\/monitor\/heartbeat/);
- assert.match(s,/\/api\/cloud\/apex\/config\?license_key=/);
- assert.match(s,/\/api\/cloud\/apex\/event/);
- assert.match(s,/StringToUpper\(s\);StringReplace\(s," ",""\)/);
- assert.doesNotMatch(s,/https:\/\/apex\.xaucloud\.io/);
- assert.doesNotMatch(s,/api\.apex\.xaucloud\.io/);
- assert.doesNotMatch(s,/InpEaToken/);
-});
-test('cloud failure explicitly preserves local trading state',()=>{
- assert.match(s,/communication failure does not alter C\.armed or trading state/);
- assert.match(s,/MONITOR\/CONTROL ONLY; trading uses last validated local config/);
-});
-test('tester stays independent',()=>assert.match(s,/if\(IsTester\(\)\)\{C\.armed=true;return true;\}/));
-test('active campaign management occurs before armed gate',()=>{
- const iManage=s.indexOf('Manage();return;}if(!C.armed)return;');
- assert.ok(iManage>0);
+
+const s = await fs.readFile(new URL('../ea/XauCloud-Apex.mq5', import.meta.url), 'utf8');
+
+function section(start, end) {
+  const a = s.indexOf(start);
+  assert.ok(a >= 0, `missing section start: ${start}`);
+  const b = end ? s.indexOf(end, a + start.length) : s.length;
+  assert.ok(b > a, `missing section end: ${end}`);
+  return s.slice(a, b);
+}
+
+test('EA uses the canonical XauCloud infrastructure bridge', () => {
+  assert.match(s, /InpCloudURL="https:\/\/xaucloud\.io"/);
+  assert.match(s, /\/api\/cloud\/monitor\/heartbeat/);
+  assert.match(s, /\/api\/cloud\/apex\/config\?license_key=/);
+  assert.match(s, /\/api\/cloud\/apex\/event/);
+  assert.match(s, /StringToUpper\(s\);StringReplace\(s," ",""\)/);
+  assert.doesNotMatch(s, /https:\/\/apex\.xaucloud\.io/);
+  assert.doesNotMatch(s, /api\.apex\.xaucloud\.io/);
+  assert.doesNotMatch(s, /InpEaToken/);
 });
 
-// ---------- Basket Take Profit + Profit Ratchet: prove the EA actually consumes the
-// remote/dashboard config values (C.*), not the locally-compiled EA Inputs (InpXxx).
-// A pure-JS mirror of the formula (tests/ratchet.test.mjs) can prove the MATH is right
-// while the real .mq5 silently reads a different variable -- these tests read the actual
-// source text to prove the wiring itself, which the math-only mirror cannot.
-const configFields=['normalTargetProfitPct','profitRatchetEnabled','ratchetTriggerPct','ratchetLockPct','ratchetStepPct','ratchetLockStepPct'];
-
-test('Config struct carries all six basket profit-exit fields',()=>{
- const structDecl=s.match(/struct Config\{[^}]*\};/)[0];
- for(const f of configFields)assert.ok(structDecl.includes(f),`Config struct missing ${f}`);
+test('transport failures preserve the last validated local trading config', () => {
+  assert.match(s, /transport failure never alters C\.armed/);
+  assert.match(s, /MONITOR\/CONTROL ONLY; trading uses last validated local config/);
 });
 
-test('ApplyRemoteConfig() parses all six fields from the backend JSON response into C.*',()=>{
- const body=s.slice(s.indexOf('void ApplyRemoteConfig'),s.indexOf('bool CloudSync()'));
- for(const f of configFields){
-   const re=new RegExp(`C\\.${f}=j[bd]\\(r,"${f}",C\\.${f}\\)`);
-   assert.match(body,re,`ApplyRemoteConfig does not parse ${f} into C.${f}`);
- }
+test('Strategy Tester stays independent from the remote arm', () => {
+  assert.match(s, /if\(IsTester\(\)\)\{C\.armed=true;return true;\}/);
 });
 
-test('Start() computes the hard basket TP target from C.normalTargetProfitPct, not the local Input',()=>{
- const body=s.slice(s.indexOf('void Start(Snap'),s.indexOf('void Finish('));
- assert.match(body,/C\.normalTargetProfitPct>0\?cycleStart\*\(1\.0\+C\.normalTargetProfitPct\/100\.0\)/);
- assert.doesNotMatch(body,/InpNormalTakeProfitPct/);
+test('active campaign management executes before the armed gate', () => {
+  const onTimer = section('void OnTimer()', null);
+  const iManage = onTimer.indexOf('Manage();');
+  const iArmed = onTimer.indexOf('if(!C.armed) return;');
+  assert.ok(iManage >= 0 && iArmed >= 0 && iManage < iArmed,
+    'Manage() must run before the new-exposure armed gate');
 });
 
-test('Manage() ratchet block reads C.profitRatchetEnabled / C.ratchet* exclusively, never the Inputs',()=>{
- const body=s.slice(s.indexOf('Default Apex percentage profit ratchet'),s.indexOf('if(targetEq>0&&campEq>=targetEq)'));
- assert.match(body,/C\.profitRatchetEnabled/);
- assert.match(body,/C\.ratchetTriggerPct/);
- assert.match(body,/C\.ratchetLockPct/);
- assert.match(body,/C\.ratchetStepPct/);
- assert.match(body,/C\.ratchetLockStepPct/);
- assert.doesNotMatch(body,/InpProfitRatchetEnabled|InpRatchetTriggerPct|InpRatchetLockPct|InpRatchetStepPct|InpRatchetLockStepPct/);
+const configFields = [
+  'normalTargetProfitPct',
+  'profitRatchetEnabled',
+  'ratchetTriggerPct',
+  'ratchetLockPct',
+  'ratchetStepPct',
+  'ratchetLockStepPct'
+];
+
+test('Config struct carries all six basket profit-exit fields', () => {
+  const m = s.match(/struct\s+Config\s*\{([\s\S]*?)\n\s*\};/);
+  assert.ok(m, 'Config struct not found');
+  for (const f of configFields) {
+    assert.ok(m[1].includes(f), `Config struct missing ${f}`);
+  }
 });
 
-test('InpNormalTakeProfitPct appears exactly twice in the whole file: the input declaration and the Defaults() seed -- every runtime consumer (Start(), both OnTimer() restart-recovery targetEq recomputations) uses C.normalTargetProfitPct instead',()=>{
- const count=(s.match(/InpNormalTakeProfitPct/g)||[]).length;
- assert.equal(count,2,`expected exactly 2 references (declaration + Defaults() seed), found ${count}`);
- const onTimerBody=s.slice(s.indexOf('void OnTimer()'));
- assert.doesNotMatch(onTimerBody,/InpNormalTakeProfitPct/);
- assert.match(onTimerBody,/C\.normalTargetProfitPct>0\?cycleStart\*\(1\.0\+C\.normalTargetProfitPct\/100\.0\)/);
+test('ConfigFromParsed consumes the six dashboard/backend profit-exit fields into staged config', () => {
+  const parser = section('bool ConfigFromParsed', 'bool LoadCloudCache');
+  for (const f of configFields) {
+    const fn = f === 'profitRatchetEnabled' ? 'CfgBool' : 'CfgNum';
+    assert.match(
+      parser,
+      new RegExp(`out\\.${f}\\s*=\\s*${fn}\\("${f}"`),
+      `ConfigFromParsed does not parse ${f}`
+    );
+  }
 });
 
-test('InpNormalTakeProfitPct and the five InpRatchet* inputs are still declared (compat) and seed Defaults() only',()=>{
- assert.match(s,/input double InpNormalTakeProfitPct=0\.0;/);
- assert.match(s,/input bool {3}InpProfitRatchetEnabled=true;/);
- const defaultsBody=s.slice(s.indexOf('void Defaults()'),s.indexOf('bool ConfigPoll()'));
- assert.match(defaultsBody,/C\.normalTargetProfitPct=InpNormalTakeProfitPct;/);
- assert.match(defaultsBody,/C\.profitRatchetEnabled=InpProfitRatchetEnabled;/);
- assert.match(defaultsBody,/C\.ratchetTriggerPct=InpRatchetTriggerPct;/);
- assert.match(defaultsBody,/C\.ratchetLockPct=InpRatchetLockPct;/);
- assert.match(defaultsBody,/C\.ratchetStepPct=InpRatchetStepPct;/);
- assert.match(defaultsBody,/C\.ratchetLockStepPct=InpRatchetLockStepPct;/);
+test('Start() computes NORMAL hard target from C.normalTargetProfitPct, not a compiled Input', () => {
+  const start = section('void Start(Snap', '//====================== add candidates');
+  assert.match(start, /C\.normalTargetProfitPct>0\?cycleStart\*\(1\.0\+C\.normalTargetProfitPct\/100\.0\)/);
+  assert.doesNotMatch(start, /InpNormalTakeProfitPct/);
 });
 
-test('SaveCloudCache/LoadCloudCache round-trip the ratchet config so a restart before the first fresh poll keeps the dashboard-saved ratchet, not the compiled default',()=>{
- const save=s.slice(s.indexOf('void SaveCloudCache()'),s.indexOf('bool LoadCloudCache()'));
- const load=s.slice(s.indexOf('bool LoadCloudCache()'),s.indexOf('string trim('));
- for(const key of ['RTE','RTT','RTL','RTS','RTK']){
-   assert.match(save,new RegExp(`CacheSet\\("${key}"`),`SaveCloudCache does not cache ${key}`);
-   assert.match(load,new RegExp(`CacheGet\\("${key}"`),`LoadCloudCache does not restore ${key}`);
- }
+test('restart position adoption also computes NORMAL hard target from C.normalTargetProfitPct', () => {
+  const rec = section('void ReconcileAgainstBroker()', '//====================== lifecycle');
+  assert.match(rec, /C\.normalTargetProfitPct>0\?cycleStart\*\(1\.0\+C\.normalTargetProfitPct\/100\.0\)/);
+  assert.doesNotMatch(rec, /InpNormalTakeProfitPct/);
 });
 
-test('exit ordering: the ratchet check runs before the Basket TP check, so a tick where both would fire is decided deterministically (ratchet wins, matching "protects profit and exits" semantics)',()=>{
- const iRatchet=s.indexOf('Default Apex percentage profit ratchet');
- const iTP=s.indexOf('if(targetEq>0&&campEq>=targetEq)');
- assert.ok(iRatchet>0&&iTP>0&&iRatchet<iTP);
+test('campaign ratchet uses the snapshotted Policy P.*, seeded from C.*, never compiled Inputs', () => {
+  const snap = section('void SnapshotPolicy()', '// APEX-AUDIT-028');
+  for (const f of ['profitRatchetEnabled','ratchetTriggerPct','ratchetLockPct','ratchetStepPct','ratchetLockStepPct']) {
+    assert.match(snap, new RegExp(`P\\.${f}\\s*=\\s*C\\.${f}`), `SnapshotPolicy does not seed ${f}`);
+  }
+
+  const manage = section('void Manage()', '//====================== restart reconciliation');
+  for (const f of ['profitRatchetEnabled','ratchetTriggerPct','ratchetLockPct','ratchetStepPct','ratchetLockStepPct']) {
+    assert.match(manage, new RegExp(`P\\.${f}`), `Manage does not use P.${f}`);
+  }
+  assert.doesNotMatch(
+    manage,
+    /InpProfitRatchetEnabled|InpRatchetTriggerPct|InpRatchetLockPct|InpRatchetStepPct|InpRatchetLockStepPct/
+  );
 });
 
-// server.mjs (Apex backend) is the other end of the wire: the field names it accepts/serves via
-// clean()/DEFAULT must exactly match what the EA parses above, or the dashboard could silently
-// save a field the EA never asked for (or vice versa).
-test('server.mjs config schema uses the exact same six field names the EA parses',async()=>{
- const server=await fs.readFile(new URL('../server.mjs',import.meta.url),'utf8');
- for(const f of configFields)assert.ok(server.includes(f),`server.mjs DEFAULT/clean() missing ${f}`);
+test('compiled profit-exit Inputs remain compatibility seeds only', () => {
+  assert.match(s, /input double\s+InpNormalTakeProfitPct=0\.0;/);
+  assert.match(s, /input bool\s+InpProfitRatchetEnabled=true;/);
+
+  const defaults = section('void Defaults()', 'string ConfigCanonical');
+  assert.match(defaults, /C\.normalTargetProfitPct=InpNormalTakeProfitPct;/);
+  assert.match(defaults, /C\.profitRatchetEnabled=InpProfitRatchetEnabled;/);
+  assert.match(defaults, /C\.ratchetTriggerPct=InpRatchetTriggerPct;/);
+  assert.match(defaults, /C\.ratchetLockPct=InpRatchetLockPct;/);
+  assert.match(defaults, /C\.ratchetStepPct=InpRatchetStepPct;/);
+  assert.match(defaults, /C\.ratchetLockStepPct=InpRatchetLockStepPct;/);
+
+  assert.equal((s.match(/InpNormalTakeProfitPct/g) || []).length, 2);
+  assert.equal((s.match(/InpProfitRatchetEnabled/g) || []).length, 2);
+  assert.equal((s.match(/InpRatchetTriggerPct/g) || []).length, 2);
+  assert.equal((s.match(/InpRatchetLockPct/g) || []).length, 2);
+  assert.equal((s.match(/InpRatchetStepPct/g) || []).length, 2);
+  assert.equal((s.match(/InpRatchetLockStepPct/g) || []).length, 2);
 });
+
+test('cloud cache round-trips the full config object atomically', () => {
+  const json = section('string ConfigToJson', '// APEX-AUDIT-016: cache EVERYTHING');
+  for (const f of configFields) {
+    assert.ok(json.includes(f), `ConfigToJson missing ${f}`);
+  }
+
+  const save = section('void SaveCloudCache()', '// Reads a validated config object');
+  assert.match(save, /ConfigToJson\(C\)/);
+  assert.match(save, /WriteFileAtomic\(ConfigCacheFile\(\),ConfigToJson\(C\)\)/);
+
+  const load = section('bool LoadCloudCache()', '//====================== policy snapshot');
+  assert.match(load, /ConfigFromParsed\(staged\)/);
+});
+
+test('ratchet exit check runs before hard Basket TP check', () => {
+  const manage = section('void Manage()', '//====================== restart reconciliation');
+  const iRatchet = manage.indexOf('P.profitRatchetEnabled');
+  const iTP = manage.indexOf('if(targetEq>0&&campEq>=targetEq)');
+  assert.ok(iRatchet >= 0 && iTP >= 0 && iRatchet < iTP,
+    'ratchet must be evaluated before hard Basket TP');
+});
+
+test('NORMAL is the default profile and its L1/L2/L3 ladder comes from runtime C.* config', () => {
+  const defaults = section('void Defaults()', 'string ConfigCanonical');
+  assert.match(defaults, /C\.accountProfile="NORMAL"/);
+
+  const layer = section('double LayerMarginPct()', '// A rejection that is purely about SIZE');
+  assert.match(layer, /C\.normalL1MarginPct/);
+  assert.match(layer, /C\.normalL2MarginPct/);
+  assert.match(layer, /C\.normalL3PlusMarginPct/);
+});
+
+test('200-lot regression fix applies percentage to executable capacity and broker-preflights the final volume', () => {
+  const compute = section('SizingDecision ComputeVolume', 'string SizingJson');
+  assert.match(compute, /d\.capacityByBroker=LargestVolumePassingCheck/);
+  assert.match(compute, /d\.byCapacityPct=FloorToStep\(d\.capacity\*clamp\(pct,.1,100\)\/100\.0\)/);
+  assert.match(compute, /d\.requested=MathMin\(d\.byCapacityPct,d\.byMarginBudget\)/);
+  assert.match(compute, /BrokerAcceptsVolume\(dir,v,price,sl,d\.checkRetcode\)/);
+
+  const broker = section('bool BrokerAcceptsVolume', '// Largest grid volume');
+  assert.match(broker, /OrderCheck\(rq,cr\)/);
+});
+
+test('failed/unconfirmed broker submissions cannot increment Apex layer state', () => {
+  const open = section('bool OpenLayer(', '//====================== closing');
+  const iReject = open.indexOf('if(e.cls!=EXEC_FILLED&&e.cls!=EXEC_PARTIAL)');
+  const iLayers = open.indexOf('layers++;');
+  assert.ok(iReject >= 0 && iLayers > iReject,
+    'layers++ must occur only after confirmed/partial broker fill');
+});
+
+test('server config schema includes the same six basket profit-exit fields', async () => {
+  const server = await fs.readFile(new URL('../server.mjs', import.meta.url), 'utf8');
+  for (const f of configFields) {
+    assert.ok(server.includes(f), `server.mjs missing ${f}`);
+  }
+});
+

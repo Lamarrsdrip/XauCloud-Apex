@@ -40,8 +40,10 @@ export function assertProductionSecrets(env=process.env){
   return [];
 }
 
-const SESSION_TTL_MS=30*24*60*60*1000;
-const DATA=path.resolve(process.env.DATA_DIR||path.join(__dirname,'data'));
+const SESSION_TTL_DAYS=Math.max(1,Number(process.env.SESSION_TTL_DAYS||3650));
+const SESSION_TTL_MS=SESSION_TTL_DAYS*24*60*60*1000;
+const LEGACY_DATA=path.join(__dirname,'data');
+const DATA=path.resolve(process.env.DATA_DIR||LEGACY_DATA);
 const CONFIG=path.join(DATA,'config.json');
 const LICENSE_CONFIGS=path.join(DATA,'license-configs.json');
 const EVENTS=path.join(DATA,'events.ndjson');
@@ -196,7 +198,23 @@ async function readJson(file,fallback){
   try{return JSON.parse(raw)}
   catch{throw Object.assign(new Error('STORAGE_CORRUPT:'+path.basename(file)),{httpStatus:500})}
 }
+async function migrateLegacyData(){
+  if(path.resolve(DATA)===path.resolve(LEGACY_DATA))return;
+  await fs.mkdir(DATA,{recursive:true});
+  const names=['config.json','license-configs.json','licenses.json','events.ndjson','bridge-outbox.ndjson'];
+  for(const name of names){
+    const src=path.join(LEGACY_DATA,name),dst=path.join(DATA,name);
+    try{await fs.access(dst);continue}catch{}
+    try{
+      await fs.copyFile(src,dst,fsSync.constants.COPYFILE_EXCL);
+      console.log(`APEX_DATA_MIGRATED ${name} -> ${DATA}`);
+    }catch(e){
+      if(e?.code!=='ENOENT'&&e?.code!=='EEXIST')throw e;
+    }
+  }
+}
 async function ensure(){
+  await migrateLegacyData();
   await fs.mkdir(DATA,{recursive:true});
   try{await fs.access(CONFIG)}catch{await atomic(CONFIG,DEFAULT)}
   try{await fs.access(LICENSES)}catch{await atomic(LICENSES,{})}
@@ -209,10 +227,11 @@ async function withLock(key,fn){
   const prev=locks.get(key)||Promise.resolve();
   let release;
   const next=new Promise(r=>{release=r});
-  locks.set(key,prev.then(()=>next));
+  const chain=prev.then(()=>next);
+  locks.set(key,chain);
   await prev;
   try{return await fn()}
-  finally{release();if(locks.get(key)===next)locks.delete(key)}
+  finally{release();if(locks.get(key)===chain)locks.delete(key)}
 }
 
 async function body(req){
@@ -937,7 +956,16 @@ const server=http.createServer(async(req,res)=>{
     }
     if(req.method==='POST'&&u.pathname==='/api/auth/logout'){clearSession(res);return json(res,200,{ok:true})}
     if(req.method==='GET'&&u.pathname==='/api/auth/me'){
-      const s=verifySession(cookies(req).apex_session);if(!s)return json(res,401,{error:'no_session'});
+      const s=verifySession(cookies(req).apex_session);
+      if(!s)return json(res,401,{error:'no_session'});
+      // The license itself IS the login identity. Keep the session across code deploys,
+      // but revoke it immediately if that license is actually disabled/expired/deleted.
+      const licenses=await readLicenses();
+      const status=licenseStatusFor(licenses[s.lic]);
+      if(status!=='ACTIVE'){
+        clearSession(res);
+        return json(res,401,{error:'license_not_active',reason:status});
+      }
       return json(res,200,await buildMe(s.lic));
     }
     if(req.method==='POST'&&u.pathname==='/api/session/config'){
@@ -955,12 +983,18 @@ const server=http.createServer(async(req,res)=>{
 
     // --- admin ---
     if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
-      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      if(!adminOk(req)){
+        if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});
+        return json(res,401,{error:'unauthorized'});
+      }
       const ls=await readLicenses();
       return json(res,200,{licenses:Object.entries(ls).map(([key,v])=>({key,...v,status:licenseStatusFor(v)}))});
     }
     if(req.method==='POST'&&u.pathname==='/api/admin/licenses'){
-      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      if(!adminOk(req)){
+        if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});
+        return json(res,401,{error:'unauthorized'});
+      }
       const b=await body(req),key=normalizeLicense(b.key)||genLicense();
       const result=await withLock('lic:'+key,async()=>{
         const ls=await readLicenses(),old=ls[key]||{},now=new Date().toISOString();
@@ -1002,7 +1036,10 @@ const server=http.createServer(async(req,res)=>{
         commandRevision:Number(ls[key].commandRevision||0)});
     }
     if(req.method==='GET'&&u.pathname==='/api/admin/bridge/status'){
-      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      if(!adminOk(req)){
+        if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});
+        return json(res,401,{error:'unauthorized'});
+      }
       const key=normalizeLicense(u.searchParams.get('license')||'');
       if(!key)return json(res,400,{ok:false,error:'license_required'});
       const licenses=await readLicenses(),lic=licenses[key];
@@ -1016,11 +1053,17 @@ const server=http.createServer(async(req,res)=>{
         outboxPending:(await outboxRead()).length,sync:bridgeSyncState});
     }
     if(req.method==='POST'&&u.pathname==='/api/admin/bridge/drain'){
-      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      if(!adminOk(req)){
+        if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});
+        return json(res,401,{error:'unauthorized'});
+      }
       return json(res,200,{ok:true,...(await drainOutbox())});
     }
     if(req.method==='GET'&&u.pathname==='/api/admin/status'){
-      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      if(!adminOk(req)){
+        if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});
+        return json(res,401,{error:'unauthorized'});
+      }
       return json(res,200,{ok:true,manifest:MANIFEST,sync:bridgeSyncState,
         outboxPending:(await outboxRead()).length,
         secretProblems:secretProblems(),

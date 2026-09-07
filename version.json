@@ -1,0 +1,16 @@
+{
+  "product": "XauCloud Apex",
+  "version": "3.8.0",
+  "buildId": "3.8.0",
+  "eaVersion": "XauCloud-Apex_v3.8.0-AstraFix",
+  "eaFile": "ea/XauCloud-Apex-v3.8.0.mq5",
+  "configSchema": 2,
+  "stateSchema": 3,
+  "webRequestOrigin": "https://xaucloud.io",
+  "eaRoutes": [
+    "POST /api/cloud/monitor/heartbeat",
+    "GET  /api/cloud/apex/config",
+    "POST /api/cloud/apex/event"
+  ],
+  "notes": "Single source of truth for version/build metadata (APEX-AUDIT-025). server.mjs /health, the dashboard footer and the README all read this file."
+}

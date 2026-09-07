@@ -1,0 +1,160 @@
+// Minimal MT5 shim so the REAL MQL5 source text of the sizing / entry-gate functions
+// can be compiled and executed against a scripted mock broker. Nothing here is a
+// re-implementation of Apex logic -- the functions under test are extracted verbatim
+// from the .mq5 files by tests/native/extract.mjs.
+#pragma once
+#include <string>
+#include <cstdio>
+#include <cstring>
+#include <cmath>
+#include <cstdint>
+#include <algorithm>
+#include <vector>
+
+typedef unsigned int   uint;
+typedef unsigned long  ulong;          // 64-bit on LP64, matches MQL5 ulong
+typedef unsigned short ushort;
+typedef long           datetime;       // MQL5 datetime is a 64-bit integer
+typedef std::string    string;
+
+// ---- enums -------------------------------------------------------------
+enum ENUM_ORDER_TYPE { ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1 };
+enum ENUM_TRADE_REQUEST_ACTIONS { TRADE_ACTION_DEAL=1 };
+enum ENUM_ORDER_TYPE_FILLING { ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1 };
+enum ENUM_SYMBOL_INFO_DOUBLE { SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_MAX, SYMBOL_VOLUME_STEP,
+                               SYMBOL_POINT, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_ASK, SYMBOL_BID };
+enum ENUM_SYMBOL_INFO_INTEGER { SYMBOL_DIGITS, SYMBOL_TRADE_MODE };
+enum ENUM_ACCOUNT_INFO_DOUBLE { ACCOUNT_MARGIN_FREE, ACCOUNT_EQUITY, ACCOUNT_MARGIN,
+                                ACCOUNT_BALANCE, ACCOUNT_MARGIN_LEVEL };
+enum ENUM_ACCOUNT_INFO_INTEGER { ACCOUNT_LOGIN, ACCOUNT_LEVERAGE, ACCOUNT_MARGIN_MODE, ACCOUNT_TRADE_MODE };
+enum ENUM_TIMEFRAMES { PERIOD_M1=1, PERIOD_M3=3, PERIOD_M5=5 };
+#define TRADE_RETCODE_DONE            10009
+#define TRADE_RETCODE_PLACED          10008
+#define TRADE_RETCODE_DONE_PARTIAL    10010
+#define TRADE_RETCODE_NO_MONEY        10019
+#define TRADE_RETCODE_INVALID_VOLUME  10014
+#define TRADE_RETCODE_LIMIT_VOLUME    10018
+#define DBL_MAX 1.7976931348623158e+308
+
+// ---- structs -----------------------------------------------------------
+struct MqlTick { datetime time; double bid, ask, last; ulong volume; long time_msc; uint flags; };
+struct MqlRates { datetime time; double open, high, low, close; long tick_volume; int spread; long real_volume; };
+struct MqlTradeRequest { int action; ulong magic; std::string symbol; double volume, price, sl, tp;
+                         int type; int type_filling; int deviation; };
+struct MqlTradeCheckResult { uint retcode; double balance, equity, profit, margin, margin_free, margin_level;
+                             std::string comment; };
+template<class T> void ZeroMemory(T &x){ memset((void*)&x,0,sizeof(T)); }
+inline void ZeroMemory(MqlTradeRequest &r){ r.action=0;r.magic=0;r.symbol.clear();r.volume=r.price=r.sl=r.tp=0;
+                                            r.type=0;r.type_filling=0;r.deviation=0; }
+inline void ZeroMemory(MqlTradeCheckResult &r){ r.retcode=0;r.balance=r.equity=r.profit=r.margin=r.margin_free=r.margin_level=0;r.comment.clear(); }
+
+// ---- scripted mock broker ---------------------------------------------
+struct MockBroker {
+  double volMin=0.01, volMax=200.0, volStep=0.01;
+  int    digits=3;
+  double bid=4401.0, ask=4401.10, point=0.001;
+  long   quoteMsc=0;
+  double freeMargin=1000.0, equity=1000.0, usedMargin=0.0, balance=1000.0;
+  long  leverage=500, login=476885386;
+  // What OrderCalcMargin/OrderCheck (the CLIENT model) reports per lot.
+  double marginPerLot=0.0;
+  // What the broker SERVER actually charges per lot. <0 means "same as the client model".
+  // A positive value with marginPerLot=0 models the Exness-style divergence where the
+  // terminal believes gold is margin-free but the server still charges for it.
+  double serverMarginPerLot=-1.0;
+  // OrderCheck fidelity: does the client-side check see the tiered requirement?
+  bool   orderCheckSeesServerTruth=false;
+  double basketVolume=0.0;
+  datetime now=1000000;
+  datetime lastClosedM1=1000000;
+  std::vector<MqlRates> m1;
+  // execution log
+  std::vector<double> submitted;
+  std::vector<uint>   retcodes;
+  // client-side margin (what OrderCalcMargin returns)
+  double clientMargin(double vol) const { return marginPerLot*vol; }
+  // server-side margin (what the broker really charges)
+  double serverMargin(double vol) const {
+    return (serverMarginPerLot>=0 ? serverMarginPerLot : marginPerLot) * vol;
+  }
+};
+extern MockBroker BRK;
+
+// ---- MT5 API -----------------------------------------------------------
+#define _Symbol std::string("XAUUSDm")
+#define _Point  BRK.point
+
+inline double SymbolInfoDouble(const std::string&, ENUM_SYMBOL_INFO_DOUBLE p){
+  switch(p){ case SYMBOL_VOLUME_MIN: return BRK.volMin; case SYMBOL_VOLUME_MAX: return BRK.volMax;
+             case SYMBOL_VOLUME_STEP: return BRK.volStep; case SYMBOL_POINT: return BRK.point;
+             case SYMBOL_TRADE_CONTRACT_SIZE: return 100.0;
+             case SYMBOL_ASK: return BRK.ask; case SYMBOL_BID: return BRK.bid; }
+  return 0;
+}
+inline long SymbolInfoInteger(const std::string&, ENUM_SYMBOL_INFO_INTEGER p){
+  if(p==SYMBOL_DIGITS) return BRK.digits;
+  return 0;
+}
+inline bool SymbolInfoTick(const std::string&, MqlTick &t){
+  t.bid=BRK.bid; t.ask=BRK.ask; t.time=BRK.now; t.time_msc=BRK.quoteMsc?BRK.quoteMsc:(long)BRK.now*1000;
+  t.last=BRK.bid; t.volume=1; t.flags=0;
+  return BRK.bid>0 && BRK.ask>0;
+}
+inline double AccountInfoDouble(ENUM_ACCOUNT_INFO_DOUBLE p){
+  switch(p){ case ACCOUNT_MARGIN_FREE: return BRK.freeMargin; case ACCOUNT_EQUITY: return BRK.equity;
+             case ACCOUNT_MARGIN: return BRK.usedMargin; case ACCOUNT_BALANCE: return BRK.balance;
+             case ACCOUNT_MARGIN_LEVEL: return BRK.usedMargin>0?BRK.equity/BRK.usedMargin*100.0:0; }
+  return 0;
+}
+inline long AccountInfoInteger(ENUM_ACCOUNT_INFO_INTEGER p){
+  if(p==ACCOUNT_LEVERAGE) return BRK.leverage;
+  if(p==ACCOUNT_LOGIN) return BRK.login;
+  return 0;
+}
+inline bool OrderCalcMargin(ENUM_ORDER_TYPE, const std::string&, double vol, double, double &m){
+  m = BRK.clientMargin(vol);
+  return true;
+}
+inline bool OrderCheck(const MqlTradeRequest &rq, MqlTradeCheckResult &cr){
+  ZeroMemory(cr);
+  if(rq.volume < BRK.volMin - 1e-9 || rq.volume > BRK.volMax + 1e-9){ cr.retcode=TRADE_RETCODE_INVALID_VOLUME; return false; }
+  double need = BRK.orderCheckSeesServerTruth ? BRK.serverMargin(rq.volume) : BRK.clientMargin(rq.volume);
+  cr.margin=need; cr.margin_free=BRK.freeMargin-need;
+  if(need > BRK.freeMargin + 1e-9){ cr.retcode=TRADE_RETCODE_NO_MONEY; return false; }
+  cr.retcode=TRADE_RETCODE_DONE;
+  return true;
+}
+inline datetime TimeCurrent(){ return BRK.now; }
+inline ulong GetTickCount64(){ return (ulong)BRK.now*1000; }
+inline datetime iTime(const std::string&, ENUM_TIMEFRAMES, int shift){ return shift==1?BRK.lastClosedM1:BRK.lastClosedM1-60; }
+inline double NormalizeDouble(double v,int d){ double f=std::pow(10.0,d); return std::floor(v*f+0.5)/f; }
+inline double MathFloor(double v){ return std::floor(v); }
+inline double MathRound(double v){ return std::floor(v+0.5); }
+inline double MathMax(double a,double b){ return a>b?a:b; }
+inline double MathMin(double a,double b){ return a<b?a:b; }
+inline double MathAbs(double a){ return a<0?-a:a; }
+inline double MathPow(double a,double b){ return std::pow(a,b); }
+inline int    MathRand(){ return 42; }
+inline void   Print(const std::string&){}
+template<typename... A> inline void PrintFormat(const char*, A...){}
+template<typename... A> inline std::string StringFormat(const char *fmt, A... a){
+  char buf[4096]; snprintf(buf,sizeof(buf),fmt,a...); return std::string(buf);
+}
+inline std::string StringFormat(const char *fmt){ return std::string(fmt); }
+inline std::string BoolJson(bool v){ return v?"true":"false"; }
+inline double clamp(double x,double a,double b){ return MathMax(a,MathMin(b,x)); }
+
+// ---- Apex globals the extracted functions reference ---------------------
+struct ApexConfig { std::string accountProfile="NORMAL";
+                    double marginReservePct=0, maxBasketLots=0, minMarginLevelPct=0,
+                           normalL1MarginPct=15, normalL2MarginPct=50, normalL3PlusMarginPct=100,
+                           baseMarginPct=100, layerMultiplier=2; };
+extern ApexConfig C;
+extern long InpMagic;
+extern int   InpMaxQuoteAgeMs;
+extern bool  InpRequireFreshTrigger;
+extern bool  InpRejectReclaimedExtreme;
+extern double InpMaxEntryExtensionAtr;
+enum ApexGateMode { GATE_SHADOW=0, GATE_ENFORCE=1 };
+extern ApexGateMode InpEntryExtensionMode;
+inline double BasketVolume(){ return BRK.basketVolume; }

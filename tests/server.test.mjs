@@ -69,8 +69,13 @@ async function fakeBridge(){
   const address=bridge.address();
   return {base:`http://127.0.0.1:${address.port}`,licenses,configs,heartbeats,calls,close:()=>new Promise(ok=>bridge.close(ok))};
 }
-test('health',async()=>withServer(async base=>{
-  const r=await request(base,'/health');assert.equal(r.status,200);assert.equal(r.body.version,'3.7.0');
+test('health reports the ONE version manifest (APEX-AUDIT-025: no more 3.7.0 vs 3.7.1 drift)',async()=>withServer(async base=>{
+  const manifest=JSON.parse(await fs.readFile(new URL('../version.json',import.meta.url),'utf8'));
+  const r=await request(base,'/health');
+  assert.equal(r.status,200);
+  assert.equal(r.body.version,manifest.version);
+  assert.equal(r.body.eaVersion,manifest.eaVersion);
+  assert.equal(r.body.webRequestOrigin,'https://xaucloud.io');
 }));
 test('demo/live-style heartbeat authenticates by license in JSON and becomes connected',async()=>withServer(async base=>{
   const r=await request(base,'/api/apex/heartbeat',{method:'POST',headers:{'content-type':'application/json'},body:{

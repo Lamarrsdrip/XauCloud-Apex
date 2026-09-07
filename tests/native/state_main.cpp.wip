@@ -1,0 +1,206 @@
+// Drives the REAL extracted campaign state machine (RequestClose / ServiceClosing /
+// FinalizeClose / Manage's protection + add gating) against a mock broker whose close
+// behaviour is scripted. Everything Apex-specific is extracted verbatim from the .mq5.
+#include "mt5shim.h"
+MockBroker  BRK;
+ApexConfig  C;
+long        InpMagic=8620260903L;
+int         InpMaxQuoteAgeMs=0;
+bool        InpRequireFreshTrigger=true;
+bool        InpRejectReclaimedExtreme=true;
+double      InpMaxEntryExtensionAtr=1.50;
+ApexGateMode InpEntryExtensionMode=GATE_SHADOW;
+
+#include <iostream>
+#include <map>
+
+// ---- Apex runtime state (declarations mirror the .mq5 globals) -------------
+enum CampState { CAMP_IDLE=0, CAMP_ACTIVE=1, CAMP_CLOSING=2 };
+CampState campState=CAMP_IDLE;
+int      campDir=0, layers=0, masterGuardStage=0, closeAttempts=0;
+double   cycleStart=0,targetEq=0,lastAdd=0,mfe=0,mae=0,peakProfitPct=0,earnedFloorPct=0;
+bool     ratchetArmed=false, recoveryExitArmed=false, anchorsKnown=true;
+double   firstEntryPrice=0,firstSLPrice=0,firstInitialSLPrice=0;
+ulong    masterTicket=0;
+datetime campStart=0, closingSince=0, g_lastCloseWarn=0;
+std::string campId="",campSig="",closingOutcome="",closingReason="";
+std::string g_preflightBlock="";
+int InpCloseStallWarnSeconds=300;
+
+struct PolicyT { std::string accountProfile="NORMAL"; double targetEq=0;
+                 bool profitRatchetEnabled=true; double ratchetTriggerPct=180,ratchetLockPct=100,
+                 ratchetStepPct=100,ratchetLockStepPct=100; bool masterBreakEvenEnabled=true;
+                 double masterBreakEvenTriggerPct=50; bool recoveryExitEnabled=true;
+                 double recoveryExitArmPctOfSL=40; double normalFixedSLGoldMove=30; };
+PolicyT P;
+
+// ---- scripted broker / bookkeeping ---------------------------------------
+int    g_positions=0;
+int    g_closeFailUntilAttempt=0;     // AttemptClosePass fails while closeAttempts <= this
+int    g_finalizeCalls=0;
+int    g_openLayerCalls=0;
+bool   g_openLayerSucceeds=true;
+std::vector<std::string> g_events;
+std::vector<std::string> g_consumed;
+
+int CountPos(){ return g_positions; }
+double BasketProfitFloating(){ return BRK.basketVolume; }   // reused as "floating P/L"
+void SaveState(){}
+void Emit(const std::string &t,const std::string &extra=""){ (void)extra; g_events.push_back(t); }
+bool SetMasterSL(double,const std::string&){ return true; }
+double CampaignRealised(double &c,double &s,int &d){ c=0;s=0;d=0; return 0; }
+std::string ComputePreflight(){ return g_preflightBlock; }
+int TriggerUseCount(const std::string &id){ int n=0; for(auto &x:g_consumed) if(x==id)n++; return n; }
+void ConsumeTrigger(const std::string &id){ g_consumed.push_back(id); }
+void ClearTriggers(){ g_consumed.clear(); }
+void SetupReset(const std::string&){}
+int InpMaxAddsPerTrigger=1;
+struct SetupT { std::string id="S1"; int state=0; double extreme=0,triggerPrice=0; datetime triggerBarTime=0; };
+SetupT S;
+struct AddCandidateT { bool addEligible=false; std::string family="NONE"; double score=0,atr=1.0;
+                       std::string reason,triggerId; datetime triggerBarTime=0; int dir=0; };
+AddCandidateT g_nextCandidate;
+AddCandidateT BuildAddCandidate(){ return g_nextCandidate; }
+bool OpenLayer(int,double,const std::string&,double,double,double,datetime,bool){
+  g_openLayerCalls++;
+  if(!g_openLayerSucceeds) return false;
+  layers++; g_positions++; return true;
+}
+bool AttemptClosePass(){
+  if(closeAttempts<=g_closeFailUntilAttempt) return false;   // broker refuses
+  g_positions=0; return true;
+}
+struct ConfigLive { std::string accountProfile="NORMAL"; bool armed=true; int maxLayers=0;
+                    double addScore=70,learnAddAdj=0,addSpacingAtr=0.22,normalFixedSLGoldMove=30;
+                    bool learningEnabled=true; } CL;
+#define C_ARMED     CL.armed
+#include "extracted_state.h"
+
+static void row(const std::string &s){ std::cout<<s<<"\n"; }
+static std::string b(bool v){ return v?"true":"false"; }
+static std::string eventsJson(){
+  std::string s="[";
+  for(size_t i=0;i<g_events.size();i++){ if(i)s+=","; s+="\""+g_events[i]+"\""; }
+  return s+"]";
+}
+static void resetAll(){
+  campState=CAMP_IDLE;campDir=-1;layers=2;cycleStart=1000;targetEq=0;lastAdd=4400;mfe=0;mae=0;
+  peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;recoveryExitArmed=false;anchorsKnown=true;
+  firstEntryPrice=4400;firstSLPrice=0;firstInitialSLPrice=0;masterTicket=0;masterGuardStage=0;
+  campStart=1000;closingSince=0;closeAttempts=0;g_lastCloseWarn=0;
+  campId="C1";campSig="SELL";closingOutcome="";closingReason="";g_preflightBlock="";
+  g_positions=2;g_closeFailUntilAttempt=0;g_finalizeCalls=0;g_openLayerCalls=0;g_openLayerSucceeds=true;
+  g_events.clear();g_consumed.clear();
+  BRK=MockBroker(); C=ApexConfig(); CL=ConfigLive(); P=PolicyT();
+  S=SetupT(); g_nextCandidate=AddCandidateT();
+  BRK.now=2000;
+}
+
+int main(){
+  // ---- APEX-AUDIT-010: a failed close must NOT end the campaign -------------
+  resetAll();
+  campState=CAMP_ACTIVE;
+  g_closeFailUntilAttempt=1000;                 // broker refuses every close, forever
+  RequestClose("TARGET_HIT","NORMAL_BASKET_TARGET");
+  row(StringFormat("{\"test\":\"failed_close_holds_campaign\",\"campState\":%d,\"positions\":%d,"
+                   "\"finalizeCalls\":%d,\"outcome\":\"%s\",\"reason\":\"%s\",\"events\":%s}",
+                   (int)campState,g_positions,g_finalizeCalls,closingOutcome.c_str(),
+                   closingReason.c_str(),eventsJson().c_str()));
+
+  // repeated timer ticks while the broker keeps refusing
+  for(int i=0;i<5;i++){ BRK.now+=1; Manage(); }
+  row(StringFormat("{\"test\":\"failed_close_repeated_ticks\",\"campState\":%d,\"positions\":%d,"
+                   "\"finalizeCalls\":%d,\"layers\":%d,\"openLayerCalls\":%d,\"outcome\":\"%s\"}",
+                   (int)campState,g_positions,g_finalizeCalls,layers,g_openLayerCalls,closingOutcome.c_str()));
+
+  // ---- restart mid-close: intent survives -----------------------------------
+  {
+    CampState savedState=campState; std::string savedOut=closingOutcome,savedReason=closingReason;
+    std::string savedId=campId; double savedFloor=earnedFloorPct;
+    // simulate a full process restart: wipe volatile runtime, restore from state file
+    campState=CAMP_IDLE;closingOutcome="";closingReason="";campId="";earnedFloorPct=0;
+    campState=savedState;closingOutcome=savedOut;closingReason=savedReason;campId=savedId;earnedFloorPct=savedFloor;
+    g_events.clear();
+    BRK.now+=1; Manage();
+    row(StringFormat("{\"test\":\"restart_during_failed_close\",\"campState\":%d,\"positions\":%d,"
+                     "\"finalizeCalls\":%d,\"outcome\":\"%s\",\"campaignId\":\"%s\",\"events\":%s}",
+                     (int)campState,g_positions,g_finalizeCalls,closingOutcome.c_str(),
+                     campId.c_str(),eventsJson().c_str()));
+  }
+  // ---- broker finally accepts -> campaign ends exactly once ------------------
+  g_closeFailUntilAttempt=0;
+  g_events.clear();
+  BRK.now+=1; Manage();
+  row(StringFormat("{\"test\":\"close_finally_succeeds\",\"campState\":%d,\"positions\":%d,"
+                   "\"finalizeCalls\":%d,\"events\":%s}",
+                   (int)campState,g_positions,g_finalizeCalls,eventsJson().c_str()));
+
+  // ---- APEX-AUDIT-013: earned ratchet floor is monotonic --------------------
+  resetAll();
+  campState=CAMP_ACTIVE; cycleStart=1000; BRK.basketVolume=2000;   // floating +2000 = +200%
+  mfe=2000;
+  P.ratchetTriggerPct=180;P.ratchetLockPct=100;P.ratchetStepPct=100;P.ratchetLockStepPct=100;
+  Manage();
+  double earnedAfterPeak=earnedFloorPct;
+  // owner now LOWERS the configured lock to 20% -- the earned floor must not follow
+  P.ratchetLockPct=20;
+  BRK.basketVolume=500;                                            // floating +500 = +50%
+  g_events.clear();
+  Manage();
+  row(StringFormat("{\"test\":\"earned_floor_is_monotonic\",\"earnedAfterPeak\":%.2f,"
+                   "\"earnedFloorPct\":%.2f,\"campState\":%d,\"positions\":%d,\"events\":%s}",
+                   earnedAfterPeak,earnedFloorPct,(int)campState,g_positions,eventsJson().c_str()));
+
+  // ---- APEX-AUDIT-004: one add per confirmed trigger ------------------------
+  resetAll();
+  campState=CAMP_ACTIVE; cycleStart=1000; BRK.basketVolume=100;    // basket is profitable
+  BRK.bid=4390; BRK.ask=4390.1; lastAdd=4400;                      // spacing satisfied (SELL)
+  g_nextCandidate.addEligible=true; g_nextCandidate.family="CONTINUATION";
+  g_nextCandidate.score=80; g_nextCandidate.atr=1.0; g_nextCandidate.reason="CONTINUATION_BREAK";
+  g_nextCandidate.triggerId="CONTINUATION|C1|9940"; g_nextCandidate.triggerBarTime=9940;
+  int opensAcrossTicks=0;
+  for(int i=0;i<4;i++){
+    BRK.now+=1;
+    BRK.bid-=1; BRK.ask-=1;                    // price keeps moving through spacing levels
+    int before=g_openLayerCalls;
+    Manage();
+    if(g_openLayerCalls>before) opensAcrossTicks++;
+  }
+  int opensSameTrigger=opensAcrossTicks;
+  // a genuinely NEW trigger (new bar) must still be allowed
+  g_nextCandidate.triggerId="CONTINUATION|C1|10000"; g_nextCandidate.triggerBarTime=10000;
+  BRK.now+=1; BRK.bid-=1; BRK.ask-=1;
+  int before=g_openLayerCalls; Manage();
+  bool newTriggerAdded=(g_openLayerCalls>before);
+  row(StringFormat("{\"test\":\"one_add_per_trigger\",\"opensOnSameTrigger\":%d,"
+                   "\"newTriggerAdded\":%s,\"layers\":%d,\"consumed\":%d}",
+                   opensSameTrigger,b(newTriggerAdded).c_str(),layers,(int)g_consumed.size()));
+
+  // ---- a rejected order must not advance layers ----------------------------
+  resetAll();
+  campState=CAMP_ACTIVE; cycleStart=1000; BRK.basketVolume=100;
+  BRK.bid=4390; BRK.ask=4390.1; lastAdd=4400;
+  g_openLayerSucceeds=false;
+  g_nextCandidate.addEligible=true; g_nextCandidate.family="CONTINUATION"; g_nextCandidate.score=80;
+  g_nextCandidate.atr=1.0; g_nextCandidate.triggerId="CONTINUATION|C1|9940";
+  int layersBefore=layers;
+  BRK.now+=1; Manage();
+  row(StringFormat("{\"test\":\"rejected_add_does_not_advance_state\",\"layersBefore\":%d,"
+                   "\"layersAfter\":%d,\"openLayerCalls\":%d,\"triggerConsumed\":%d}",
+                   layersBefore,layers,g_openLayerCalls,(int)g_consumed.size()));
+
+  // ---- no additions while CLOSING -----------------------------------------
+  resetAll();
+  campState=CAMP_ACTIVE; cycleStart=1000; BRK.basketVolume=100;
+  BRK.bid=4390; BRK.ask=4390.1; lastAdd=4400;
+  g_closeFailUntilAttempt=1000;
+  g_nextCandidate.addEligible=true; g_nextCandidate.family="CONTINUATION"; g_nextCandidate.score=95;
+  g_nextCandidate.atr=1.0; g_nextCandidate.triggerId="CONTINUATION|C1|9941";
+  RequestClose("PROFIT_FLOOR_HIT","EARNED_PERCENT_PROFIT_RATCHET");
+  int callsAtClose=g_openLayerCalls;
+  for(int i=0;i<4;i++){ BRK.now+=1; BRK.bid-=1; BRK.ask-=1; Manage(); }
+  row(StringFormat("{\"test\":\"no_additions_while_closing\",\"campState\":%d,"
+                   "\"openLayerCallsDuringClosing\":%d,\"positions\":%d,\"finalizeCalls\":%d}",
+                   (int)campState,g_openLayerCalls-callsAtClose,g_positions,g_finalizeCalls));
+  return 0;
+}

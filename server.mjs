@@ -1,98 +1,220 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
+const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'),'utf8'));
+const CONFIG_SCHEMA=Number(MANIFEST.configSchema||2);
 const PORT=Number(process.env.PORT||8787);
-const ADMIN_TOKEN=process.env.ADMIN_TOKEN||'change-me-admin';
-const SESSION_SECRET=process.env.SESSION_SECRET||'change-me-session-secret';
+const IS_PRODUCTION=process.env.NODE_ENV==='production';
+
+// APEX-AUDIT-024: the public fallback strings are accepted ONLY outside production.
+// A production process refuses to start without real, sufficiently long secrets.
+const DEFAULT_ADMIN_TOKEN='change-me-admin';
+const DEFAULT_SESSION_SECRET='change-me-session-secret';
+const ADMIN_TOKEN=process.env.ADMIN_TOKEN||DEFAULT_ADMIN_TOKEN;
+const SESSION_SECRET=process.env.SESSION_SECRET||DEFAULT_SESSION_SECRET;
+export function secretProblems(env=process.env){
+  const problems=[];
+  const admin=String(env.ADMIN_TOKEN||'');
+  const session=String(env.SESSION_SECRET||'');
+  if(!admin)problems.push('ADMIN_TOKEN_MISSING');
+  else if(admin===DEFAULT_ADMIN_TOKEN)problems.push('ADMIN_TOKEN_IS_THE_PUBLISHED_DEFAULT');
+  else if(admin.length<24)problems.push('ADMIN_TOKEN_TOO_SHORT_MIN_24');
+  if(!session)problems.push('SESSION_SECRET_MISSING');
+  else if(session===DEFAULT_SESSION_SECRET)problems.push('SESSION_SECRET_IS_THE_PUBLISHED_DEFAULT');
+  else if(session.length<32)problems.push('SESSION_SECRET_TOO_SHORT_MIN_32');
+  if(String(env.XAUCLOUD_BASE_URL||'').startsWith('http://'))problems.push('XAUCLOUD_BASE_URL_NOT_HTTPS');
+  return problems;
+}
+export function assertProductionSecrets(env=process.env){
+  if(env.NODE_ENV!=='production')return [];
+  const problems=secretProblems(env);
+  if(problems.length){
+    // Never print the values themselves -- only which variable is unacceptable.
+    throw Object.assign(new Error('INSECURE_PRODUCTION_CONFIGURATION: '+problems.join(', ')),{httpStatus:500,problems});
+  }
+  return [];
+}
+
 const SESSION_TTL_MS=30*24*60*60*1000;
 const DATA=path.resolve(process.env.DATA_DIR||path.join(__dirname,'data'));
 const CONFIG=path.join(DATA,'config.json');
 const LICENSE_CONFIGS=path.join(DATA,'license-configs.json');
 const EVENTS=path.join(DATA,'events.ndjson');
 const LICENSES=path.join(DATA,'licenses.json');
+const OUTBOX=path.join(DATA,'bridge-outbox.ndjson');
 const XAUCLOUD_BASE_URL=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
 const APEX_BRIDGE_SECRET=String(process.env.APEX_BRIDGE_SECRET||'');
+// APEX-AUDIT-021: every remote call is deadline-bounded.
+const BRIDGE_TIMEOUT_MS=Number(process.env.APEX_BRIDGE_TIMEOUT_MS||4000);
 
-const DEFAULT={
-  armed:false,account:'0',symbolContains:'XAUUSD',
-  targetMode:'MULTIPLIER',accountProfile:'NORMAL',
-  targetEquity:1000,targetMultiplier:100,
-  normalTargetProfitPct:0,
-  baseMarginPct:100,layerMultiplier:2,maxLayers:0,
-  normalL1MarginPct:15,normalL2MarginPct:50,normalL3PlusMarginPct:100,
-  normalFixedSLGoldMove:30,
-  profitRatchetEnabled:true,ratchetTriggerPct:180,ratchetLockPct:100,ratchetStepPct:100,ratchetLockStepPct:100,
-  masterBreakEvenEnabled:true,masterBreakEvenTriggerPct:50,
-  recoveryExitEnabled:true,recoveryExitArmPctOfSL:40,
-  entryScore:76,addScore:70,impulseAtr:1.8,sweepAtr:.05,
-  rejectionBars:5,watchExpiryMinutes:12,addSpacingAtr:.22,
-  rejectionZoneAtr:.12,requireM3Confirm:true,requireM5Context:false,
-  cooldownMinutes:0,learningEnabled:true,learningMinCampaigns:8,
-  learningMaxScoreAdjustment:5
+//======================= configuration schema =========================
+// APEX-AUDIT-019: ONE typed allowlist. Anything not named here is not configuration.
+// Server-derived identity (licenseStatus, commandRevision, configHash, schema) lives
+// OUTSIDE this namespace and is attached to the response envelope afterwards, so a
+// stored config can never overwrite it.
+const SCHEMA={
+  armed:{t:'bool',d:false},
+  account:{t:'str',d:'0',max:64},
+  symbolContains:{t:'str',d:'XAUUSD',max:32},
+  targetMode:{t:'enum',d:'MULTIPLIER',values:['MULTIPLIER','EQUITY']},
+  accountProfile:{t:'enum',d:'NORMAL',values:['NORMAL','UNLIMITED']},
+  targetEquity:{t:'num',d:1000,min:.01,max:1e12},
+  targetMultiplier:{t:'num',d:100,min:1.001,max:1e9},
+  normalTargetProfitPct:{t:'num',d:0,min:0,max:1e6},
+  baseMarginPct:{t:'num',d:100,min:.01,max:100},
+  layerMultiplier:{t:'num',d:2,min:1,max:10},
+  maxLayers:{t:'int',d:0,min:0,max:50},
+  normalL1MarginPct:{t:'num',d:15,min:.01,max:100},
+  normalL2MarginPct:{t:'num',d:50,min:.01,max:100},
+  normalL3PlusMarginPct:{t:'num',d:100,min:.01,max:100},
+  normalFixedSLGoldMove:{t:'num',d:30,min:0,max:1e6},
+  profitRatchetEnabled:{t:'bool',d:true},
+  ratchetTriggerPct:{t:'num',d:180,min:.01,max:1e6},
+  ratchetLockPct:{t:'num',d:100,min:0,max:1e6},
+  ratchetStepPct:{t:'num',d:100,min:.01,max:1e6},
+  ratchetLockStepPct:{t:'num',d:100,min:0,max:1e6},
+  masterBreakEvenEnabled:{t:'bool',d:true},
+  masterBreakEvenTriggerPct:{t:'num',d:50,min:.01,max:1e6},
+  recoveryExitEnabled:{t:'bool',d:true},
+  recoveryExitArmPctOfSL:{t:'num',d:40,min:.01,max:1e6},
+  // APEX-AUDIT-014 owner exposure controls. 0 = disabled = v3.7.1 behaviour.
+  // No value is chosen here: OWNER DECISION REQUIRED before any of these do anything.
+  maxBasketLots:{t:'num',d:0,min:0,max:1e6},
+  minMarginLevelPct:{t:'num',d:0,min:0,max:1e6},
+  marginReservePct:{t:'num',d:0,min:0,max:99},
+  entryScore:{t:'num',d:76,min:40,max:100},
+  addScore:{t:'num',d:70,min:40,max:100},
+  impulseAtr:{t:'num',d:1.8,min:.5,max:10},
+  sweepAtr:{t:'num',d:.05,min:0,max:2},
+  rejectionBars:{t:'int',d:5,min:1,max:12},
+  watchExpiryMinutes:{t:'int',d:12,min:2,max:60},
+  addSpacingAtr:{t:'num',d:.22,min:.02,max:5},
+  rejectionZoneAtr:{t:'num',d:.12,min:.02,max:2},
+  requireM3Confirm:{t:'bool',d:true},
+  requireM5Context:{t:'bool',d:false},
+  cooldownMinutes:{t:'int',d:0,min:0,max:1440},
+  learningEnabled:{t:'bool',d:true},
+  learningMinCampaigns:{t:'int',d:8,min:4,max:200},
+  learningMaxScoreAdjustment:{t:'num',d:5,min:0,max:15}
 };
+export const DEFAULT=Object.fromEntries(Object.entries(SCHEMA).map(([k,s])=>[k,s.d]));
+export const CONFIG_FIELDS=Object.keys(SCHEMA);
 
-const num=(v,d,a,b)=>{v=Number(v);return Number.isFinite(v)?Math.max(a,Math.min(b,v)):d};
+function numeric(v){
+  if(typeof v==='number')return Number.isFinite(v)?v:null;
+  if(typeof v==='string'&&v.trim()!==''){const n=Number(v.trim());return Number.isFinite(n)?n:null}
+  return null;
+}
+// Strict field validation. Returns {value} or {error}.
+function validateField(key,raw){
+  const s=SCHEMA[key];
+  if(!s)return {error:'unknown_field'};
+  if(s.t==='bool'){
+    // APEX-AUDIT-019: Boolean('false') === true was the defect. Only a real boolean counts.
+    if(typeof raw==='boolean')return {value:raw};
+    return {error:'expected_boolean'};
+  }
+  if(s.t==='str'){
+    if(typeof raw!=='string')return {error:'expected_string'};
+    return {value:raw.slice(0,s.max||256)};
+  }
+  if(s.t==='enum'){
+    if(typeof raw!=='string')return {error:'expected_string'};
+    if(!s.values.includes(raw))return {error:'not_in_enum:'+s.values.join('|')};
+    return {value:raw};
+  }
+  const n=numeric(raw);
+  if(n===null)return {error:'expected_number'};
+  if(n<s.min||n>s.max)return {error:`out_of_range_${s.min}_${s.max}`};
+  return {value:s.t==='int'?Math.round(n):n};
+}
+function crossFieldErrors(cfg){
+  const errors=[];
+  if(cfg.profitRatchetEnabled&&cfg.ratchetLockPct>cfg.ratchetTriggerPct)
+    errors.push({field:'ratchetLockPct',error:'lock_exceeds_trigger'});
+  if(cfg.targetMode==='EQUITY'&&!(cfg.targetEquity>0))
+    errors.push({field:'targetEquity',error:'required_for_equity_target_mode'});
+  return errors;
+}
+// STRICT validator used by every write path. Unknown keys and wrong types are refused.
+export function validateConfig(patch={},base=DEFAULT){
+  const errors=[];
+  const next={...DEFAULT,...base};
+  for(const [k,v] of Object.entries(patch||{})){
+    const r=validateField(k,v);
+    if(r.error)errors.push({field:k,error:r.error});
+    else next[k]=r.value;
+  }
+  for(const e of crossFieldErrors(next))errors.push(e);
+  return {ok:errors.length===0,errors,config:next};
+}
+// LENIENT normaliser for reading stored/legacy data. Drops unknown keys, refuses
+// non-boolean booleans, clamps numbers, and repairs the lock>trigger inconsistency.
 export function clean(x={}){
-  return {
-    ...DEFAULT,...x,
-    armed:Boolean(x.armed),
-    account:String(x.account??'0'),
-    symbolContains:String(x.symbolContains||'XAUUSD').slice(0,32),
-    targetMode:['MULTIPLIER','EQUITY'].includes(x.targetMode)?x.targetMode:'MULTIPLIER',
-    accountProfile:['NORMAL','UNLIMITED'].includes(x.accountProfile)?x.accountProfile:'NORMAL',
-    targetEquity:num(x.targetEquity,1000,.01,1e12),
-    targetMultiplier:num(x.targetMultiplier,100,1.001,1e9),
-    normalTargetProfitPct:num(x.normalTargetProfitPct,0,0,1e6),
-    baseMarginPct:num(x.baseMarginPct,100,.01,100),
-    layerMultiplier:num(x.layerMultiplier,2,1,10),
-    maxLayers:Math.round(num(x.maxLayers,0,0,50)),
-    normalL1MarginPct:num(x.normalL1MarginPct,15,.01,100),
-    normalL2MarginPct:num(x.normalL2MarginPct,50,.01,100),
-    normalL3PlusMarginPct:num(x.normalL3PlusMarginPct,100,.01,100),
-    normalFixedSLGoldMove:num(x.normalFixedSLGoldMove,30,0,1e6),
-    profitRatchetEnabled:x.profitRatchetEnabled!==false,
-    ratchetTriggerPct:num(x.ratchetTriggerPct,180,.01,1e6),
-    ratchetLockPct:num(x.ratchetLockPct,100,0,1e6),
-    ratchetStepPct:num(x.ratchetStepPct,100,.01,1e6),
-    ratchetLockStepPct:num(x.ratchetLockStepPct,100,0,1e6),
-    masterBreakEvenEnabled:x.masterBreakEvenEnabled!==false,
-    masterBreakEvenTriggerPct:num(x.masterBreakEvenTriggerPct,50,.01,1e6),
-    recoveryExitEnabled:x.recoveryExitEnabled!==false,
-    recoveryExitArmPctOfSL:num(x.recoveryExitArmPctOfSL,40,.01,1e6),
-    entryScore:num(x.entryScore,76,40,100),
-    addScore:num(x.addScore,70,40,100),
-    impulseAtr:num(x.impulseAtr,1.8,.5,10),
-    sweepAtr:num(x.sweepAtr,.05,0,2),
-    rejectionBars:Math.round(num(x.rejectionBars,5,1,12)),
-    watchExpiryMinutes:Math.round(num(x.watchExpiryMinutes,12,2,60)),
-    addSpacingAtr:num(x.addSpacingAtr,.22,.02,5),
-    rejectionZoneAtr:num(x.rejectionZoneAtr,.12,.02,2),
-    requireM3Confirm:x.requireM3Confirm!==false,
-    requireM5Context:Boolean(x.requireM5Context),
-    cooldownMinutes:Math.round(num(x.cooldownMinutes,0,0,1440)),
-    learningEnabled:x.learningEnabled!==false,
-    learningMinCampaigns:Math.round(num(x.learningMinCampaigns,8,4,200)),
-    learningMaxScoreAdjustment:num(x.learningMaxScoreAdjustment,5,0,15)
-  };
+  const out={};
+  for(const [k,s] of Object.entries(SCHEMA)){
+    if(!(k in (x||{}))){out[k]=s.d;continue}
+    const r=validateField(k,x[k]);
+    if(r.error){
+      if(s.t==='num'||s.t==='int'){
+        const n=numeric(x[k]);
+        out[k]=n===null?s.d:(s.t==='int'?Math.round(Math.max(s.min,Math.min(s.max,n))):Math.max(s.min,Math.min(s.max,n)));
+      }else out[k]=s.d;
+    }else out[k]=r.value;
+  }
+  if(out.profitRatchetEnabled&&out.ratchetLockPct>out.ratchetTriggerPct)out.ratchetLockPct=out.ratchetTriggerPct;
+  return out;
+}
+export function configHash(cfg){
+  const canonical=CONFIG_FIELDS.map(k=>`${k}=${cfg[k]}`).join('|');
+  return crypto.createHash('sha256').update(canonical).digest('hex').slice(0,16);
 }
 
+//======================= durable storage ==============================
+// APEX-AUDIT-020: unique temp names (never pid+ms, which two workers can collide on),
+// and a missing file is distinguished from a corrupt one -- corruption is an explicit
+// failure, never a silent "empty database".
 async function atomic(file,obj){
   await fs.mkdir(path.dirname(file),{recursive:true});
-  const tmp=file+'.tmp-'+process.pid+'-'+Date.now();
+  const tmp=`${file}.tmp-${process.pid}-${crypto.randomUUID()}`;
   await fs.writeFile(tmp,JSON.stringify(obj,null,2));
   await fs.rename(tmp,file);
 }
-async function read(file,fallback){try{return JSON.parse(await fs.readFile(file,'utf8'))}catch{return fallback}}
+async function readJson(file,fallback){
+  let raw;
+  try{raw=await fs.readFile(file,'utf8')}
+  catch(e){
+    if(e&&e.code==='ENOENT')return fallback;
+    throw Object.assign(new Error('STORAGE_UNREADABLE:'+path.basename(file)),{httpStatus:500,cause:String(e?.code||e)});
+  }
+  if(raw.trim()==='')return fallback;
+  try{return JSON.parse(raw)}
+  catch{throw Object.assign(new Error('STORAGE_CORRUPT:'+path.basename(file)),{httpStatus:500})}
+}
 async function ensure(){
   await fs.mkdir(DATA,{recursive:true});
   try{await fs.access(CONFIG)}catch{await atomic(CONFIG,DEFAULT)}
   try{await fs.access(LICENSES)}catch{await atomic(LICENSES,{})}
   try{await fs.access(LICENSE_CONFIGS)}catch{await atomic(LICENSE_CONFIGS,{})}
 }
+
+// Single-process serialisation of read-modify-write per license (APEX-AUDIT-020).
+const locks=new Map();
+async function withLock(key,fn){
+  const prev=locks.get(key)||Promise.resolve();
+  let release;
+  const next=new Promise(r=>{release=r});
+  locks.set(key,prev.then(()=>next));
+  await prev;
+  try{return await fn()}
+  finally{release();if(locks.get(key)===next)locks.delete(key)}
+}
+
 async function body(req){
   let s='';
   for await(const c of req){s+=c;if(s.length>2e6)throw Object.assign(new Error('too_large'),{httpStatus:413})}
@@ -108,57 +230,96 @@ function clientIp(req){
   return f?String(f).split(',')[0].trim():(req.socket.remoteAddress||'unknown');
 }
 function maskLicense(k){k=String(k||'');return k.length<=8?'***':k.slice(0,5)+'...'+k.slice(-4)}
-function licenseStatusFor(lic){
+export function normalizeLicense(v){return String(v||'').trim().toUpperCase().replace(/ /g,'')}
+
+// APEX-AUDIT-024: authentication throttling. Per-IP, in-memory, no credential logging.
+const attempts=new Map();
+function throttle(scope,ip,limit=20,windowMs=60_000){
+  const k=scope+'|'+ip,now=Date.now();
+  const rec=attempts.get(k)||{n:0,reset:now+windowMs};
+  if(now>rec.reset){rec.n=0;rec.reset=now+windowMs}
+  rec.n++;attempts.set(k,rec);
+  return rec.n<=limit;
+}
+
+export function licenseStatusFor(lic,now=Date.now()){
   if(!lic)return 'LICENSE_NOT_FOUND';
   if(lic.status==='DISABLED')return 'LICENSE_DISABLED';
-  if(lic.expiresAt&&Date.now()>Date.parse(lic.expiresAt))return 'LICENSE_EXPIRED';
+  // APEX-AUDIT-022: expiry is evaluated on EVERY request against server time, so a
+  // license that crosses its expiry mid-session is denied without needing a restart.
+  if(lic.expiresAt&&now>Date.parse(lic.expiresAt))return 'LICENSE_EXPIRED';
   return lic.status==='ACTIVE'?'ACTIVE':'LICENSE_DISABLED';
 }
-async function readLicenses(){return read(LICENSES,{})}
+async function readLicenses(){return readJson(LICENSES,{})}
 async function writeLicenses(x){await atomic(LICENSES,x)}
-async function readLicenseConfigs(){return read(LICENSE_CONFIGS,{})}
+async function readLicenseConfigs(){return readJson(LICENSE_CONFIGS,{})}
 async function getLicenseConfig(key){
   const all=await readLicenseConfigs();
-  const global=clean(await read(CONFIG,DEFAULT));
+  const global=clean(await readJson(CONFIG,DEFAULT));
   return clean({...global,...(all[key]||{})});
 }
-async function saveLicenseConfig(key,partial,{bumpRevision=true}={}){
-  const all=await readLicenseConfigs();
-  const prev=await getLicenseConfig(key);
-  const next=clean({...prev,...partial});
-  const licenses=await readLicenses();
-  const lic=licenses[key];
-  if(!lic)throw Object.assign(new Error('license_not_found'),{httpStatus:404});
-  all[key]=next;
-  const revision=bumpRevision?Number(lic.commandRevision||0)+1:Number(lic.commandRevision||0);
-  if(bumpRevision){
-    lic.commandRevision=revision;
-    lic.pendingCommand=next.armed?'ARM':'DISARM';
-    lic.commandUpdatedAt=new Date().toISOString();
-    lic.updatedAt=lic.commandUpdatedAt;
-    licenses[key]=lic;
-  }
-  await syncBridgeConfig(key,next,revision);
-  await atomic(LICENSE_CONFIGS,all);
-  if(bumpRevision)await writeLicenses(licenses);
-  return next;
+
+//======================= bridge outbox ================================
+// APEX-AUDIT-020/021: the local commit happens FIRST, then the remote delivery is
+// queued durably with an idempotency key. A process kill between the two no longer
+// loses an acknowledged update, and the HTTP request never waits on the remote.
+let outboxDraining=false;
+async function outboxAppend(entry){
+  await fs.mkdir(DATA,{recursive:true});
+  await fs.appendFile(OUTBOX,JSON.stringify({id:crypto.randomUUID(),queuedAt:new Date().toISOString(),attempts:0,...entry})+'\n');
 }
-export function normalizeLicense(v){return String(v||'').trim().toUpperCase().replace(/ /g,'')}
+async function outboxRead(){
+  try{
+    return (await fs.readFile(OUTBOX,'utf8')).trim().split('\n').filter(Boolean)
+      .map(l=>{try{return JSON.parse(l)}catch{return null}}).filter(Boolean);
+  }catch(e){if(e&&e.code==='ENOENT')return [];throw e}
+}
+async function outboxRewrite(entries){
+  const tmp=`${OUTBOX}.tmp-${process.pid}-${crypto.randomUUID()}`;
+  await fs.writeFile(tmp,entries.map(e=>JSON.stringify(e)).join('\n')+(entries.length?'\n':''));
+  await fs.rename(tmp,OUTBOX);
+}
+export async function drainOutbox({max=50}={}){
+  if(outboxDraining)return {drained:0,pending:null,skipped:'already_draining'};
+  outboxDraining=true;
+  try{
+    const entries=await outboxRead();
+    if(!entries.length)return {drained:0,pending:0};
+    if(!bridgeConfigured())return {drained:0,pending:entries.length,reason:'BRIDGE_NOT_CONFIGURED'};
+    const keep=[];let drained=0;
+    for(const e of entries){
+      if(drained>=max){keep.push(e);continue}
+      try{
+        await bridgeRequest(e.route,{method:'POST',payload:e.payload,idempotencyKey:e.id});
+        drained++;
+      }catch(err){
+        keep.push({...e,attempts:Number(e.attempts||0)+1,lastError:String(err?.message||err)});
+      }
+    }
+    await outboxRewrite(keep);
+    return {drained,pending:keep.length};
+  }finally{outboxDraining=false}
+}
+
+//======================= bridge transport =============================
 function bridgeConfigured(){return Boolean(XAUCLOUD_BASE_URL&&APEX_BRIDGE_SECRET)}
 function bridgeFailure(message,status=502,detail=null){
   return Object.assign(new Error(message),{httpStatus:status,detail});
 }
-async function bridgeRequest(route,{method='GET',payload}={}){
+async function bridgeRequest(route,{method='GET',payload,idempotencyKey,timeoutMs=BRIDGE_TIMEOUT_MS}={}){
   if(!APEX_BRIDGE_SECRET)throw bridgeFailure('APEX_BRIDGE_SECRET_NOT_CONFIGURED',503);
   let response;
+  const headers={'accept':'application/json','content-type':'application/json','x-apex-bridge-secret':APEX_BRIDGE_SECRET};
+  if(idempotencyKey)headers['x-apex-idempotency-key']=String(idempotencyKey);
   try{
     response=await fetch(XAUCLOUD_BASE_URL+route,{
-      method,
-      headers:{'accept':'application/json','content-type':'application/json','x-apex-bridge-secret':APEX_BRIDGE_SECRET},
-      body:payload===undefined?undefined:JSON.stringify(payload)
+      method,headers,
+      body:payload===undefined?undefined:JSON.stringify(payload),
+      signal:AbortSignal.timeout(timeoutMs)          // APEX-AUDIT-021: bounded deadline
     });
   }catch(e){
-    throw bridgeFailure('XAUCLOUD_BRIDGE_UNREACHABLE',502,{message:String(e?.message||e)});
+    const timedOut=e&&(e.name==='TimeoutError'||e.name==='AbortError');
+    throw bridgeFailure(timedOut?'XAUCLOUD_BRIDGE_TIMEOUT':'XAUCLOUD_BRIDGE_UNREACHABLE',504,{message:String(e?.message||e),timeoutMs});
   }
   const text=await response.text();
   let data;
@@ -168,35 +329,79 @@ async function bridgeRequest(route,{method='GET',payload}={}){
   }
   return data;
 }
-async function syncBridgeLicense(key,lic,{resetAccount=false}={}){
+async function syncBridgeLicense(key,lic,{resetAccount=false,queueOnFailure=false}={}){
   if(!bridgeConfigured())return null;
-  return bridgeRequest('/api/cloud/apex/bridge/license/upsert',{method:'POST',payload:{
+  const payload={
     license:normalizeLicense(key),active:licenseStatusFor(lic)==='ACTIVE',account:String(lic?.account||''),
     customer:String(lic?.customer||''),expiresAt:lic?.expiresAt??null,resetAccount:Boolean(resetAccount)
-  }});
+  };
+  try{return await bridgeRequest('/api/cloud/apex/bridge/license/upsert',{method:'POST',payload})}
+  catch(e){
+    if(!queueOnFailure)throw e;
+    await outboxAppend({route:'/api/cloud/apex/bridge/license/upsert',payload,kind:'license',license:normalizeLicense(key)});
+    return {queued:true,reason:String(e?.message||e)};
+  }
 }
-async function syncBridgeConfig(key,config,commandRevision=0){
+async function syncBridgeConfig(key,config,commandRevision=0,{queueOnFailure=false}={}){
   if(!bridgeConfigured())return null;
-  return bridgeRequest('/api/cloud/apex/bridge/config/upsert',{method:'POST',payload:{
-    license:normalizeLicense(key),config:clean(config),commandRevision:Number(commandRevision||0)
-  }});
+  const payload={license:normalizeLicense(key),config:clean(config),commandRevision:Number(commandRevision||0)};
+  try{return await bridgeRequest('/api/cloud/apex/bridge/config/upsert',{method:'POST',payload})}
+  catch(e){
+    if(!queueOnFailure)throw e;
+    await outboxAppend({route:'/api/cloud/apex/bridge/config/upsert',payload,kind:'config',license:normalizeLicense(key)});
+    return {queued:true,reason:String(e?.message||e)};
+  }
 }
 async function readBridgeStatus(key){
   return bridgeRequest('/api/cloud/apex/bridge/status?license='+encodeURIComponent(normalizeLicense(key)));
 }
-// Never throws: the dashboard must still render (falling back to local telemetry, if any)
-// when the XauCloud bridge is unreachable or unconfigured, instead of 500ing the whole page.
 async function readBridgeStatusSafe(key){
   if(!bridgeConfigured())return {ok:false,reason:'BRIDGE_NOT_CONFIGURED',data:null};
   try{return {ok:true,reason:null,data:await readBridgeStatus(key)}}
   catch(e){return {ok:false,reason:String(e?.message||'BRIDGE_REQUEST_FAILED'),data:null}}
 }
-function newerIso(a,b){
-  const ta=a?Date.parse(a):NaN,tb=b?Date.parse(b):NaN;
-  if(!Number.isFinite(ta))return Number.isFinite(tb)?b:null;
-  if(!Number.isFinite(tb))return a;
-  return ta>=tb?a:b;
+
+//======================= config persistence ===========================
+// APEX-AUDIT-020: optimistic concurrency. A caller that read revision N and tries to
+// write on top of revision N+1 is refused with 409 instead of silently clobbering.
+async function saveLicenseConfig(key,partial,{bumpRevision=true,expectedRevision=null,strict=true}={}){
+  return withLock('cfg:'+key,async()=>{
+    const all=await readLicenseConfigs();
+    const prev=await getLicenseConfig(key);
+    const licenses=await readLicenses();
+    const lic=licenses[key];
+    if(!lic)throw Object.assign(new Error('license_not_found'),{httpStatus:404});
+    const currentRevision=Number(lic.commandRevision||0);
+    if(expectedRevision!==null&&Number(expectedRevision)!==currentRevision)
+      throw Object.assign(new Error('revision_conflict'),{httpStatus:409,detail:{expectedRevision:Number(expectedRevision),currentRevision}});
+
+    const v=validateConfig(partial,prev);
+    if(strict&&!v.ok)throw Object.assign(new Error('invalid_config'),{httpStatus:400,detail:{errors:v.errors}});
+    const next=clean(v.config);
+    const revision=bumpRevision?currentRevision+1:currentRevision;
+    all[key]=next;
+
+    // Local commit FIRST, remote delivery afterwards through the durable outbox.
+    await atomic(LICENSE_CONFIGS,all);
+    if(bumpRevision){
+      lic.commandRevision=revision;
+      lic.pendingCommand=next.armed?'ARM':'DISARM';
+      lic.commandUpdatedAt=new Date().toISOString();
+      lic.updatedAt=lic.commandUpdatedAt;
+      lic.configHash=configHash(next);
+      licenses[key]=lic;
+      await writeLicenses(licenses);
+    }
+    const delivery=await syncBridgeConfig(key,next,revision,{queueOnFailure:true});
+    return {config:next,revision,configHash:configHash(next),delivery};
+  });
 }
+
+//======================= startup reconciliation =======================
+// APEX-AUDIT-021: this no longer gates `listen`. It is still exported and awaitable so
+// an operator (and the test suite) can run it explicitly and see it fail loudly.
+export const bridgeSyncState={status:'PENDING',startedAt:null,finishedAt:null,error:null,licenses:0,lastAttemptAt:null};
+
 async function bridgeSelfTest(key,lic){
   const remote=await readBridgeStatus(key);
   const localActive=licenseStatusFor(lic)==='ACTIVE';
@@ -208,65 +413,228 @@ async function bridgeSelfTest(key,lic){
     accountExactMatch:remoteAccount===localAccount,
     accountBindingCompatible:!localAccount||remoteAccount===localAccount,
     bridgeConfigExists:remote?.configExists===true,
+    remoteCommandRevision:Number(remote?.commandRevision||0),
+    localCommandRevision:Number(lic?.commandRevision||0),
     localActive,remoteActive:remote?.license?.active===true,
     localAccount,remoteAccount
   };
 }
-async function syncAllLicensesAtStartup(){
-  if(!bridgeConfigured())throw bridgeFailure('APEX_BRIDGE_SECRET_NOT_CONFIGURED',503);
-  const licenses=await readLicenses();
-  for(const [rawKey,lic] of Object.entries(licenses)){
-    const key=normalizeLicense(rawKey);
-    if(!key)continue;
-    await syncBridgeLicense(key,lic);
-    await syncBridgeConfig(key,await getLicenseConfig(key),Number(lic.commandRevision||0));
-    const check=await bridgeSelfTest(key,lic);
-    if(!check.mirrorExists||!check.activeMatches||!check.accountBindingCompatible||!check.bridgeConfigExists)
-      throw bridgeFailure('XAUCLOUD_BRIDGE_SELF_TEST_FAILED',502,{license:maskLicense(key),check});
-    console.log(`APEX_BRIDGE_SYNC_OK license=${maskLicense(key)} active=${check.localActive} accountBound=${Boolean(check.remoteAccount)} config=true`);
+export async function syncAllLicensesAtStartup(){
+  bridgeSyncState.status='RUNNING';bridgeSyncState.startedAt=new Date().toISOString();
+  bridgeSyncState.lastAttemptAt=bridgeSyncState.startedAt;bridgeSyncState.error=null;
+  try{
+    if(!bridgeConfigured())throw bridgeFailure('APEX_BRIDGE_SECRET_NOT_CONFIGURED',503);
+    const licenses=await readLicenses();
+    for(const [rawKey,lic] of Object.entries(licenses)){
+      const key=normalizeLicense(rawKey);
+      if(!key)continue;
+      await syncBridgeLicense(key,lic);
+      await syncBridgeConfig(key,await getLicenseConfig(key),Number(lic.commandRevision||0));
+      const check=await bridgeSelfTest(key,lic);
+      if(!check.mirrorExists||!check.activeMatches||!check.accountBindingCompatible||!check.bridgeConfigExists)
+        throw bridgeFailure('XAUCLOUD_BRIDGE_SELF_TEST_FAILED',502,{license:maskLicense(key),check});
+      console.log(`APEX_BRIDGE_SYNC_OK license=${maskLicense(key)} active=${check.localActive} accountBound=${Boolean(check.remoteAccount)} config=true`);
+    }
+    bridgeSyncState.licenses=Object.keys(licenses).length;
+    bridgeSyncState.status='OK';bridgeSyncState.finishedAt=new Date().toISOString();
+    console.log(`APEX_BRIDGE_STARTUP_OK licenses=${bridgeSyncState.licenses}`);
+    return bridgeSyncState;
+  }catch(e){
+    bridgeSyncState.status='ERROR';bridgeSyncState.finishedAt=new Date().toISOString();
+    bridgeSyncState.error=String(e?.message||e);
+    throw e;
   }
-  console.log(`APEX_BRIDGE_STARTUP_OK licenses=${Object.keys(licenses).length}`);
 }
-async function validateEa(licenseKey,account){
-  const key=normalizeLicense(licenseKey), accountS=String(account||'');
-  const licenses=await readLicenses();
-  const lic=licenses[key];
-  const status=licenseStatusFor(lic);
-  if(status!=='ACTIVE')return {ok:false,status,key,licenses};
-  // An explicitly admin-bound account is enforced. Blank account means license works on demo or live.
-  if(lic.account&&String(lic.account)!==accountS)return {ok:false,status:'ACCOUNT_MISMATCH',key,licenses};
-  return {ok:true,status:'ACTIVE',key,lic,licenses};
+
+//======================= EA authentication ============================
+// APEX-AUDIT-022: ONE binding policy for every EA-facing route (canonical and legacy).
+// Expiry is checked here on every request; the first non-empty account atomically
+// claims an unbound license, and every later request must match it exactly.
+async function validateEa(licenseKey,account,{claim=true}={}){
+  const key=normalizeLicense(licenseKey),accountS=String(account||'').trim();
+  return withLock('lic:'+key,async()=>{
+    const licenses=await readLicenses();
+    const lic=licenses[key];
+    const status=licenseStatusFor(lic);
+    if(status!=='ACTIVE')return {ok:false,status,key,licenses};
+    const bound=String(lic.account||'').trim();
+    if(bound){
+      if(!accountS)return {ok:false,status:'ACCOUNT_REQUIRED',key,licenses};
+      if(bound!==accountS)return {ok:false,status:'ACCOUNT_MISMATCH',key,licenses};
+      return {ok:true,status:'ACTIVE',key,lic,licenses};
+    }
+    // Unbound: atomic first-claim inside the per-license lock (matches the canonical
+    // XauCloud resolveMonitorLicense semantics -- a blank account no longer silently
+    // lets an unlimited number of different MT5 accounts share one license).
+    if(!accountS)return {ok:false,status:'ACCOUNT_REQUIRED',key,licenses};
+    if(claim){
+      lic.account=accountS;
+      lic.activatedAt=lic.activatedAt||new Date().toISOString();
+      lic.updatedAt=new Date().toISOString();
+      licenses[key]=lic;
+      await writeLicenses(licenses);
+      await syncBridgeLicense(key,lic,{queueOnFailure:true}).catch(()=>null);
+      console.log(`APEX_LICENSE_FIRST_CLAIM license=${maskLicense(key)} account=${accountS}`);
+    }
+    return {ok:true,status:'ACTIVE',key,lic,licenses,claimed:claim};
+  });
 }
 async function stampHeartbeat(v,payload){
-  const now=new Date().toISOString(), lic=v.lic;
-  lic.lastSeen=now;
-  lic.lastAccount=String(payload.account||'');
-  lic.broker=String(payload.broker||'').slice(0,120);
-  lic.server=String(payload.server||'').slice(0,120);
-  lic.currency=String(payload.currency||'').slice(0,20);
-  lic.eaVersion=String(payload.eaVersion||payload.version||'').slice(0,120);
-  lic.tradeMode=Number(payload.tradeMode||0);
-  lic.symbol=String(payload.symbol||'').slice(0,40);
-  lic.balance=Number(payload.balance||0);
-  lic.equity=Number(payload.equity||0);
-  lic.freeMargin=Number(payload.freeMargin||0);
-  lic.campaignActive=Boolean(payload.campaignActive);
-  lic.layers=Number(payload.layers||0);
-  lic.updatedAt=now;
-  v.licenses[v.key]=lic;
-  await writeLicenses(v.licenses);
-  return lic;
+  return withLock('lic:'+v.key,async()=>{
+    const now=new Date().toISOString();
+    const licenses=await readLicenses();
+    const lic=licenses[v.key]||v.lic;
+    lic.lastSeen=now;
+    lic.lastAccount=String(payload.account??payload.account_number??'');
+    lic.broker=String(payload.broker||payload.broker_server||'').slice(0,120);
+    lic.server=String(payload.server||payload.broker_server||'').slice(0,120);
+    lic.currency=String(payload.currency||'').slice(0,20);
+    lic.eaVersion=String(payload.eaVersion||payload.version||payload.ea_version||'').slice(0,120);
+    lic.buildId=String(payload.buildId||payload.build_id||'').slice(0,40);
+    lic.tradeMode=Number(payload.tradeMode||0);
+    lic.symbol=String(payload.symbol||'').slice(0,40);
+    lic.balance=Number(payload.balance||0);
+    lic.equity=Number(payload.equity||0);
+    lic.freeMargin=Number(payload.freeMargin??payload.free_margin??0);
+    lic.marginLevel=Number(payload.marginLevel??payload.margin_level??0);
+    lic.openPositions=Number(payload.openPositions??payload.open_positions??0);
+    lic.basketVolume=Number(payload.basketVolume??payload.basket_volume??0);
+    lic.campaignActive=Boolean(payload.campaignActive??payload.campaign_active);
+    lic.campaignState=String(payload.campaignState||payload.campaign_state||'').slice(0,20);
+    lic.layers=Number(payload.layers||0);
+    // APEX-AUDIT-018: what the EA has actually APPLIED, kept separate from what the
+    // dashboard DESIRES. These two are rendered independently.
+    lic.appliedRevision=Number(payload.appliedRevision??payload.applied_revision??lic.appliedRevision??0);
+    lic.appliedConfigHash=String(payload.configHash||payload.config_hash||lic.appliedConfigHash||'').slice(0,64);
+    lic.terminalConnected=payload.terminalConnected??payload.mt5_connected??null;
+    lic.terminalTradeAllowed=payload.terminalTradeAllowed??payload.trading_allowed??null;
+    lic.eaTradeAllowed=payload.eaTradeAllowed??payload.algo_trading??null;
+    lic.observerOnly=Boolean(payload.observerOnly??payload.observer_only);
+    lic.preflightBlock=String(payload.preflightBlock||payload.preflight_block||'').slice(0,64);
+    lic.scanGate=String(payload.scanGate||payload.scan_gate||'').slice(0,64);
+    lic.updatedAt=now;
+    licenses[v.key]=lic;
+    await writeLicenses(licenses);
+    v.licenses=licenses;v.lic=lic;
+    return lic;
+  });
+}
+
+//======================= canonical event store ========================
+// APEX-AUDIT-017: canonical events are the source of truth. They are INGESTED into the
+// durable local log (deduplicated by stable event id) so history is not limited to the
+// remote's latest-60 window, and campaign/ACK state is PROJECTED from that log.
+function eventId(e){
+  if(e.eventId)return String(e.eventId);
+  if(e.id)return String(e.id);
+  return crypto.createHash('sha1')
+    .update([e.ts||e.emittedAt||'',e.type||'',e.campaignId||'',e.layer??'',e.revision??'',e.account||''].join('|'))
+    .digest('hex');
 }
 async function appendEvent(e){
   await fs.mkdir(DATA,{recursive:true});
-  await fs.appendFile(EVENTS,JSON.stringify({ts:new Date().toISOString(),...e})+'\n');
+  const row={ts:new Date().toISOString(),...e};
+  row.eventId=eventId(row);
+  await fs.appendFile(EVENTS,JSON.stringify(row)+'\n');
+  return row;
 }
 async function allEvents(){
-  try{return (await fs.readFile(EVENTS,'utf8')).trim().split('\n').filter(Boolean).map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean)}
-  catch{return[]}
+  try{
+    return (await fs.readFile(EVENTS,'utf8')).trim().split('\n').filter(Boolean)
+      .map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean);
+  }catch(e){if(e&&e.code==='ENOENT')return [];throw e}
+}
+async function ingestRemoteEvents(key,remoteEvents,known){
+  if(!Array.isArray(remoteEvents)||!remoteEvents.length)return 0;
+  const lines=[];
+  for(const raw of remoteEvents){
+    const row={...raw,license:key};
+    row.ts=row.ts||row.emittedAt||new Date().toISOString();
+    row.eventId=eventId(row);
+    if(known.has(row.eventId))continue;
+    known.add(row.eventId);
+    lines.push(JSON.stringify(row));
+  }
+  if(!lines.length)return 0;
+  await fs.mkdir(DATA,{recursive:true});
+  await fs.appendFile(EVENTS,lines.join('\n')+'\n');
+  return lines.length;
+}
+function sortEvents(events){
+  return [...events].sort((a,b)=>{
+    const ta=Date.parse(a.ts||0)||0,tb=Date.parse(b.ts||0)||0;
+    return ta===tb?String(a.eventId||'').localeCompare(String(b.eventId||'')):ta-tb;
+  });
+}
+// Projects the CURRENT campaign from the reconciled event stream.
+export function projectCampaign(events){
+  let c=null;
+  for(const e of sortEvents(events)){
+    switch(e.type){
+      case 'CAMPAIGN_START':
+        c={campaignId:e.campaignId||null,direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
+           startedAt:e.ts,state:'ACTIVE',layers:Number(e.layers||1),signature:e.signature||null,
+           entryPrice:e.entryPrice??null,targetEquity:e.targetEquity??null,cycleStart:e.cycleStart??null,
+           setupId:e.setupId||null,bosKind:e.bosKind||null,score:e.score??null,
+           scoreFloorGivenMandatory:e.scoreFloorGivenMandatory??null,
+           closingOutcome:null,closingReason:null,earnedFloorPct:0,lastEventAt:e.ts};
+        break;
+      case 'CAMPAIGN_RECOVERED':
+        if(!c)c={campaignId:e.campaignId||null,direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
+                 startedAt:e.ts,state:e.campaignState==='CLOSING'?'CLOSING':'ACTIVE',layers:Number(e.layers||0),
+                 signature:e.signature||'RECOVERED',anchorsKnown:e.anchorsKnown!==false,lastEventAt:e.ts};
+        break;
+      case 'LAYER_OPEN':
+        if(c){c.layers=Number(e.layer||c.layers);c.lastEventAt=e.ts;c.basketVolume=e.basketVolume??c.basketVolume}
+        break;
+      case 'PROFIT_FLOOR_EARNED':
+        if(c){c.earnedFloorPct=Number(e.earnedFloorPct||c.earnedFloorPct||0);c.lastEventAt=e.ts}
+        break;
+      case 'CLOSING_REQUESTED':
+        if(c){c.state='CLOSING';c.closingOutcome=e.outcome||null;c.closingReason=e.reason||null;c.lastEventAt=e.ts}
+        break;
+      case 'CLOSE_RETRY': case 'CLOSE_STALLED':
+        if(c){c.state='CLOSING';c.remainingPositions=Number(e.remainingPositions||0);
+              c.closeAttempts=Number(e.attempts||0);c.stalled=e.type==='CLOSE_STALLED';c.lastEventAt=e.ts}
+        break;
+      case 'CAMPAIGN_END':
+        c=null;
+        break;
+    }
+  }
+  return c;
+}
+export function projectAck(events){
+  let ack={revision:0,status:null,at:null,appliedRevision:0,configHash:null};
+  for(const e of sortEvents(events)){
+    if(e.type!=='COMMAND_ACK')continue;
+    const rev=Number(e.revision||0);
+    if(rev>=ack.revision)ack={revision:rev,status:e.status||'ACK',at:e.ts,
+      appliedRevision:Number(e.appliedRevision||rev),configHash:e.configHash||null};
+  }
+  return ack;
+}
+export function buildHistory(events,limit=50){
+  const sorted=sortEvents(events);
+  const starts={};
+  const out=[];
+  for(const e of sorted){
+    if(e.type==='CAMPAIGN_START'&&e.campaignId)starts[e.campaignId]=e;
+    if(e.type!=='CAMPAIGN_END')continue;
+    const s=starts[e.campaignId];
+    out.push({
+      campaignId:e.campaignId,direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
+      startedAt:s?.ts||null,endedAt:e.ts,layers:e.layers,outcome:e.outcome,reason:e.reason,
+      mfe:e.mfe??null,mae:e.mae??null,
+      realisedNet:e.realisedNet??null,realisedCommission:e.realisedCommission??null,
+      realisedSwap:e.realisedSwap??null,finalBalance:e.finalBalance??null,
+      earnedFloorPct:e.earnedFloorPct??null,closeAttempts:e.closeAttempts??null
+    });
+  }
+  return out.reverse().slice(0,limit);
 }
 
-// --- Website sessions ---
+//======================= sessions =====================================
 function b64u(buf){return buf.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function fromB64u(s){return Buffer.from(s.replace(/-/g,'+').replace(/_/g,'/'),'base64')}
 function sign(p){return b64u(crypto.createHmac('sha256',SESSION_SECRET).update(p).digest())}
@@ -295,33 +663,50 @@ export function classifyMt5(lastSeen){
   const a=(Date.now()-Date.parse(lastSeen))/1000;
   return a<45?'CONNECTED':a<180?'STALE':'DISCONNECTED';
 }
+function newerIso(a,b){
+  const ta=a?Date.parse(a):NaN,tb=b?Date.parse(b):NaN;
+  if(!Number.isFinite(ta))return Number.isFinite(tb)?b:null;
+  if(!Number.isFinite(tb))return a;
+  return ta>=tb?a:b;
+}
 function humanEvent(e){
   const d=e.direction>0?'BUY':e.direction<0?'SELL':'';
   switch(e.type){
     case 'WATCH_ARMED':return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
+    case 'SETUP_CANCELLED':return `Setup cancelled — ${e.cancelReason||'no longer valid'}`;
     case 'CAMPAIGN_START':return `${d} campaign started`;
     case 'LAYER_OPEN':return `Market confirmed continuation — added position ${e.layer}`;
+    case 'ENTRY_REJECTED_AT_GATE':return `Entry skipped at the final price check — ${e.reason||''}`;
+    case 'ADD_BLOCKED':return `Addition skipped — ${e.reason||''}`;
+    case 'ORDER_REJECTED':return `Broker rejected the order — retcode ${e.retcode||''}`;
+    case 'ORDER_UNCONFIRMED':return `Order not confirmed by the broker — ${e.detail||''}`;
+    case 'CLOSING_REQUESTED':return `Closing the basket — ${e.reason||e.outcome||''}`;
+    case 'CLOSE_RETRY':return `Close retry — ${e.remainingPositions||0} position(s) still open`;
+    case 'CLOSE_STALLED':return `Close STILL failing — ${e.remainingPositions||0} position(s) open, campaign held in CLOSING`;
+    case 'PROFIT_FLOOR_EARNED':return `Profit floor raised to +${e.earnedFloorPct}%`;
     case 'CAMPAIGN_END':return `${d} campaign ended — ${e.outcome||'closed'}`;
-    case 'ORDER_FAIL':return `Order failed — broker code ${e.retcode||''}`;
     case 'CAMPAIGN_RECOVERED':return 'Apex recovered an open campaign after restart';
+    case 'MASTER_SL_MOVED':return 'Master stop moved and verified at the broker';
+    case 'MASTER_SL_MOVE_FAIL':return 'Master stop change was REFUSED by the broker';
     default:return null;
   }
-}
-function buildHistory(events){
-  const starts={};for(const e of events)if(e.type==='CAMPAIGN_START'&&e.campaignId)starts[e.campaignId]=e;
-  return events.filter(e=>e.type==='CAMPAIGN_END').slice(-50).reverse().map(e=>({
-    campaignId:e.campaignId,direction:e.direction>0?'BUY':'SELL',startedAt:starts[e.campaignId]?.ts||null,
-    endedAt:e.ts,layers:e.layers,outcome:e.outcome,mfe:e.mfe,mae:e.mae
-  }));
 }
 function learningShape(events){
   const ends=events.filter(e=>e.type==='CAMPAIGN_END');
   const positive=ends.filter(e=>['TARGET_HIT','PROFIT_FLOOR_HIT'].includes(e.outcome)).length;
-  return {schema:4,completedCampaigns:ends.length,positiveOutcomeRate:ends.length?positive/ends.length:0,
-    entryScoreAdjustment:0,addScoreAdjustment:0,authority:'OBSERVATION_ONLY',bySignature:{},featureInsights:{}};
+  // APEX-AUDIT-026: observation only. There is no trained model and no live adaptation;
+  // the adjustments are hard zero and are NOT permitted to become nonzero without an
+  // explicitly approved, versioned, out-of-sample-validated model.
+  return {schema:5,completedCampaigns:ends.length,positiveOutcomeRate:ends.length?positive/ends.length:0,
+    entryScoreAdjustment:0,addScoreAdjustment:0,authority:'OBSERVATION_ONLY',
+    adaptationImplemented:false,
+    disclaimer:'Apex does not adapt its strategy automatically. These figures describe past campaigns only.',
+    bySignature:{},featureInsights:{}};
 }
 function settingsView(c){return {
-  accountProfile:c.accountProfile,normalTargetProfitPct:c.normalTargetProfitPct,baseMarginPct:c.baseMarginPct,
+  accountProfile:c.accountProfile,targetMode:c.targetMode,targetEquity:c.targetEquity,
+  targetMultiplier:c.targetMultiplier,
+  normalTargetProfitPct:c.normalTargetProfitPct,baseMarginPct:c.baseMarginPct,
   layerMultiplier:c.layerMultiplier,maxLayers:c.maxLayers,normalL1MarginPct:c.normalL1MarginPct,
   normalL2MarginPct:c.normalL2MarginPct,normalL3PlusMarginPct:c.normalL3PlusMarginPct,
   normalFixedSLGoldMove:c.normalFixedSLGoldMove,profitRatchetEnabled:c.profitRatchetEnabled,
@@ -329,22 +714,25 @@ function settingsView(c){return {
   ratchetLockStepPct:c.ratchetLockStepPct,masterBreakEvenEnabled:c.masterBreakEvenEnabled,
   masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,
   recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
+  maxBasketLots:c.maxBasketLots,minMarginLevelPct:c.minMarginLevelPct,marginReservePct:c.marginReservePct,
   advanced:{entryScore:c.entryScore,addScore:c.addScore,impulseAtr:c.impulseAtr,sweepAtr:c.sweepAtr,
     rejectionBars:c.rejectionBars,watchExpiryMinutes:c.watchExpiryMinutes,rejectionZoneAtr:c.rejectionZoneAtr,
-    addSpacingAtr:c.addSpacingAtr,requireM3Confirm:c.requireM3Confirm,requireM5Context:c.requireM5Context}
+    addSpacingAtr:c.addSpacingAtr,requireM3Confirm:c.requireM3Confirm,requireM5Context:c.requireM5Context,
+    cooldownMinutes:c.cooldownMinutes,learningEnabled:c.learningEnabled}
 }}
+
+//======================= dashboard projection =========================
 async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
-  const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,accountProfile:lic?.accountProfile||cfg.accountProfile,expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
-  if(status!=='ACTIVE')return {license:base,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},settings:settingsView(cfg)};
+  const desiredHash=configHash(cfg);
+  const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
+    accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
+    expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
+  if(status!=='ACTIVE')
+    return {license:base,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},
+      settings:settingsView(cfg),learning:learningShape([]),
+      bridge:{configured:bridgeConfigured(),ok:false,reason:'LICENSE_'+status,sync:bridgeSyncState}};
 
-  // As of EA v3.7.1-XauCloudLink the EA no longer calls this server's own
-  // /api/apex/heartbeat — it POSTs straight to XauCloud's canonical
-  // /api/cloud/monitor/heartbeat. lic.lastSeen (stamped only by the legacy
-  // /api/apex/*  and /api/ea/* compat routes below) therefore goes stale for
-  // any license using the current EA build. The XauCloud bridge status is
-  // the live source of truth now; local lastSeen is kept only as a fallback
-  // for an already-attached EA still on an older build that never migrated.
   const bridge=await readBridgeStatusSafe(key);
   const remote=bridge.data;
   const remoteLastSeen=remote?.mt5?.lastSeen||null;
@@ -353,37 +741,95 @@ async function buildMe(key){
   const hb=(remote?.heartbeat&&typeof remote.heartbeat==='object')?remote.heartbeat:null;
   const remoteAccount=String(remote?.license?.account||'').trim();
 
-  const all=await allEvents(),acct=lic.lastAccount||lic.account||remoteAccount||'';
-  const events=acct?all.filter(e=>String(e.account)===String(acct)):all.filter(e=>normalizeLicense(e.license)===key);
+  // APEX-AUDIT-017: ingest the canonical page into the durable local log, then project
+  // from the FULL reconciled log rather than from the remote's latest-60 window.
+  const all=await allEvents();
+  const known=new Set(all.map(e=>e.eventId||eventId(e)));
+  const ingested=await ingestRemoteEvents(key,remote?.recentEvents||[],known);
+  const merged=ingested?await allEvents():all;
+  const acct=lic.lastAccount||lic.account||remoteAccount||'';
+  const events=merged.filter(e=>
+    normalizeLicense(e.license||e.license_key||'')===key||(acct&&String(e.account)===String(acct)));
 
-  console.log(`APEX_BRIDGE_STATUS_CHECK license=${maskLicense(key)} bridgeOk=${bridge.ok} heartbeatFound=${Boolean(remoteLastSeen)} ageSec=${remoteLastSeen?Math.max(0,Math.round((Date.now()-Date.parse(remoteLastSeen))/1000)):'n/a'} resolved=${mt5}`);
+  const campaign=projectCampaign(events);
+  const ack=projectAck(events);
+
+  const desiredRevision=Number(lic.commandRevision||0);
+  const appliedRevision=Number(hb?.applied_revision??lic.appliedRevision??ack.appliedRevision??0);
+  const appliedHash=String(hb?.config_hash||lic.appliedConfigHash||ack.configHash||'');
+  const known3=(v)=>v===null||v===undefined?null:v;
+
+  console.log(`APEX_BRIDGE_STATUS_CHECK license=${maskLicense(key)} bridgeOk=${bridge.ok} heartbeatFound=${Boolean(remoteLastSeen)} ageSec=${remoteLastSeen?Math.max(0,Math.round((Date.now()-Date.parse(remoteLastSeen))/1000)):'n/a'} resolved=${mt5} ingested=${ingested}`);
+
+  // APEX-AUDIT-018: a heartbeat is NOT proof the strategy engine can trade. Desired,
+  // applied, connectivity and trading readiness are four separate, honestly-labelled facts.
+  const terminalConnected=known3(hb?.mt5_connected??lic.terminalConnected);
+  const terminalTradeAllowed=known3(hb?.trading_allowed??lic.terminalTradeAllowed);
+  const eaTradeAllowed=known3(hb?.algo_trading??lic.eaTradeAllowed);
+  const preflightBlock=String(hb?.preflight_block||lic.preflightBlock||'');
+  const observerOnly=Boolean(hb?.observer_only??lic.observerOnly);
+  const readyToTrade=(mt5==='CONNECTED')&&terminalConnected===true&&terminalTradeAllowed===true&&
+                     eaTradeAllowed===true&&!observerOnly&&preflightBlock===''&&cfg.armed===true;
 
   return {
     license:base,dataAvailable:Boolean(lastSeen),waitingForFirstContact:!lastSeen,
     armed:cfg.armed,accountProfile:cfg.accountProfile,
     mt5:{status:mt5,lastSeen:lastSeen||null},
-    command:{revision:Number(lic.commandRevision||0),pending:lic.pendingCommand||null,lastAckRevision:Number(lic.lastAckRevision||0),lastAckStatus:lic.lastAckStatus||null,lastAckAt:lic.lastAckAt||null},
+    // desired vs applied vs unknown, never merged into a single "armed" light
+    control:{
+      desired:{armed:cfg.armed,revision:desiredRevision,configHash:desiredHash},
+      applied:{revision:appliedRevision||null,configHash:appliedHash||null,
+               asOf:lastSeen||null,
+               inSync:appliedRevision>0?appliedRevision===desiredRevision:null},
+      ack:{revision:ack.revision||0,status:ack.status,at:ack.at}
+    },
+    readiness:{
+      readyToTrade,
+      terminalConnected,terminalTradeAllowed,eaTradeAllowed,
+      observerOnly,preflightBlock:preflightBlock||null,
+      scanGate:String(hb?.scan_gate||lic.scanGate||'')||null,
+      openPositions:known3(hb?.open_positions??lic.openPositions),
+      basketVolume:known3(hb?.basket_volume??lic.basketVolume),
+      freeMargin:known3(hb?.free_margin??lic.freeMargin),
+      marginLevel:known3(hb?.margin_level??lic.marginLevel),
+      note:'A heartbeat only proves the EA process is reachable. readyToTrade additionally requires broker trading permission, an applied config and an armed state.'
+    },
+    command:{revision:desiredRevision,pending:lic.pendingCommand||null,
+      lastAckRevision:Number(ack.revision||lic.lastAckRevision||0),
+      lastAckStatus:ack.status||lic.lastAckStatus||null,
+      lastAckAt:ack.at||lic.lastAckAt||null},
     account:{
       account:String(hb?.account_number||remoteAccount||lic.lastAccount||lic.account||'')||null,
       broker:hb?.broker_server||lic.broker||null,
       server:hb?.broker_server||lic.server||null,
       currency:lic.currency||null,
-      balance:hb?.balance??lic.balance??null,
-      equity:hb?.equity??lic.equity??null,
-      freeMargin:lic.freeMargin??null,
-      openPositions:hb?.open_positions??null,
+      balance:known3(hb?.balance??lic.balance),
+      equity:known3(hb?.equity??lic.equity),
+      freeMargin:known3(hb?.free_margin??lic.freeMargin),
+      marginLevel:known3(hb?.margin_level??lic.marginLevel),
+      openPositions:known3(hb?.open_positions??lic.openPositions),
       asOf:lastSeen||null,
-      tradeMode:lic.tradeMode??null
+      tradeMode:known3(lic.tradeMode)
     },
-    campaign:null,history:buildHistory(events),learning:learningShape(events),
-    recentHuman:events.slice(-60).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(x=>x.text).slice(0,30),
-    effectiveConfig:(hb?.ea_version||lic.eaVersion)?{eaVersion:hb?.ea_version||lic.eaVersion,configSource:remote?'XAUCLOUD_BRIDGE':'REMOTE/CACHED_LOCAL',asOf:lastSeen||lic.lastSeen||null}:null,
+    campaign,history:buildHistory(events),learning:learningShape(events),
+    recentHuman:sortEvents(events).slice(-120).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(x=>x.text).slice(0,30),
+    effectiveConfig:{
+      eaVersion:hb?.ea_version||lic.eaVersion||null,
+      buildId:hb?.build_id||lic.buildId||null,
+      expectedEaVersion:MANIFEST.eaVersion,
+      configSource:remote?'XAUCLOUD_BRIDGE':'REMOTE/CACHED_LOCAL',
+      appliedRevision:appliedRevision||null,appliedConfigHash:appliedHash||null,
+      desiredRevision,desiredConfigHash:desiredHash,
+      asOf:lastSeen||lic.lastSeen||null
+    },
     settings:settingsView(cfg),
     bridge:{
       configured:bridgeConfigured(),ok:bridge.ok,reason:bridge.ok?null:bridge.reason,
       heartbeatFound:Boolean(remoteLastSeen),
       heartbeatAgeSec:remoteLastSeen?Math.max(0,Math.round((Date.now()-Date.parse(remoteLastSeen))/1000)):null,
-      resolvedState:mt5,license:maskLicense(key)
+      resolvedState:mt5,license:maskLicense(key),
+      sync:{status:bridgeSyncState.status,error:bridgeSyncState.error,finishedAt:bridgeSyncState.finishedAt},
+      eventsIngested:ingested
     }
   };
 }
@@ -391,63 +837,102 @@ function genLicense(){
   const seg=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
   return `APEX-${seg()}-${seg()}-${seg()}`;
 }
-function adminOk(req){return req.headers.authorization===`Bearer ${ADMIN_TOKEN}`}
+function adminOk(req){
+  const supplied=String(req.headers.authorization||'');
+  const expected=`Bearer ${ADMIN_TOKEN}`;
+  const a=Buffer.from(supplied),b=Buffer.from(expected);
+  return a.length===b.length&&crypto.timingSafeEqual(a,b);
+}
+// Config responses: validated config FIRST, server-derived identity attached AFTER, so
+// a stored key can never spoof licenseStatus/commandRevision/configHash (APEX-AUDIT-019).
+function configEnvelope(cfg,{commandRevision=0,extra={}}={}){
+  return {...clean(cfg),
+    ok:true,schema:CONFIG_SCHEMA,licenseStatus:'ACTIVE',
+    commandRevision:Number(commandRevision||0),configHash:configHash(clean(cfg)),
+    serverTime:new Date().toISOString(),...extra};
+}
 
+//======================= HTTP ========================================
 const server=http.createServer(async(req,res)=>{
   try{
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Referrer-Policy','no-referrer');
     const u=new URL(req.url,'http://localhost');
+    const ip=clientIp(req);
 
     if(req.method==='GET'&&u.pathname==='/health')
-      return json(res,200,{ok:true,service:'xaucloud-apex',version:'3.7.0',link:'command-center-style'});
+      return json(res,200,{ok:true,service:'xaucloud-apex',
+        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,
+        configSchema:CONFIG_SCHEMA,webRequestOrigin:MANIFEST.webRequestOrigin,
+        bridge:{configured:bridgeConfigured(),sync:bridgeSyncState},
+        secretsAcceptableForProduction:secretProblems().length===0,
+        link:'command-center-style'});
 
-    // New canonical MT5 heartbeat. JSON body only: avoids fragile custom auth headers.
+    // --- EA routes. One binding/expiry policy for all of them (APEX-AUDIT-022). ---
     if(req.method==='POST'&&u.pathname==='/api/apex/heartbeat'){
-      const b=await body(req),v=await validateEa(b.license,b.account);
-      if(!v.ok){console.warn(`APEX_HEARTBEAT_DENIED ip=${clientIp(req)} license=${maskLicense(b.license)} status=${v.status}`);return json(res,200,{ok:false,licenseStatus:v.status,armed:false})}
+      const b=await body(req),v=await validateEa(b.license??b.license_key,b.account??b.account_number);
+      if(!v.ok){
+        console.warn(`APEX_HEARTBEAT_DENIED ip=${ip} license=${maskLicense(b.license)} status=${v.status}`);
+        return json(res,403,{ok:false,licenseStatus:v.status,armed:false,reason:v.status});
+      }
       const lic=await stampHeartbeat(v,b),cfg=await getLicenseConfig(v.key);
-      return json(res,200,{ok:true,licenseStatus:'ACTIVE',...cfg,commandRevision:Number(lic.commandRevision||0),serverTime:new Date().toISOString()});
+      return json(res,200,configEnvelope(cfg,{commandRevision:Number(lic.commandRevision||0)}));
     }
 
     if(req.method==='POST'&&u.pathname==='/api/apex/command/ack'){
-      const b=await body(req),v=await validateEa(b.license,b.account);
+      const b=await body(req),v=await validateEa(b.license??b.license_key,b.account??b.account_number);
       if(!v.ok)return json(res,403,{ok:false,error:v.status});
-      const lic=v.lic,rev=Number(b.revision||0);
-      if(rev>=Number(lic.lastAckRevision||0)){lic.lastAckRevision=rev;lic.lastAckStatus=String(b.status||'ACK');lic.lastAckAt=new Date().toISOString();v.licenses[v.key]=lic;await writeLicenses(v.licenses)}
+      const rev=Number(b.revision||0);
+      await withLock('lic:'+v.key,async()=>{
+        const licenses=await readLicenses(),lic=licenses[v.key];
+        if(lic&&rev>=Number(lic.lastAckRevision||0)){
+          lic.lastAckRevision=rev;lic.lastAckStatus=String(b.status||'ACK');lic.lastAckAt=new Date().toISOString();
+          lic.appliedRevision=Number(b.appliedRevision||rev);
+          if(b.configHash)lic.appliedConfigHash=String(b.configHash).slice(0,64);
+          licenses[v.key]=lic;await writeLicenses(licenses);
+        }
+      });
+      await appendEvent({type:'COMMAND_ACK',license:v.key,account:String(b.account||''),revision:rev,
+        status:String(b.status||'ACK'),appliedRevision:Number(b.appliedRevision||rev),configHash:b.configHash||null,
+        eventId:b.eventId});
       return json(res,200,{ok:true});
     }
 
     if(req.method==='POST'&&u.pathname==='/api/apex/event'){
-      const b=await body(req),v=await validateEa(b.license,b.account);
+      const b=await body(req),v=await validateEa(b.license??b.license_key,b.account??b.account_number);
       if(!v.ok)return json(res,403,{ok:false,error:v.status});
       await stampHeartbeat(v,b);
-      await appendEvent({...b,license:v.key});
-      return json(res,200,{ok:true});
+      const row=await appendEvent({...b,license:v.key});
+      return json(res,200,{ok:true,eventId:row.eventId});
     }
 
-    // Compatibility for already-attached older EA versions.
+    // Compatibility route for an already-attached older EA build. It uses the SAME
+    // validateEa() binding/expiry policy -- it can no longer bypass it (APEX-AUDIT-022).
     if(req.method==='GET'&&u.pathname==='/api/ea/config'){
       const license=normalizeLicense(req.headers['x-apex-license']||u.searchParams.get('license')||'');
       const account=String(u.searchParams.get('account')||'');
       const v=await validateEa(license,account);
-      if(!v.ok)return json(res,200,{...DEFAULT,armed:false,licenseStatus:v.status});
+      if(!v.ok)return json(res,403,{ok:false,licenseStatus:v.status,armed:false,reason:v.status});
       const lic=await stampHeartbeat(v,{account}),cfg=await getLicenseConfig(v.key);
-      return json(res,200,{...cfg,licenseStatus:'ACTIVE',commandRevision:Number(lic.commandRevision||0),learning:learningShape(await allEvents())});
+      return json(res,200,configEnvelope(cfg,{commandRevision:Number(lic.commandRevision||0),
+        extra:{learning:learningShape(await allEvents()),legacyRoute:true}}));
     }
     if(req.method==='POST'&&u.pathname==='/api/ea/event'){
       const b=await body(req);
       const license=normalizeLicense(req.headers['x-apex-license']||b.license||'');
       const v=await validateEa(license,b.account);
-      if(!v.ok)return json(res,403,{error:v.status});
-      await stampHeartbeat(v,b);await appendEvent({...b,license:v.key});return json(res,200,{ok:true});
+      if(!v.ok)return json(res,403,{ok:false,error:v.status});
+      await stampHeartbeat(v,b);const row=await appendEvent({...b,license:v.key});
+      return json(res,200,{ok:true,eventId:row.eventId});
     }
 
-    // Website auth.
+    // --- website auth ---
     if(req.method==='POST'&&u.pathname==='/api/auth/login'){
+      if(!throttle('login',ip,20))return json(res,429,{error:'too_many_attempts'});
       const b=await body(req),key=normalizeLicense(b.license),licenses=await readLicenses();
-      if(licenseStatusFor(licenses[key])!=='ACTIVE')return json(res,401,{error:'LICENSE_NOT_ACTIVE'});
+      const st=licenseStatusFor(licenses[key]);
+      if(st!=='ACTIVE')return json(res,401,{error:'LICENSE_NOT_ACTIVE',reason:st});
       setSession(res,makeSession(key));return json(res,200,{ok:true});
     }
     if(req.method==='POST'&&u.pathname==='/api/auth/logout'){clearSession(res);return json(res,200,{ok:true})}
@@ -457,42 +942,89 @@ const server=http.createServer(async(req,res)=>{
     }
     if(req.method==='POST'&&u.pathname==='/api/session/config'){
       const s=verifySession(cookies(req).apex_session);if(!s)return json(res,401,{error:'no_session'});
-      const licenses=await readLicenses();if(licenseStatusFor(licenses[s.lic])!=='ACTIVE')return json(res,403,{error:'license_not_active'});
-      const b=await body(req),cfg=await saveLicenseConfig(s.lic,b,{bumpRevision:true});
-      return json(res,200,{ok:true,config:cfg,commandRevision:Number((await readLicenses())[s.lic].commandRevision||0)});
+      const licenses=await readLicenses();
+      const st=licenseStatusFor(licenses[s.lic]);
+      if(st!=='ACTIVE')return json(res,403,{error:'license_not_active',reason:st});
+      const b=await body(req);
+      const {expectedRevision,...patch}=b||{};
+      const saved=await saveLicenseConfig(s.lic,patch,{bumpRevision:true,
+        expectedRevision:expectedRevision===undefined?null:Number(expectedRevision)});
+      return json(res,200,{ok:true,config:saved.config,commandRevision:saved.revision,
+        configHash:saved.configHash,delivery:saved.delivery?.queued?'QUEUED_FOR_BRIDGE':'DELIVERED'});
     }
 
-    // Admin.
+    // --- admin ---
     if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
-      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
-      const ls=await readLicenses();return json(res,200,{licenses:Object.entries(ls).map(([key,v])=>({key,...v,status:licenseStatusFor(v)}))});
+      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      const ls=await readLicenses();
+      return json(res,200,{licenses:Object.entries(ls).map(([key,v])=>({key,...v,status:licenseStatusFor(v)}))});
     }
     if(req.method==='POST'&&u.pathname==='/api/admin/licenses'){
-      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
-      const b=await body(req),ls=await readLicenses(),key=normalizeLicense(b.key)||genLicense(),old=ls[key]||{},now=new Date().toISOString();
-      const next={...old,status:['ACTIVE','DISABLED'].includes(b.status)?b.status:(old.status||'ACTIVE'),
-        account:b.account!==undefined?String(b.account||''):(old.account||''),
-        customer:b.customer!==undefined?String(b.customer||''):(old.customer||''),
-        accountProfile:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(old.accountProfile||'NORMAL'),
-        expiresAt:b.expiresAt!==undefined?(b.expiresAt||null):(old.expiresAt||null),
-        commandRevision:Number(old.commandRevision||0),createdAt:old.createdAt||now,updatedAt:now};
-      await syncBridgeLicense(key,next,{resetAccount:b.account!==undefined&&!String(b.account||'')});
-      await syncBridgeConfig(key,await getLicenseConfig(key),Number(next.commandRevision||0));
-      ls[key]=next;
-      await writeLicenses(ls);return json(res,200,{ok:true,license:{key,...ls[key],status:licenseStatusFor(ls[key])}});
+      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      const b=await body(req),key=normalizeLicense(b.key)||genLicense();
+      const result=await withLock('lic:'+key,async()=>{
+        const ls=await readLicenses(),old=ls[key]||{},now=new Date().toISOString();
+        // APEX-AUDIT-022: an admin edit must not silently break an existing atomic
+        // first-claim. Clearing the account is an explicit reset, not an accident.
+        const clearing=b.account!==undefined&&!String(b.account||'');
+        const next={...old,
+          status:['ACTIVE','DISABLED'].includes(b.status)?b.status:(old.status||'ACTIVE'),
+          account:b.account!==undefined?String(b.account||''):(old.account||''),
+          customer:b.customer!==undefined?String(b.customer||''):(old.customer||''),
+          // APEX-AUDIT-023: this is the COMMERCIAL tier. The EXECUTION profile lives in
+          // the per-license config and is written below so the two cannot disagree.
+          licenseTier:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(old.licenseTier||old.accountProfile||'NORMAL'),
+          accountProfile:['NORMAL','UNLIMITED'].includes(b.accountProfile)?b.accountProfile:(old.accountProfile||'NORMAL'),
+          expiresAt:b.expiresAt!==undefined?(b.expiresAt||null):(old.expiresAt||null),
+          commandRevision:Number(old.commandRevision||0),createdAt:old.createdAt||now,updatedAt:now};
+        if(clearing)next.activatedAt=null;
+        ls[key]=next;
+        await writeLicenses(ls);
+        return {next,clearing};
+      });
+      // Align the execution profile with the licence tier, transactionally and with a
+      // revision bump, so the EA actually receives it (APEX-AUDIT-023).
+      let cfgResult=null;
+      if(b.accountProfile&&['NORMAL','UNLIMITED'].includes(b.accountProfile)){
+        const cur=await getLicenseConfig(key);
+        if(cur.accountProfile!==b.accountProfile)
+          cfgResult=await saveLicenseConfig(key,{accountProfile:b.accountProfile},{bumpRevision:true});
+      }
+      await syncBridgeLicense(key,result.next,{resetAccount:result.clearing,queueOnFailure:true});
+      if(!cfgResult)await syncBridgeConfig(key,await getLicenseConfig(key),Number(result.next.commandRevision||0),{queueOnFailure:true});
+      const ls=await readLicenses();
+      const executionConfig=await getLicenseConfig(key);
+      return json(res,200,{ok:true,
+        license:{key,...ls[key],status:licenseStatusFor(ls[key])},
+        licenseTier:ls[key].licenseTier,
+        executionProfile:executionConfig.accountProfile,
+        profileAligned:ls[key].licenseTier===executionConfig.accountProfile,
+        commandRevision:Number(ls[key].commandRevision||0)});
     }
     if(req.method==='GET'&&u.pathname==='/api/admin/bridge/status'){
-      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
+      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
       const key=normalizeLicense(u.searchParams.get('license')||'');
       if(!key)return json(res,400,{ok:false,error:'license_required'});
       const licenses=await readLicenses(),lic=licenses[key];
       if(!lic)return json(res,404,{ok:false,error:'local_license_not_found',license:maskLicense(key)});
       const check=await bridgeSelfTest(key,lic);
-      return json(res,200,{ok:true,license:maskLicense(key),...check});
+      const executionConfig=await getLicenseConfig(key);
+      return json(res,200,{ok:true,license:maskLicense(key),...check,
+        licenseTier:lic.licenseTier||lic.accountProfile||'NORMAL',
+        executionProfile:executionConfig.accountProfile,
+        profileAligned:(lic.licenseTier||lic.accountProfile||'NORMAL')===executionConfig.accountProfile,
+        outboxPending:(await outboxRead()).length,sync:bridgeSyncState});
+    }
+    if(req.method==='POST'&&u.pathname==='/api/admin/bridge/drain'){
+      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      return json(res,200,{ok:true,...(await drainOutbox())});
     }
     if(req.method==='GET'&&u.pathname==='/api/admin/status'){
-      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
-      return json(res,200,{ok:true,licenses:(await readLicenses()),configs:(await readLicenseConfigs())});
+      if(!adminOk(req)){throttle('admin',ip,30);return json(res,401,{error:'unauthorized'})}
+      return json(res,200,{ok:true,manifest:MANIFEST,sync:bridgeSyncState,
+        outboxPending:(await outboxRead()).length,
+        secretProblems:secretProblems(),
+        licenses:(await readLicenses()),configs:(await readLicenseConfigs())});
     }
 
     if(req.method==='GET'&&u.pathname==='/'){
@@ -503,13 +1035,18 @@ const server=http.createServer(async(req,res)=>{
     return json(res,404,{error:'not_found'});
   }catch(e){
     console.error(e);
-    return json(res,e?.httpStatus||500,{error:e?.message||'internal_error'});
+    return json(res,e?.httpStatus||500,{error:e?.message||'internal_error',detail:e?.detail||null});
   }
 });
 
 await ensure();
 if(process.env.NODE_ENV!=='test'){
-  await syncAllLicensesAtStartup();
-  server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v3.7 listening on ${PORT}`));
+  assertProductionSecrets();
+  // APEX-AUDIT-021: the local service comes up FIRST. Bridge reconciliation runs in the
+  // background and its state is reported honestly through /health and the dashboard;
+  // it never blocks startup or a dashboard request.
+  server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v${MANIFEST.version} listening on ${PORT}`));
+  syncAllLicensesAtStartup().catch(e=>console.error('APEX_BRIDGE_STARTUP_DEFERRED',String(e?.message||e)));
+  setInterval(()=>{drainOutbox().catch(e=>console.error('APEX_OUTBOX_DRAIN_FAILED',String(e?.message||e)))},15_000).unref?.();
 }
-export {server,syncAllLicensesAtStartup};
+export {server};

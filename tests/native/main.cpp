@@ -10,6 +10,9 @@ bool        InpRequireFreshTrigger=true;
 bool        InpRejectReclaimedExtreme=true;
 double      InpMaxEntryExtensionAtr=1.50;
 ApexGateMode InpEntryExtensionMode=GATE_SHADOW;
+datetime    g_marketClosedRetryAt=0;
+int         g_marketClosedBackoffSec=0;
+double      g_serverRejectedVolume=0, g_serverFilledVolume=0, g_serverEvidenceFreeMargin=0;
 #include "extracted.h"
 
 #include <iostream>
@@ -21,6 +24,8 @@ static void resetBroker(){
   C=ApexConfig();
   InpMaxQuoteAgeMs=0; InpRequireFreshTrigger=true; InpRejectReclaimedExtreme=true;
   InpMaxEntryExtensionAtr=1.50; InpEntryExtensionMode=GATE_SHADOW;
+  g_marketClosedRetryAt=0; g_marketClosedBackoffSec=0;
+  g_serverRejectedVolume=0; g_serverFilledVolume=0; g_serverEvidenceFreeMargin=0;
 }
 
 // Mirrors the retry loop in OpenLayer (halve onto the grid while the rejection is
@@ -49,10 +54,16 @@ static void emitSizing(const std::string &name,int dir,double pct,double price,d
     "{\"test\":\"%s\",\"pct\":%.2f,\"volMin\":%.5f,\"volMax\":%.5f,\"volStep\":%.5f,"
     "\"freeMargin\":%.2f,\"marginPerLot\":%.4f,\"v371Volume\":%.5f,\"v380Volume\":%.5f,"
     "\"capacityByMargin\":%.5f,\"capacityByBroker\":%.5f,\"byCapacityPct\":%.5f,"
-    "\"byMarginBudget\":%.5f,\"budget\":%.2f,\"block\":\"%s\",\"orderCheckRetcode\":%u}",
+    "\"byMarginBudget\":%.5f,\"budget\":%.2f,\"block\":\"%s\",\"orderCheckRetcode\":%u,"
+    "\"profile\":\"%s\",\"capacitySource\":\"%s\",\"brokerReportedLeverage\":%lld,"
+    "\"configuredNormalReferenceLeverage\":%lld,\"effectiveSizingLeverage\":%lld,"
+    "\"brokerMarginModelTrusted\":%s,\"moneyCapacity\":%.5f,\"trustedMarginPerLot\":%.5f}",
     name.c_str(),pct,d.volMin,d.volMax,d.volStep,d.freeMargin,BRK.marginPerLot,
     v371,d.finalVolume,d.capacityByMargin,d.capacityByBroker,d.byCapacityPct,
-    d.byMarginBudget,d.budget,d.blockReason.c_str(),d.checkRetcode));
+    d.byMarginBudget,d.budget,d.blockReason.c_str(),d.checkRetcode,
+    ExecutionProfile().c_str(),d.capacitySource.c_str(),d.brokerReportedLeverage,
+    d.configuredNormalReferenceLeverage,d.effectiveSizingLeverage,
+    b(d.brokerMarginModelTrusted).c_str(),d.moneyCapacity,d.trustedMarginPerLot));
 }
 
 static void emitGate(const std::string &name,int dir,double invalidLevel,double refPrice,
@@ -77,11 +88,99 @@ int main(){
   emitSizing("live_exness_zero_margin_normal_L2",1,50.0,BRK.ask,0);
   emitSizing("live_exness_zero_margin_normal_L3",1,100.0,BRK.ask,0);
 
+  // ---------- B: EXACT replay of the 2026-09-08 01:24 demo 476885386 incident ----
+  // Verbatim from the terminal's own telemetry:
+  //   APEX SIZING | profile=NORMAL layer=L1 pct=15.00 | leverage=1:2000000000
+  //   freeMargin=1000.00 | volMax=200.0000 | marginAt1Lot=0.00
+  //   capacityByMargin=200.0000 | byCapacityPct=30.0000 | FINAL=30.0000
+  // and the broker Journal: "market sell 30 XAUUSDm", then L2 "market sell 100".
+  // The broker margin model is pathological, so NORMAL must fall back to the OWNER
+  // CONFIGURED reference leverage (1:500 for this account), never to SYMBOL_VOLUME_MAX.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1000.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664;
+  C.normalReferenceLeverage=500;
+  emitSizing("incident_476885386_L1_15pct",-1,15.0,BRK.bid,4451.738);
+  BRK.freeMargin=3318.99;
+  emitSizing("incident_476885386_L2_50pct",-1,50.0,BRK.bid,0);
+
+  // Same pathological broker, but AUTO (no configured reference leverage): refuse.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1000.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664;
+  emitSizing("pathological_auto_without_reference_blocks",-1,15.0,BRK.bid,0);
+
+  // ---------- the $1,200 account the owner intends to run next ---------------
+  // NORMAL, reference leverage 1:500, gold ~4421.564, 100oz contract.
+  // margin/lot = 100*4421.564/500 = 884.31 -> capacity 1.35 lots.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1200.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664;
+  C.normalReferenceLeverage=500;
+  emitSizing("acct1200_ref500_L1",-1,15.0,BRK.bid,0);
+  emitSizing("acct1200_ref500_L2",-1,50.0,BRK.bid,0);
+  emitSizing("acct1200_ref500_L3",-1,100.0,BRK.bid,0);
+
+  // ---------- reference leverage matrix: 1:100 / 1:200 / 1:500 --------------
+  // Same $1,200 and price; only the configured economic leverage differs, so the
+  // capacity (and therefore every tier) must scale linearly with it.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1200.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664; C.normalReferenceLeverage=100;
+  emitSizing("ref_lev_100_L1",-1,15.0,BRK.bid,0);
+  emitSizing("ref_lev_100_L3",-1,100.0,BRK.bid,0);
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1200.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664; C.normalReferenceLeverage=200;
+  emitSizing("ref_lev_200_L1",-1,15.0,BRK.bid,0);
+  emitSizing("ref_lev_200_L3",-1,100.0,BRK.bid,0);
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1200.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664; C.normalReferenceLeverage=500;
+  emitSizing("ref_lev_500_L1",-1,15.0,BRK.bid,0);
+  emitSizing("ref_lev_500_L3",-1,100.0,BRK.bid,0);
+
+  // ---------- L4+ must keep adding at 100% of CURRENT capacity -------------
+  // Free margin falls as layers open; each add re-reads it. L3, L4 and L5 are all
+  // 100% tiers, so each must equal 100% of the capacity available AT THAT MOMENT --
+  // decreasing, but never blocked merely for being past L3.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.leverage=2000000000L;
+  BRK.bid=4421.564; BRK.ask=4421.664; C.normalReferenceLeverage=500;
+  BRK.freeMargin=1200.0; emitSizing("layer_ladder_L3_100pct",-1,100.0,BRK.bid,0);
+  BRK.freeMargin=800.0;  emitSizing("layer_ladder_L4_100pct",-1,100.0,BRK.bid,0);
+  BRK.freeMargin=400.0;  emitSizing("layer_ladder_L5_100pct",-1,100.0,BRK.bid,0);
+
+  // The $20 UNLIMITED live account's reported 1:200000000 leverage, NORMAL profile
+  // with no configured reference leverage: refuse rather than guess.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=20.40; BRK.leverage=200000000L;
+  emitSizing("degenerate_leverage_normal_refuses",1,15.0,BRK.ask,0);
+
+  // A lowercase profile must NOT fall through to the aggressive path.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1000.0;
+  C.accountProfile="normal";
+  emitSizing("lowercase_profile_still_normal",1,15.0,BRK.ask,0);
+
+  // A NORMAL account on a SANE broker must ignore the reference leverage entirely.
+  resetBroker();
+  BRK.marginPerLot=880.2; BRK.freeMargin=10000.0; BRK.volMax=200.0; BRK.leverage=500;
+  C.normalReferenceLeverage=100;   // configured, but must NOT be used
+  emitSizing("sane_broker_ignores_reference_leverage",1,15.0,BRK.ask,0);
+
   // ---------- C: UNLIMITED profile must stay aggressive ---------------------
   resetBroker();
   BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=1000.0;
   C.accountProfile="UNLIMITED";
   emitSizing("unlimited_profile_full_allocation",1,100.0,BRK.ask,0);
+
+  // UNLIMITED on the same degenerate $20 account stays aggressive -- the capacity
+  // gate is NORMAL-only and must not quietly neuter the owner's chosen profile.
+  resetBroker();
+  BRK.marginPerLot=0.0; BRK.volMax=200.0; BRK.freeMargin=20.40; BRK.leverage=200000000L;
+  C.accountProfile="UNLIMITED";
+  emitSizing("unlimited_degenerate_leverage_stays_aggressive",1,100.0,BRK.ask,0);
 
   // ---------- ordinary linear-margin account: behaviour must be UNCHANGED ---
   resetBroker();

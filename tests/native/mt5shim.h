@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <cctype>
 #include <algorithm>
 #include <vector>
 
@@ -20,10 +21,17 @@ typedef std::string    string;
 // ---- enums -------------------------------------------------------------
 enum ENUM_ORDER_TYPE { ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1 };
 enum ENUM_TRADE_REQUEST_ACTIONS { TRADE_ACTION_DEAL=1 };
-enum ENUM_ORDER_TYPE_FILLING { ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1 };
+enum ENUM_ORDER_TYPE_FILLING { ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1, ORDER_FILLING_RETURN=2 };
 enum ENUM_SYMBOL_INFO_DOUBLE { SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_MAX, SYMBOL_VOLUME_STEP,
-                               SYMBOL_POINT, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_ASK, SYMBOL_BID };
-enum ENUM_SYMBOL_INFO_INTEGER { SYMBOL_DIGITS, SYMBOL_TRADE_MODE };
+                               SYMBOL_POINT, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_ASK, SYMBOL_BID,
+                               SYMBOL_MARGIN_INITIAL };
+enum ENUM_SYMBOL_INFO_INTEGER { SYMBOL_DIGITS, SYMBOL_TRADE_MODE, SYMBOL_FILLING_MODE, SYMBOL_TRADE_EXEMODE };
+enum ENUM_SYMBOL_INFO_STRING { SYMBOL_CURRENCY_PROFIT, SYMBOL_CURRENCY_MARGIN, SYMBOL_CURRENCY_BASE };
+enum ENUM_ACCOUNT_INFO_STRING { ACCOUNT_CURRENCY, ACCOUNT_COMPANY, ACCOUNT_SERVER };
+enum ENUM_SYMBOL_TRADE_EXECUTION { SYMBOL_TRADE_EXECUTION_REQUEST=0, SYMBOL_TRADE_EXECUTION_INSTANT=1,
+                                   SYMBOL_TRADE_EXECUTION_MARKET=2, SYMBOL_TRADE_EXECUTION_EXCHANGE=3 };
+#define SYMBOL_FILLING_FOK 1
+#define SYMBOL_FILLING_IOC 2
 enum ENUM_ACCOUNT_INFO_DOUBLE { ACCOUNT_MARGIN_FREE, ACCOUNT_EQUITY, ACCOUNT_MARGIN,
                                 ACCOUNT_BALANCE, ACCOUNT_MARGIN_LEVEL };
 enum ENUM_ACCOUNT_INFO_INTEGER { ACCOUNT_LOGIN, ACCOUNT_LEVERAGE, ACCOUNT_MARGIN_MODE, ACCOUNT_TRADE_MODE };
@@ -33,7 +41,11 @@ enum ENUM_TIMEFRAMES { PERIOD_M1=1, PERIOD_M3=3, PERIOD_M5=5 };
 #define TRADE_RETCODE_DONE_PARTIAL    10010
 #define TRADE_RETCODE_NO_MONEY        10019
 #define TRADE_RETCODE_INVALID_VOLUME  10014
-#define TRADE_RETCODE_LIMIT_VOLUME    10018
+// Real MQL5 values. LIMIT_VOLUME was previously 10018 here, which collided with
+// MARKET_CLOSED and would have made a market-closed reply look like a size rejection.
+#define TRADE_RETCODE_MARKET_CLOSED   10018
+#define TRADE_RETCODE_LIMIT_VOLUME    10024
+#define TRADE_RETCODE_INVALID_FILL    10030
 #define DBL_MAX 1.7976931348623158e+308
 
 // ---- structs -----------------------------------------------------------
@@ -65,6 +77,11 @@ struct MockBroker {
   // OrderCheck fidelity: does the client-side check see the tiered requirement?
   bool   orderCheckSeesServerTruth=false;
   double basketVolume=0.0;
+  // v3.8.2 CapacityTruth inputs: the independent margin cross-checks.
+  double marginInitial=0.0;                 // SYMBOL_MARGIN_INITIAL (0 = broker publishes none)
+  std::string accountCurrency="USD", profitCurrency="USD", marginCurrency="USD";
+  long   fillingMode=SYMBOL_FILLING_FOK;
+  int    execMode=SYMBOL_TRADE_EXECUTION_MARKET;
   datetime now=1000000;
   datetime lastClosedM1=1000000;
   std::vector<MqlRates> m1;
@@ -88,12 +105,24 @@ inline double SymbolInfoDouble(const std::string&, ENUM_SYMBOL_INFO_DOUBLE p){
   switch(p){ case SYMBOL_VOLUME_MIN: return BRK.volMin; case SYMBOL_VOLUME_MAX: return BRK.volMax;
              case SYMBOL_VOLUME_STEP: return BRK.volStep; case SYMBOL_POINT: return BRK.point;
              case SYMBOL_TRADE_CONTRACT_SIZE: return 100.0;
+             case SYMBOL_MARGIN_INITIAL: return BRK.marginInitial;
              case SYMBOL_ASK: return BRK.ask; case SYMBOL_BID: return BRK.bid; }
   return 0;
 }
 inline long SymbolInfoInteger(const std::string&, ENUM_SYMBOL_INFO_INTEGER p){
   if(p==SYMBOL_DIGITS) return BRK.digits;
+  if(p==SYMBOL_FILLING_MODE) return BRK.fillingMode;
+  if(p==SYMBOL_TRADE_EXEMODE) return BRK.execMode;
   return 0;
+}
+inline std::string SymbolInfoString(const std::string&, ENUM_SYMBOL_INFO_STRING p){
+  if(p==SYMBOL_CURRENCY_PROFIT) return BRK.profitCurrency;
+  if(p==SYMBOL_CURRENCY_MARGIN) return BRK.marginCurrency;
+  return std::string("USD");
+}
+inline std::string AccountInfoString(ENUM_ACCOUNT_INFO_STRING p){
+  if(p==ACCOUNT_CURRENCY) return BRK.accountCurrency;
+  return std::string("MOCK");
 }
 inline bool SymbolInfoTick(const std::string&, MqlTick &t){
   t.bid=BRK.bid; t.ask=BRK.ask; t.time=BRK.now; t.time_msc=BRK.quoteMsc?BRK.quoteMsc:(long)BRK.now*1000;
@@ -134,6 +163,7 @@ inline double MathMax(double a,double b){ return a>b?a:b; }
 inline double MathMin(double a,double b){ return a<b?a:b; }
 inline double MathAbs(double a){ return a<0?-a:a; }
 inline double MathPow(double a,double b){ return std::pow(a,b); }
+inline bool   MathIsValidNumber(double v){ return !std::isnan(v) && !std::isinf(v); }
 inline int    MathRand(){ return 42; }
 inline void   Print(const std::string&){}
 template<typename... A> inline void PrintFormat(const char*, A...){}
@@ -148,7 +178,9 @@ inline double clamp(double x,double a,double b){ return MathMax(a,MathMin(b,x));
 struct ApexConfig { std::string accountProfile="NORMAL";
                     double marginReservePct=0, maxBasketLots=0, minMarginLevelPct=0,
                            normalL1MarginPct=15, normalL2MarginPct=50, normalL3PlusMarginPct=100,
-                           baseMarginPct=100, layerMultiplier=2; };
+                           baseMarginPct=100, layerMultiplier=2;
+                    // v3.8.2: 0 = AUTO (only legal while the broker margin model is trusted)
+                    long normalReferenceLeverage=0; };
 extern ApexConfig C;
 extern long InpMagic;
 extern int   InpMaxQuoteAgeMs;
@@ -158,3 +190,19 @@ extern double InpMaxEntryExtensionAtr;
 enum ApexGateMode { GATE_SHADOW=0, GATE_ENFORCE=1 };
 extern ApexGateMode InpEntryExtensionMode;
 inline double BasketVolume(){ return BRK.basketVolume; }
+
+// Market-closed backoff state used verbatim by NoteMarketClosed/MarketClosedBackoffActive.
+extern datetime g_marketClosedRetryAt;
+extern int      g_marketClosedBackoffSec;
+// Server-proven executable capacity evidence (v3.8.2).
+extern double g_serverRejectedVolume, g_serverFilledVolume, g_serverEvidenceFreeMargin;
+inline double MathRound(double v);
+
+// The EA resolves this from campaign-scoped vs desired policy; in the harness the
+// scenario sets C.accountProfile directly and the campaign is always idle. Normalisation
+// mirrors the EA so a lowercase profile cannot silently select the aggressive path.
+inline std::string ExecutionProfile(){
+  std::string p=C.accountProfile;
+  for(auto &ch:p) ch=(char)std::toupper((unsigned char)ch);
+  return p;
+}

@@ -67,7 +67,8 @@ function preferenceKeyForType(type, e) {
     case 'ORDER_REJECTED':
     case 'ORDER_UNCONFIRMED':
     case 'CLOSE_STALLED':
-    case 'MASTER_SL_MOVE_FAIL': return 'criticalAlerts';
+    case 'MASTER_SL_MOVE_FAIL':
+    case 'SIZING_MODEL_REJECTED': return 'criticalAlerts';
     case 'SETUP_CANCELLED': return 'setupCancelled';
     case 'PROFIT_FLOOR_EARNED': return 'profitFloorUpdates';
     case 'MASTER_SL_MOVED': return 'masterSlUpdates';
@@ -120,7 +121,7 @@ export function notificationForEvent(e) {
     return { preference: 'campaignClosed', title: '✅ Apex Campaign Closed', body: lines.join('\n'), urgency: 'high' };
   }
 
-  if (['ORDER_REJECTED', 'ORDER_UNCONFIRMED', 'CLOSE_STALLED', 'MASTER_SL_MOVE_FAIL'].includes(type)) {
+  if (['ORDER_REJECTED', 'ORDER_UNCONFIRMED', 'CLOSE_STALLED', 'MASTER_SL_MOVE_FAIL', 'SIZING_MODEL_REJECTED'].includes(type)) {
     if (type === 'ORDER_REJECTED') {
       lines.push(`Broker rejected ${d || ''} order`.trim());
       if (e.retcode !== undefined) lines.push(`Retcode: ${cleanText(e.retcode, 50)}`);
@@ -131,9 +132,15 @@ export function notificationForEvent(e) {
     } else if (type === 'CLOSE_STALLED') {
       lines.push('Basket close is still failing');
       if (finite(e.remainingPositions) !== null) lines.push(`${Number(e.remainingPositions)} position(s) still open`);
-    } else {
+    } else if (type === 'MASTER_SL_MOVE_FAIL') {
       lines.push('Master stop change was refused by the broker');
       if (e.retcode !== undefined) lines.push(`Retcode: ${cleanText(e.retcode, 50)}`);
+    } else {
+      lines.push('NORMAL sizing model disagreed with the live trade server');
+      if (e.marginPct !== undefined) lines.push(`Intended tier: ${cleanText(e.marginPct, 30)}%`);
+      if (e.rejectedVolume !== undefined) lines.push(`Rejected volume: ${cleanText(e.rejectedVolume, 30)} lots`);
+      if (e.retcode !== undefined) lines.push(`Retcode: ${cleanText(e.retcode, 50)}`);
+      lines.push('Apex refused to silently step down and change the intended NORMAL percentage.');
     }
     return { preference: 'criticalAlerts', title: '⚠️ APEX EXECUTION WARNING', body: lines.join('\n'), urgency: 'critical' };
   }
@@ -159,22 +166,53 @@ export function notificationForEvent(e) {
   return null;
 }
 
+const REMOTE_STATE_KIND = Object.freeze({
+  'push-subscriptions.json':'push-subscriptions',
+  'notification-preferences.json':'notification-preferences',
+  'notification-outbox.json':'notification-outbox',
+  'notification-delivery-state.json':'notification-delivery-state',
+  'vapid.json':'vapid'
+});
+function remoteStateKind(file){ return REMOTE_STATE_KIND[path.basename(file)] || null; }
+function remoteStateConfigured(){ return Boolean(String(process.env.XAUCLOUD_BASE_URL||'').trim() && String(process.env.APEX_BRIDGE_SECRET||'').trim()); }
+async function remoteStateRequest(route,{method='GET',body}={}){
+  if(!remoteStateConfigured()) return null;
+  const base=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
+  const r=await fetch(base+route,{method,headers:{'accept':'application/json','content-type':'application/json','x-apex-bridge-secret':String(process.env.APEX_BRIDGE_SECRET||'')},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(3000)});
+  const text=await r.text();let data={};try{data=text?JSON.parse(text):{}}catch{}
+  if(!r.ok||data?.ok===false) throw new Error(String(data?.error||`REMOTE_STATE_HTTP_${r.status}`));
+  return data;
+}
+async function atomicJsonLocal(file,value,mode=null){
+  await fs.mkdir(path.dirname(file),{recursive:true});
+  const tmp=`${file}.tmp-${process.pid}-${crypto.randomUUID()}`;
+  await fs.writeFile(tmp,JSON.stringify(value,null,2),mode?{mode}:undefined);
+  await fs.rename(tmp,file);if(mode)await fs.chmod(file,mode).catch(()=>{});
+}
 async function readJson(file, fallback) {
   try {
     const raw = await fs.readFile(file, 'utf8');
     if (!raw.trim()) return structuredClone(fallback);
     return JSON.parse(raw);
   } catch (e) {
-    if (e?.code === 'ENOENT') return structuredClone(fallback);
-    throw new Error(`APEX_NOTIFICATION_STORAGE_ERROR ${path.basename(file)}: ${e?.message || e}`);
+    if (e?.code !== 'ENOENT') throw new Error(`APEX_NOTIFICATION_STORAGE_ERROR ${path.basename(file)}: ${e?.message || e}`);
+    const kind=remoteStateKind(file);
+    if(kind&&remoteStateConfigured()){
+      try{
+        const remote=await remoteStateRequest('/api/cloud/apex/bridge/state?kind='+encodeURIComponent(kind));
+        if(remote?.exists){await atomicJsonLocal(file,remote.value);return structuredClone(remote.value);}
+      }catch(err){console.error(`APEX_NOTIFICATION_REMOTE_RESTORE_FAILED kind=${kind} error=${cleanText(err?.message||err,180)}`);}
+    }
+    return structuredClone(fallback);
   }
 }
 async function atomicJson(file, value, mode = null) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${crypto.randomUUID()}`;
-  await fs.writeFile(tmp, JSON.stringify(value, null, 2), mode ? { mode } : undefined);
-  await fs.rename(tmp, file);
-  if (mode) await fs.chmod(file, mode).catch(() => {});
+  await atomicJsonLocal(file,value,mode);
+  const kind=remoteStateKind(file);
+  if(kind&&remoteStateConfigured()){
+    try{await remoteStateRequest('/api/cloud/apex/bridge/state/upsert',{method:'POST',body:{kind,value}});}
+    catch(err){console.error(`APEX_NOTIFICATION_REMOTE_MIRROR_FAILED kind=${kind} error=${cleanText(err?.message||err,180)}`);}
+  }
 }
 function validSubscription(s) {
   return Boolean(s && typeof s === 'object' && typeof s.endpoint === 'string' && s.endpoint.startsWith('https://') &&
@@ -255,9 +293,14 @@ export function createNotificationEngine({ dataDir, origin = 'https://apex.xaucl
       [FILES.state, { processed: {}, watchSemantic: {}, bridgeBaseline: {} }]
     ];
     for (const [file, fallback] of defaults) {
-      try { await fs.access(file); } catch { await atomicJson(file, fallback); }
+      try {
+        await fs.access(file);
+        const current=await readJson(file,fallback);
+        await atomicJson(file,current);
+      } catch { await atomicJson(file, fallback); }
     }
-    await ensureVapid();
+    const vv=await ensureVapid();
+    if(vv?.source!=='ENV'){const stored=await readJson(FILES.vapid,null);if(stored)await atomicJson(FILES.vapid,stored,0o600);}
     return status();
   }
 

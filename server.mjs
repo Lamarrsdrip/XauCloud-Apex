@@ -79,6 +79,10 @@ const SCHEMA={
   normalL2MarginPct:{t:'num',d:50,min:.01,max:100},
   normalL3PlusMarginPct:{t:'num',d:100,min:.01,max:100},
   normalFixedSLGoldMove:{t:'num',d:30,min:0,max:1e6},
+  // 0 = AUTO. Only legal while the broker's own margin model is trustworthy. When the
+  // terminal reports a pathological model (e.g. 1:2000000000 with marginAt1Lot=0) the EA
+  // refuses to size until this is set, rather than guessing a leverage.
+  normalReferenceLeverage:{t:'int',d:0,min:0,max:1000000},
   profitRatchetEnabled:{t:'bool',d:true},
   ratchetTriggerPct:{t:'num',d:180,min:.01,max:1e6},
   ratchetLockPct:{t:'num',d:100,min:0,max:1e6},
@@ -387,6 +391,48 @@ async function readBridgeStatusSafe(key){
   catch(e){return {ok:false,reason:String(e?.message||'BRIDGE_REQUEST_FAILED'),data:null}}
 }
 
+async function readBridgeLicenses(){return bridgeRequest('/api/cloud/apex/bridge/licenses');}
+async function readBridgeEventPage(key,before='',limit=250){
+  const q=new URLSearchParams({license:normalizeLicense(key),limit:String(limit)});if(before)q.set('before',before);
+  return bridgeRequest('/api/cloud/apex/bridge/events?'+q.toString());
+}
+async function readBridgeEventsUntilKnown(key,known,{maxPages=20,limit=250}={}){
+  if(!bridgeConfigured())return [];
+  const out=[];let before='';
+  for(let page=0;page<maxPages;page++){
+    const r=await readBridgeEventPage(key,before,limit);const rows=Array.isArray(r?.events)?r.events:[];
+    if(!rows.length)break;
+    let hitKnown=false;
+    for(const row of rows){const id=row.eventId||row.event_id||row.id||eventId(row);if(known?.has(id)){hitKnown=true;continue}out.push(row);}
+    if(hitKnown||!r.nextBefore)break;before=String(r.nextBefore);
+  }
+  return out;
+}
+async function recoverLicensesFromBridge(){
+  if(!bridgeConfigured())return {recovered:0,reason:'BRIDGE_NOT_CONFIGURED'};
+  const remote=await readBridgeLicenses();const rows=Array.isArray(remote?.licenses)?remote.licenses:[];
+  const licenses=await readLicenses();const configs=await readLicenseConfigs();let recovered=0;
+  for(const row of rows){
+    const key=normalizeLicense(row.license);if(!key)continue;
+    const status=row.active===true?'ACTIVE':'DISABLED';
+    if(!licenses[key]){
+      licenses[key]={status,account:String(row.account||''),customer:String(row.customer||''),expiresAt:row.expiresAt??null,
+        commandRevision:0,createdAt:row.createdAt||new Date().toISOString(),updatedAt:row.updatedAt||new Date().toISOString(),source:'XAUCLOUD_MONGO_RECOVERY'};
+      recovered++;
+    }else{
+      licenses[key].status=status;licenses[key].account=String(row.account||licenses[key].account||'');
+      if(row.expiresAt!==undefined)licenses[key].expiresAt=row.expiresAt;
+    }
+    const st=await readBridgeStatusSafe(key);
+    if(st.ok&&st.data?.configExists){
+      const remoteRev=Number(st.data.commandRevision||0),localRev=Number(licenses[key].commandRevision||0);
+      if(remoteRev>=localRev){configs[key]=clean(st.data.config||{});licenses[key].commandRevision=remoteRev;licenses[key].configHash=configHash(configs[key]);}
+    }
+  }
+  if(rows.length){await writeLicenses(licenses);await atomic(LICENSE_CONFIGS,configs);}
+  return {recovered,total:rows.length};
+}
+
 // Server-side notification reconciler. The website does NOT need to be open.
 // It consumes the same canonical XauCloud bridge events already produced by Apex 3.8.1.
 let notificationBridgeBusy=false;
@@ -474,6 +520,16 @@ export async function syncAllLicensesAtStartup(){
   bridgeSyncState.lastAttemptAt=bridgeSyncState.startedAt;bridgeSyncState.error=null;
   try{
     if(!bridgeConfigured())throw bridgeFailure('APEX_BRIDGE_SECRET_NOT_CONFIGURED',503);
+    // Best-effort ONLY. Recovery rebuilds the local cache from Mongo after a Hostinger
+    // redeploy, but it must never be able to stop Apex from starting: a XauCloud that
+    // has not yet deployed /bridge/licenses answers 404, and an older Apex release must
+    // still boot against it. Losing recovery degrades to "start from the local cache".
+    const recovery=await recoverLicensesFromBridge()
+      .catch(e=>({recovered:0,reason:String(e?.message||e)}));
+    if(recovery?.reason&&recovery.reason!=='BRIDGE_NOT_CONFIGURED')
+      console.error(`APEX_LICENSE_RECOVERY_SKIPPED reason=${recovery.reason}`);
+    else if(recovery?.recovered)
+      console.log(`APEX_LICENSE_RECOVERY_OK recovered=${recovery.recovered} of=${recovery.total}`);
     const licenses=await readLicenses();
     for(const [rawKey,lic] of Object.entries(licenses)){
       const key=normalizeLicense(rawKey);
@@ -731,6 +787,7 @@ function humanEvent(e){
     case 'ENTRY_REJECTED_AT_GATE':return `Entry skipped at the final price check — ${e.reason||''}`;
     case 'ADD_BLOCKED':return `Addition skipped — ${e.reason||''}`;
     case 'ORDER_REJECTED':return `Broker rejected the order — retcode ${e.retcode||''}`;
+    case 'SIZING_MODEL_REJECTED':return `NORMAL sizing rejected by live server — tier preserved, no semantic step-down`;
     case 'ORDER_UNCONFIRMED':return `Order not confirmed by the broker — ${e.detail||''}`;
     case 'CLOSING_REQUESTED':return `Closing the basket — ${e.reason||e.outcome||''}`;
     case 'CLOSE_RETRY':return `Close retry — ${e.remainingPositions||0} position(s) still open`;
@@ -761,7 +818,8 @@ function settingsView(c){return {
   normalTargetProfitPct:c.normalTargetProfitPct,baseMarginPct:c.baseMarginPct,
   layerMultiplier:c.layerMultiplier,maxLayers:c.maxLayers,normalL1MarginPct:c.normalL1MarginPct,
   normalL2MarginPct:c.normalL2MarginPct,normalL3PlusMarginPct:c.normalL3PlusMarginPct,
-  normalFixedSLGoldMove:c.normalFixedSLGoldMove,profitRatchetEnabled:c.profitRatchetEnabled,
+  normalFixedSLGoldMove:c.normalFixedSLGoldMove,normalReferenceLeverage:c.normalReferenceLeverage,
+  profitRatchetEnabled:c.profitRatchetEnabled,
   ratchetTriggerPct:c.ratchetTriggerPct,ratchetLockPct:c.ratchetLockPct,ratchetStepPct:c.ratchetStepPct,
   ratchetLockStepPct:c.ratchetLockStepPct,masterBreakEvenEnabled:c.masterBreakEvenEnabled,
   masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,
@@ -797,11 +855,18 @@ async function buildMe(key){
   // from the FULL reconciled log rather than from the remote's latest-60 window.
   const all=await allEvents();
   const known=new Set(all.map(e=>e.eventId||eventId(e)));
-  const ingested=await ingestRemoteEvents(key,remote?.recentEvents||[],known);
+  const canonicalMissing=await readBridgeEventsUntilKnown(key,known).catch(()=>[]);
+  const remotePage=canonicalMissing.length?canonicalMissing:(remote?.recentEvents||[]);
+  const ingested=await ingestRemoteEvents(key,remotePage,known);
   const merged=ingested?await allEvents():all;
   const acct=lic.lastAccount||lic.account||remoteAccount||'';
-  const events=merged.filter(e=>
-    normalizeLicense(e.license||e.license_key||'')===key||(acct&&String(e.account)===String(acct)));
+  const events=merged.filter(e=>{
+    const eventKey=normalizeLicense(e.license||e.license_key||'');
+    const eventAccount=String(e.account||e.account_number||'').trim();
+    if(eventKey!==key)return false;
+    if(acct&&eventAccount&&eventAccount!==String(acct))return false;
+    return true;
+  });
 
   const campaign=projectCampaign(events);
   const ack=projectAck(events);
@@ -991,7 +1056,8 @@ const server=http.createServer(async(req,res)=>{
     // --- website auth ---
     if(req.method==='POST'&&u.pathname==='/api/auth/login'){
       if(!throttle('login',ip,20))return json(res,429,{error:'too_many_attempts'});
-      const b=await body(req),key=normalizeLicense(b.license),licenses=await readLicenses();
+      const b=await body(req),key=normalizeLicense(b.license);let licenses=await readLicenses();
+      if(key&&!licenses[key]&&bridgeConfigured()){await recoverLicensesFromBridge().catch(()=>null);licenses=await readLicenses();}
       const st=licenseStatusFor(licenses[key]);
       if(st!=='ACTIVE')return json(res,401,{error:'LICENSE_NOT_ACTIVE',reason:st});
       setSession(res,makeSession(key));return json(res,200,{ok:true});

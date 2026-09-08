@@ -724,7 +724,10 @@ function pageSettings(me){
     + '<div class="field-grid">'
     + '<div class="field"><label>Confirmation / L1 Margin (%)</label><input type="number" step="any" id="f-normalL1MarginPct" value="'+esc(s.normalL1MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Small confirmation trade used to test whether the setup is behaving correctly.</div></div>'
     + '<div class="field"><label>Confirmed / L2 Margin (%)</label><input type="number" step="any" id="f-normalL2MarginPct" value="'+esc(s.normalL2MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Larger confirmed add after Apex receives another valid continuation/add signal.</div></div>'
-    + '<div class="field"><label>Full Exposure / L3+ Margin (%)</label><input type="number" step="any" id="f-normalL3PlusMarginPct" value="'+esc(s.normalL3PlusMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Use up to the configured percentage of currently available margin after further valid confirmation.</div></div>'
+    + '<div class="field"><label>Full Exposure / L3+ Margin (%)</label><input type="number" step="any" id="f-normalL3PlusMarginPct" value="'+esc(s.normalL3PlusMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Use up to the configured percentage of currently available margin after further valid confirmation. Every later add (L4, L5, ...) recalculates this against the margin available at that moment.</div></div>'
+    + '<div class="field"><label>NORMAL Reference Leverage</label><select id="f-normalReferenceLeverage" '+(disabled?'disabled':'')+'>'
+      + [0,100,200,500,1000,2000].map(function(v){return '<option value="'+v+'"'+(Number(s.normalReferenceLeverage||0)===v?' selected':'')+'>'+(v===0?'AUTO (use the broker\'s own margin model)':'1:'+v)+'</option>';}).join('')
+      + '</select><div class="hint">Economic leverage NORMAL sizes against when the broker/terminal reports an unusable margin model (for example 1:2000000000 with margin-per-lot 0). AUTO is only valid while the broker model is trustworthy; if it is not, Apex blocks new exposure with NORMAL_REFERENCE_LEVERAGE_REQUIRED rather than guessing. UNLIMITED accounts ignore this setting.</div></div>'
     + '</div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-margin" '+(disabled?'disabled':'')+'>Save Margin Allocation</button></div>'
     + '</div>';
@@ -829,7 +832,8 @@ function wireSettings(me){
     var payload = {
       normalL1MarginPct: Number(document.getElementById('f-normalL1MarginPct').value),
       normalL2MarginPct: Number(document.getElementById('f-normalL2MarginPct').value),
-      normalL3PlusMarginPct: Number(document.getElementById('f-normalL3PlusMarginPct').value)
+      normalL3PlusMarginPct: Number(document.getElementById('f-normalL3PlusMarginPct').value),
+      normalReferenceLeverage: Number(document.getElementById('f-normalReferenceLeverage').value)
     };
     saveConfig(payload, 'save-margin', 'Save Margin Allocation');
   });

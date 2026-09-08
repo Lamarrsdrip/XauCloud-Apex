@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.1",
-  "buildId": "3.8.1-live-ready",
-  "eaVersion": "XauCloud-Apex_v3.8.1-LiveReady",
+  "version": "3.8.2",
+  "buildId": "3.8.2-capacity-truth",
+  "eaVersion": "XauCloud-Apex_v3.8.2-CapacityTruth",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.1-LiveReady.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5",
   "configSchema": 2,
   "stateSchema": 3,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "Apex v3.8.1 LiveReady is the canonical main trading build. Preserves tested v3.8 trading behaviour with live/demo operational fixes."
+  "notes": "v3.8.2 CapacityTruth: NORMAL 15/50/100 are percentages of CURRENT executable margin capacity, never of SYMBOL_VOLUME_MAX. Broker margin economics are used when trustworthy; when the terminal reports a pathological model the owner-configured normalReferenceLeverage is used, and if none is set Apex blocks with NORMAL_REFERENCE_LEVERAGE_REQUIRED rather than guessing. A rejected NORMAL tier re-derives capacity and re-applies the SAME percentage. UNLIMITED remains fully aggressive. Durable EA event outbox, heartbeat/sizing audit trail, telemetry/history/notification persistence. Trading setup/entry/exit strategy unchanged."
 }

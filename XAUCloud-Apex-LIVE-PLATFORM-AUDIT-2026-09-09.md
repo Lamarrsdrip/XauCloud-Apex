@@ -165,6 +165,74 @@ Anyone who can hit `/api/admin/licenses` with `Bearer change-me-admin` can mint 
 
 ---
 
+### SITE-003 — dashboard tells the user to allow the **wrong** WebRequest URL
+
+**Severity:** BLOCKER (ops)  
+**File:** `public/index.html` line 931  
+**Status:** CONFIRMED (source + live)
+
+Account setup on the site:
+
+> allow WebRequest for `https://apex.xaucloud.io`
+
+EA `InpCloudURL` default, `version.json`, README, and live `/health.webRequestOrigin` are all `https://xaucloud.io`.
+
+A user who follows **the site they log into**:
+
+1. Allows `apex.xaucloud.io`
+2. EA `WebRequest` to `xaucloud.io` fails (MT5 4014)
+3. `CloudSync()` transport-fails and **never changes `C.armed`**
+4. Dashboard can still show Armed / UNLIMITED
+
+This is the most likely live “I armed it and nothing happens” path.
+
+**Fix:** the Account page must say `https://xaucloud.io`. Never apex.
+
+---
+
+### SITE-004 — live apex.xaucloud.io is already running with rejected secrets and a hung bridge sync
+
+**Severity:** BLOCKER (ops, live probe 2026-09-09 15:40 UTC)  
+**URL:** `https://apex.xaucloud.io/health`  
+**Status:** CONFIRMED LIVE
+
+```json
+"version": "3.8.3",
+"webRequestOrigin": "https://xaucloud.io",
+"bridge": { "configured": true, "sync": { "status": "RUNNING", "licenses": 0, "finishedAt": null } },
+"secretsAcceptableForProduction": false
+```
+
+- The 3.8.3 **site** is deployed. The EA EX5 on your terminal is a separate question.
+- `secretsAcceptableForProduction: false` means ADMIN_TOKEN and/or SESSION_SECRET is missing, default, or too short **on the real box**.
+- Bridge sync started, `licenses: 0`, `finishedAt: null` — either hung or empty. Dashboard may have no live EA mirror.
+
+`https://xaucloud.io/health` returns `{"status":"ok"}` — a **different product**. That is the host the EA actually hits.
+
+---
+
+### SITE-005 — “UNLIMITED Profile Multiplier” does not change size
+
+**Severity:** HIGH (sold as a control, is a no-op)  
+**Files:** `public/index.html` ~739; `LayerMarginPct()`  
+**Status:** CONFIRMED
+
+UNLIMITED size is:
+
+```
+min(100, baseMarginPct * layerMultiplier^layers)
+```
+
+`baseMarginPct` default is **100** and the dashboard **never exposes it**.
+
+`min(100, 100 * 2^n) = 100` on every layer. Moving the Settings “multiplier” does nothing.
+
+UNLIMITED then becomes “100% of remaining executable capacity every add” — which is the trader on a tiny account, but it is **not** “double lots” and the label is a lie. First ticket can consume all margin; later adds only exist if floating profit frees margin.
+
+**Fix:** either expose `baseMarginPct` (e.g. first layer 100, then remaining) and label honestly, or hide the dead control.
+
+---
+
 ## HIGH
 
 ### LIVE-003 — watching setups keep the **first** `prior`, so later highs may never confirm
@@ -360,6 +428,51 @@ v3.8.3 origin **retest first entry** tests pass:
 - chase through box rejected
 
 That part is the right idea. LIVE-001 is the add path using that idea in the wrong place.
+
+---
+
+## Addendum — extra confirmed site bugs (deep pass)
+
+These were found after the first write. Same repo, same commit plus live `https://apex.xaucloud.io/health`.
+
+### SITE-006 — Campaign page is wired to the wrong JSON field names
+
+**Severity:** HIGH · CONFIRMED
+
+`projectCampaign()` emits `cycleStart`, `targetEquity`, `layers`, `basketVolume`.  
+UI reads `floatingPL`, `progressPct`, `startEquity`, `currentEquity`, `profitPct`, `totalVolume`.
+
+A real open basket can render **0% / $—** on the phone. Heartbeat already has equity, layers, `campaign_active`. `buildMe()` does not use them for `me.campaign`.
+
+### SITE-007 — EA `emittedAt` is unix seconds; dashboard parses it as ISO
+
+**Severity:** HIGH · CONFIRMED on this server’s ingest
+
+`Emit()` sends `"emittedAt": 1725...` (int). Dashboard `Date.parse` → NaN → 1970. Activity feed and “watching last 20 minutes” break even when events arrive. Hypothesis: xaucloud.io may rewrite `ts`; this repo does not.
+
+### SITE-008 — config hash algorithms cannot match
+
+**Severity:** MEDIUM · CONFIRMED
+
+Server: SHA256 16-hex. EA: FNV-1a 8-hex. Never equal. Dashboard `inSync` uses revision only (OK). Do not add a hash-equality gate.
+
+### SITE-009 — customer Settings can flip UNLIMITED with no admin step
+
+**Severity:** HIGH · CONFIRMED
+
+Any logged-in license can Save `accountProfile=UNLIMITED`. Admin `licenseTier` stays NORMAL. EA follows config, next campaign. One tap on a phone is the unlimited capacity path.
+
+### SITE-010 — `npm test` identity is already stale
+
+**Severity:** HIGH · CONFIRMED
+
+`tests/capacitytruth.test.mjs` still asserts version `3.8.2` / `XauCloud-Apex_v3.8.2-CapacityTruth` / `#property "3.820"`. Source is 3.8.3. The test that was supposed to stop version drift is now itself drift.
+
+### SITE-011 — systemd unit runs as root, no NODE_ENV=production
+
+**Severity:** HIGH · CONFIRMED
+
+`deploy/xaucloud-apex.service` has no `User=`, no `NODE_ENV=production`. Combined with SITE-002 (secret check bypassed), a default `.env` is a public license factory.
 
 ---
 

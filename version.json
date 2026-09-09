@@ -1,17 +1,17 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.2",
-  "buildId": "3.8.2-capacity-truth",
-  "eaVersion": "XauCloud-Apex_v3.8.2-CapacityTruth",
+  "version": "3.8.3",
+  "buildId": "3.8.3-entry-location",
+  "eaVersion": "XauCloud-Apex_v3.8.3-EntryLocation",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.3-EntryLocation.mq5",
   "configSchema": 2,
-  "stateSchema": 3,
+  "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
   "eaRoutes": [
     "POST /api/cloud/monitor/heartbeat",
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.8.2 CapacityTruth: NORMAL 15/50/100 are percentages of CURRENT executable margin capacity, never of SYMBOL_VOLUME_MAX. Broker margin economics are used when trustworthy; when the terminal reports a pathological model the owner-configured normalReferenceLeverage is used, and if none is set Apex blocks with NORMAL_REFERENCE_LEVERAGE_REQUIRED rather than guessing. A rejected NORMAL tier re-derives capacity and re-applies the SAME percentage. UNLIMITED remains fully aggressive. Durable EA event outbox, heartbeat/sizing audit trail, telemetry/history/notification persistence. Trading setup/entry/exit strategy unchanged."
+  "notes": "v3.8.3 EntryLocation: confirmed setups store the displacement/engulfing origin box. Waiting for the retest is legal. Submit only while live price is inside the origin and the swept extreme is not reclaimed. Watching setups update their extreme instead of cloning a worse sell. Continuation adds reclaim the campaign origin. UNLIMITED sizing (100% then double, no max layers) is unchanged from v3.8.2 CapacityTruth."
 }

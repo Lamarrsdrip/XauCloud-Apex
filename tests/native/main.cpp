@@ -67,14 +67,16 @@ static void emitSizing(const std::string &name,int dir,double pct,double price,d
 }
 
 static void emitGate(const std::string &name,int dir,double invalidLevel,double refPrice,
-                     double atr,datetime triggerBar){
+                     double atr,datetime triggerBar,double originHigh=0,double originLow=0){
   Gate g;
-  bool ok=FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,true,g);
+  bool ok=FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,true,g,originHigh,originLow);
   row(StringFormat(
     "{\"test\":\"%s\",\"ok\":%s,\"reason\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,"
-    "\"extensionAtr\":%.4f,\"reclaimed\":%s,\"triggerStale\":%s,\"quoteStale\":%s,\"extended\":%s}",
+    "\"extensionAtr\":%.4f,\"reclaimed\":%s,\"triggerStale\":%s,\"quoteStale\":%s,\"extended\":%s,"
+    "\"inLocation\":%s,\"leftLocation\":%s}",
     name.c_str(),b(ok).c_str(),g.reason.c_str(),g.bid,g.ask,g.extensionAtr,
-    b(g.reclaimed).c_str(),b(g.triggerStale).c_str(),b(g.quoteStale).c_str(),b(g.extended).c_str()));
+    b(g.reclaimed).c_str(),b(g.triggerStale).c_str(),b(g.quoteStale).c_str(),b(g.extended).c_str(),
+    b(g.inLocation).c_str(),b(g.leftLocation).c_str()));
 }
 
 int main(){
@@ -258,6 +260,11 @@ int main(){
   BRK.bid=4399.0; BRK.ask=4399.1;
   BRK.lastClosedM1=1000060;                    // a newer bar has closed since the trigger
   emitGate("gate_stale_trigger_bar",-1,4410.0,4400.0,2.0,1000000);
+  // v3.8.3: the same newer bar, but price is back inside the origin box = legal retest
+  emitGate("gate_retest_in_origin_box",-1,4410.0,4400.0,2.0,1000000,4404.0,4396.0);
+  BRK.bid=4390.0; BRK.ask=4390.1;               // dumped through the origin = chase, reject
+  emitGate("gate_chase_left_origin_box",-1,4410.0,4400.0,2.0,1000000,4404.0,4396.0);
+  BRK.bid=4399.0; BRK.ask=4399.1;
   BRK.lastClosedM1=1000000;
   InpMaxQuoteAgeMs=1500;
   BRK.quoteMsc=(long)(BRK.now-10)*1000;        // 10s-old tick

@@ -217,9 +217,17 @@ test('APEX-AUDIT-001: the extension threshold is measured always and enforced on
   assert.equal(shadow.extensionAtr,5);
 });
 
-test('APEX-AUDIT-001: a stored valid candle pattern cannot authorise an entry after a newer bar closed',{skip},()=>{
-  assert.equal(R.gate_stale_trigger_bar.ok,false);
-  assert.equal(R.gate_stale_trigger_bar.triggerStale,true);
+test('v3.8.3: a newer M1 than the trigger is a RETEST and is legal',{skip},()=>{
+  assert.equal(R.gate_stale_trigger_bar.ok,true,'waiting for the retest must not be rejected as stale');
+  assert.equal(R.gate_stale_trigger_bar.triggerStale,true,'stale is still measured for telemetry');
+});
+
+test('v3.8.3: retest inside the origin box is executable; chase through it is not',{skip},()=>{
+  assert.equal(R.gate_retest_in_origin_box.ok,true);
+  assert.equal(R.gate_retest_in_origin_box.inLocation,true);
+  assert.equal(R.gate_chase_left_origin_box.ok,false);
+  assert.equal(R.gate_chase_left_origin_box.leftLocation,true);
+  assert.match(R.gate_chase_left_origin_box.reason,/PRICE_LEFT_ORIGIN_BOX/);
 });
 
 test('APEX-AUDIT-001: stale-quote rejection is off by default and works when enabled',{skip},()=>{

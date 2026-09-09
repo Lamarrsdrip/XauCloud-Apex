@@ -168,6 +168,31 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
+test('v3.8.3: confirmation stores an origin box and OnTimer only starts in-location', () => {
+  assert.match(s, /CONFIRMED_WAITING_ORIGIN_RETEST/);
+  assert.match(s, /S\.originHigh=m1\[1\]\.high/);
+  assert.match(s, /if\(s\.valid&&s\.inLocation\) Start\(s\)/);
+  assert.doesNotMatch(s, /if\(s\.valid\) Start\(s\)/);
+});
+
+test('v3.8.3: a newer M1 than the origin bar does not hard-block the gate', () => {
+  const gate = section('bool FinalEntryGate(', '//====================== preflight');
+  assert.match(gate, /PRICE_LEFT_ORIGIN_BOX/);
+  assert.match(gate, /triggerStale is measured for telemetry and NEVER blocks/);
+  assert.doesNotMatch(gate, /return false;[\s\S]{0,80}TRIGGER_BAR_NO_LONGER_LATEST/);
+});
+
+test('v3.8.3: Start copies origin onto the campaign before SetupReset, and adds reclaim all families', () => {
+  const start = section('void Start(Snap', '//====================== add candidates');
+  const iCopy = start.indexOf('campOriginHigh=S.originHigh');
+  const iReset = start.indexOf('SetupReset("CONSUMED_BY_CAMPAIGN")');
+  assert.ok(iCopy >= 0 && iReset > iCopy, 'campaign origin must be copied before SetupReset');
+
+  const manage = section('void Manage()', '//====================== restart reconciliation');
+  assert.match(manage, /bool enforceReclaim=true;/);
+  assert.doesNotMatch(manage, /enforceReclaim=\(a\.family=="REVERSAL"\)/);
+});
+
 test('server config schema includes the same six basket profit-exit fields', async () => {
   const server = await fs.readFile(new URL('../server.mjs', import.meta.url), 'utf8');
   for (const f of configFields) {

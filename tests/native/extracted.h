@@ -29,6 +29,7 @@ struct Gate
    double   bid,ask,price,extensionAtr;
    long     quoteAgeMs;
    bool     reclaimed,triggerStale,quoteStale,extended;
+   bool     inLocation,leftLocation;
   };
 
 double VolStep()
@@ -423,10 +424,12 @@ SizingDecision ComputeVolume(int dir,double pct,double price,double sl)
   }
 
 bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
-                    datetime triggerBar,bool enforceReclaim,Gate &g)
+                    datetime triggerBar,bool enforceReclaim,Gate &g,
+                    double originHigh=0,double originLow=0)
   {
    g.ok=false;g.reason="";g.bid=0;g.ask=0;g.price=0;g.extensionAtr=0;g.quoteAgeMs=0;
    g.reclaimed=false;g.triggerStale=false;g.quoteStale=false;g.extended=false;
+   g.inLocation=false;g.leftLocation=false;
 
    MqlTick tk;
    if(!SymbolInfoTick(_Symbol,tk)||tk.bid<=0||tk.ask<=0){g.reason="NO_FRESH_QUOTE";return false;}
@@ -438,15 +441,16 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
    if(InpMaxQuoteAgeMs>0&&g.quoteAgeMs>InpMaxQuoteAgeMs)
      {g.quoteStale=true;g.reason=StringFormat("STALE_QUOTE_%lldms",g.quoteAgeMs);return false;}
 
-   // The confirming bar must still be the latest closed M1 bar. This is what makes a
-   // stored, already-completed candle pattern unable to authorise an entry later.
-   if(InpRequireFreshTrigger&&triggerBar>0)
+   // v3.8.3: a newer closed M1 than the origin/trigger bar is the RETEST.
+   // triggerStale is measured for telemetry and NEVER blocks.
+   if(triggerBar>0)
      {
       datetime lastClosed=iTime(_Symbol,PERIOD_M1,1);
       if(lastClosed!=triggerBar)
         {g.triggerStale=true;
-         g.reason=StringFormat("TRIGGER_BAR_NO_LONGER_LATEST_%lld_vs_%lld",(long)triggerBar,(long)lastClosed);
-         return false;}
+         if(InpRequireFreshTrigger)
+            g.reason=StringFormat("TRIGGER_BAR_NO_LONGER_LATEST_%lld_vs_%lld",(long)triggerBar,(long)lastClosed);
+        }
      }
 
    // The setup's OWN rejected extreme is the invalidation level. No invented threshold.
@@ -458,6 +462,19 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
          g.reason=StringFormat("RECLAIMED_INVALIDATION_LEVEL_%.5f",invalidLevel);
          return false;}
      }
+
+   // v3.8.3 origin box: live price must still be inside the displacement candle.
+   // No origin (0/0) keeps the previous behaviour so recovered campaigns still trade.
+   if(originHigh>originLow)
+     {
+      g.inLocation=(dir<0)?(g.bid<=originHigh&&g.bid>=originLow)
+                          :(g.ask>=originLow&&g.ask<=originHigh);
+      if(!g.inLocation)
+        {g.leftLocation=true;
+         g.reason=StringFormat("PRICE_LEFT_ORIGIN_BOX_%.5f_%.5f",originLow,originHigh);
+         return false;}
+     }
+   else g.inLocation=true;
 
    if(atr>0&&refPrice>0)
      {

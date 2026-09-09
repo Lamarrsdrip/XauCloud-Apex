@@ -8,18 +8,14 @@ const version=JSON.parse(fs.readFileSync(new URL('../version.json',import.meta.u
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
 
 test('the canonical and versioned EA files are byte-identical',()=>{
-  // The canonical file is what gets compiled and deployed; the versioned file is what
-  // the release is archived under. v3.8.2 shipped them divergent once -- the versioned
-  // copy still held a build that could not compile -- so this is now enforced.
-  // Owner compile target is ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 so Tester keeps
-  // selecting the same Expert name.
+  // The canonical file is the main bot. The versioned file is the release archive.
+  // They must stay identical so nobody compiles a stale named copy.
   const canonical=fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5',import.meta.url));
   const versioned=fs.readFileSync(new URL('../'+version.versionedEaFile,import.meta.url));
-  const hardened=fs.readFileSync(new URL('../'+version.hardenedEaFile,import.meta.url));
+  assert.equal(version.eaFile,'ea/XauCloud-Apex.mq5');
+  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5');
   assert.equal(sha(canonical),sha(versioned),
     `${version.eaFile} and ${version.versionedEaFile} must be identical`);
-  assert.equal(sha(canonical),sha(hardened),
-    `${version.eaFile} and ${version.hardenedEaFile} must be identical`);
 });
 
 test('version.json, the EA banner and #property version all agree',()=>{

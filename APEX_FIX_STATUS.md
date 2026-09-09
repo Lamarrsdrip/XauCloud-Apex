@@ -1,10 +1,9 @@
 # Apex v3.8.6 HardenedCapacity status
 
 Current identity: `XauCloud-Apex_v3.8.6-HardenedCapacity` / `#property version "3.860"` / state schema 4.
-Canonical source: `ea/XauCloud-Apex.mq5`
-**Compile target:** `ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5` (byte-identical). Tester Expert name stays CapacityTruth.
-Also: `ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5` (byte-identical).
-Original 3.8.2 snapshot: `ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`.
+**Main bot:** `ea/XauCloud-Apex.mq5` (compile this → `XauCloud-Apex.ex5`).
+Versioned copy: `ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5` (byte-identical).
+Historical v3.8.2 snapshot (do not compile): `ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`.
 WebRequest origin: `https://xaucloud.io`.
 
 Trading = v3.8.2 `if(s.valid) Start(s)`. This build does **not** contain MODEL C origin box,
@@ -38,8 +37,8 @@ round-trip are still required on the operator's terminals.
 | 20 Close persistence | FIXED | CLOSING until `CountPos()==0`. |
 | 21 Broker close/modify truth | FIXED | retcode + live position/deal, not CTrade boolean. |
 | 22 Uncertain identity | FIXED | recovered positions `anchorsKnown=false` → no new pyramid. |
-| 23 Single-source identity | FIXED | README / package / version.json / EA `#property` / APEX_VERSION all 3.8.6. Compile filename remains CapacityTruth. |
-| 24 MetaEditor compile | BLOCKED HERE | Linux sandbox has no MetaEditor. Operator must compile CapacityTruth.mq5 and record EX5 hash. |
+| 23 Single-source identity | FIXED | README / package / version.json / EA `#property` / APEX_VERSION all 3.8.6. Main file is `ea/XauCloud-Apex.mq5`. |
+| 24 MetaEditor compile | BLOCKED HERE | Linux sandbox has no MetaEditor. Operator must compile `ea/XauCloud-Apex.mq5` and record EX5 hash. |
 
 Sizing functions `ComputeVolume` and `LayerMarginPct` remain byte-identical to archived v3.8.2.
 

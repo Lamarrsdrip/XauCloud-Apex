@@ -4,8 +4,7 @@
   "buildId": "3.8.6-hardened-capacity",
   "eaVersion": "XauCloud-Apex_v3.8.6-HardenedCapacity",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5",
-  "hardenedEaFile": "ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -14,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.8.6 HardenedCapacity: v3.8.2 CapacityTruth trading (if(s.valid) Start(s)) plus 24 non-strategy live-platform hardenings only. Compile ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 so the Tester/chart Expert name stays CapacityTruth. APEX_READY prints v3.8.6-HardenedCapacity. No MODEL C, no mandatory retest, no dead-thesis filter, no new setup lifecycle."
+  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.6-HardenedCapacity). Versioned copy is ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5. Trading is v3.8.2 CapacityTruth (if(s.valid) Start(s)) plus 24 non-strategy hardenings only. Compile ea/XauCloud-Apex.mq5. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 sources."
 }

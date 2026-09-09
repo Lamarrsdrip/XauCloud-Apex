@@ -24,7 +24,7 @@
 #property copyright "XauCloud Apex"
 #property version   "3.860"
 #property strict
-#property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
+#property description "XauCloud Apex v3.8.6 HardenedCapacity"
 
 #include <Trade/Trade.mqh>
 CTrade trade;

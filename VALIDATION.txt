@@ -1,10 +1,8 @@
 XauCloud Apex v3.8.6 HardenedCapacity validation
 ===============================================
-Canonical EA: ea/XauCloud-Apex.mq5
-Compile target (Tester Expert name): ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5
-Hardened copy: ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5
-All three must be byte-identical.
-Original 3.8.2 snapshot (sizing baseline): ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5
+Main bot / canonical EA: ea/XauCloud-Apex.mq5
+Versioned EA: ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5 (must be byte-identical)
+Do NOT compile: ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 (historical snapshot)
 #property version: 3.860
 Identity: XauCloud-Apex_v3.8.6-HardenedCapacity
 State schema: 4
@@ -37,11 +35,11 @@ What this release repairs (24 non-strategy hardenings):
 
 Automated validation:
 - npm test (Node + native C++ extract harness)
-- Canonical vs CapacityTruth vs HardenedCapacity SHA-256 identity
+- Canonical vs versioned EA SHA-256 identity
 - MetaEditor compile is REQUIRED on a Windows/Mac MT5 host (not this Linux runtime)
 
 Still requires on the Mac / VPS (operator, not this build):
-- Compile ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 in MetaEditor. Do not copy an old EX5.
+- Compile ea/XauCloud-Apex.mq5 in MetaEditor. Expert name is XauCloud-Apex.
 - Allow WebRequest for https://xaucloud.io only.
 - Confirm Experts log APEX_READY XauCloud-Apex_v3.8.6-HardenedCapacity.
-- Do NOT attach v3.8.3 / v3.8.4 / v3.8.5. Those changed entry rules.
+- Do NOT attach v3.8.2 CapacityTruth, v3.8.3, v3.8.4, or v3.8.5.

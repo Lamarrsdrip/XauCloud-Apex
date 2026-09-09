@@ -168,72 +168,62 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
-test('v3.8.4: confirmation stores origin+exec region and OnTimer only starts in-location', () => {
-  assert.match(s, /WAITING_FOR_ENTRY_LOCATION/);
-  assert.match(s, /RETEST_EXECUTABLE/);
-  assert.match(s, /ComputeExecRegion/);
-  assert.match(s, /S\.originHigh=m1\[1\]\.high/);
-  assert.match(s, /if\(s\.valid&&s\.inLocation\) Start\(s\)/);
-  assert.doesNotMatch(s, /if\(s\.valid\) Start\(s\)/);
+test('v3.8.6 keeps v3.8.2 confirmation-is-entry: if(s.valid) Start(s), no origin box', () => {
+  assert.match(s, /if\(s\.valid\) Start\(s\);/);
+  assert.doesNotMatch(s, /if\(s\.valid&&s\.inLocation\) Start\(s\)/);
+  assert.doesNotMatch(s, /WAITING_FOR_ENTRY_LOCATION/);
+  assert.doesNotMatch(s, /RETEST_EXECUTABLE/);
+  assert.doesNotMatch(s, /ComputeExecRegion/);
+  assert.doesNotMatch(s, /PRICE_LEFT_ORIGIN_BOX/);
+  assert.doesNotMatch(s, /DeadThesisBlocks/);
+  assert.doesNotMatch(s, /ApplyLegacySchemaGuard/);
+  assert.match(s, /entry=confirm-then-start v3\.8\.2/);
 });
 
-test('v3.8.3: a newer M1 than the origin bar does not hard-block the gate', () => {
-  const gate = section('bool FinalEntryGate(', '//====================== preflight');
-  assert.match(gate, /PRICE_LEFT_ORIGIN_BOX/);
-  assert.match(gate, /triggerStale is measured for telemetry and NEVER blocks/);
-  assert.doesNotMatch(gate, /return false;[\s\S]{0,80}TRIGGER_BAR_NO_LONGER_LATEST/);
+test('v3.8.2 FinalEntryGate still treats a newer M1 as TRIGGER_BAR_NO_LONGER_LATEST', () => {
+  const gate = section('bool FinalEntryGate(', '// WAF/HTML 401/403');
+  assert.match(gate, /TRIGGER_BAR_NO_LONGER_LATEST/);
+  assert.match(gate, /return false;/);
+  assert.doesNotMatch(gate, /PRICE_LEFT_ORIGIN_BOX/);
+  assert.doesNotMatch(gate, /triggerStale is measured for telemetry and NEVER blocks/);
 });
 
-test('v3.8.4: Start copies origin onto the campaign; adds use THEIR location and reclaim campaign invalidation', () => {
+test('v3.8.6 Start is the v3.8.2 probe-on-confirm path; adds keep 3.8.2 reclaim rule', () => {
   const start = section('void Start(Snap', '//====================== add candidates');
-  const iCopy = start.indexOf('campOriginHigh=S.originHigh');
-  const iReset = start.indexOf('SetupReset("CONSUMED_BY_CAMPAIGN")');
-  assert.ok(iCopy >= 0 && iReset > iCopy, 'campaign origin must be copied before SetupReset');
-
+  assert.match(start, /campState=CAMP_SUBMITTING/);
+  assert.match(start, /FIRST ENTRY PENDING/);
+  assert.doesNotMatch(start, /campOriginHigh=S\.originHigh/);
   const manage = section('void Manage()', '//====================== restart reconciliation');
-  assert.match(manage, /bool enforceReclaim=true;/);
-  assert.match(manage, /double addOH=a\.execHigh;/);
-  assert.doesNotMatch(manage, /addOH=\(campOriginHigh>0\?campOriginHigh:S\.originHigh\)/);
-  assert.doesNotMatch(manage, /enforceReclaim=\(a\.family=="REVERSAL"\)/);
+  assert.match(manage, /enforceReclaim=\(a\.family=="REVERSAL"\)/);
+  assert.doesNotMatch(manage, /a\.execHigh/);
 });
 
-test('v3.8.4: schema-3 active campaigns fail closed for new exposure', () => {
-  assert.match(s, /LEGACY_CAMPAIGN_ORIGIN_UNKNOWN_NEW_EXPOSURE_BLOCKED/);
-  assert.match(s, /ApplyLegacySchemaGuard\(\(int\)sch\)/);
+test('v3.8.6: uncertain recovered identity blocks new exposure, existing basket still managed', () => {
+  const rec = section('void ReconcileAgainstBroker()', '//====================== lifecycle');
+  assert.match(rec, /anchorsKnown=false/);
+  assert.match(rec, /CYCLE_START_AND_ORIGINAL_SL_UNKNOWN_NEW_EXPOSURE_BLOCKED/);
+  const pre = section('string ComputePreflight()', 'double LayerMarginPct()');
+  assert.match(pre, /ANCHORS_UNRECONCILED/);
+  assert.match(pre, /CAMPAIGN_CLOSING/);
 });
 
-test('v3.8.4: dead thesis cannot reincarnate on the same run', () => {
-  assert.match(s, /DeadThesisBlocks/);
-  assert.match(s, /RememberDeadThesis/);
-  assert.doesNotMatch(s, /lastEnd>0&&now-lastEnd<C\.cooldownMinutes\*60[\s\S]{0,40}ArmSetup/);
-});
-
-test('v3.8.4: reversal add requires the NEW setup in-location; continuation uses the trigger bar', () => {
+test('v3.8.2 reversal add is a new confirmed setup; continuation uses M1 break/fail', () => {
   const add = section('AddCandidate BuildAddCandidate()', '//====================== basket management');
-  assert.match(add, /rev\.valid&&rev\.dir==campDir&&S\.state==SETUP_CONFIRMED&&rev\.inLocation/);
-  assert.match(add, /a\.execHigh=S\.execHigh;a\.execLow=S\.execLow/);
-  assert.match(add, /a\.execHigh=MathMax\(m1\[1\]\.high,m1\[1\]\.low\)/);
   assert.match(add, /a\.family=cont\?"CONTINUATION":"FAILED_PULLBACK"/);
+  assert.doesNotMatch(add, /rev\.inLocation/);
+  assert.doesNotMatch(add, /a\.execHigh=S\.execHigh/);
 });
 
-test('v3.8.4: same trigger cannot add twice; GATE_SHADOW stays the default', () => {
+test('v3.8.6: same trigger cannot add twice; GATE_SHADOW stays the default', () => {
   const manage = section('void Manage()', '//====================== restart reconciliation');
   assert.match(manage, /TRIGGER_ALREADY_CONSUMED/);
   assert.match(manage, /InpMaxAddsPerTrigger/);
   assert.match(s, /input ApexGateMode InpEntryExtensionMode=GATE_SHADOW/);
 });
 
-test('v3.8.4: schema 4 LoadState restores campaign origin anchors', () => {
-  const load = section('int LoadState()', 'int ti=JIdx("consumedTriggers")');
-  assert.match(load, /campInvalidLevel\s*=\s*JNumOr\("campInvalidLevel"/);
-  assert.match(load, /campOriginHigh\s*=\s*JNumOr\("campOriginHigh"/);
-  assert.match(load, /campOriginLow\s*=\s*JNumOr\("campOriginLow"/);
-  assert.match(load, /ApplyLegacySchemaGuard\(\(int\)sch\)/);
-});
-
-test('v3.8.4 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocation', async () => {
+test('v3.8.6 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocation', async () => {
   const cur = s;
-  const v382 = await fs.readFile(new URL('../ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5', import.meta.url), 'utf8');
+  const v382 = await fs.readFile(new URL('../ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5', import.meta.url), 'utf8');
   const slice = (src, start, end) => {
     const a = src.indexOf(start);
     const b = src.indexOf(end, a + start.length);
@@ -249,22 +239,22 @@ test('v3.8.4 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocati
   );
 });
 
-test('v3.8.5: schema 5 persists setup, dead thesis, pending submit and cloud lease', () => {
-  assert.match(s, /#define APEX_STATE_SCHEMA\s+5/);
+test('v3.8.6: schema 4 persists setup, pending submit and cloud lease', () => {
+  assert.match(s, /#define APEX_STATE_SCHEMA\s+4/);
   assert.match(s, /CAMP_SUBMITTING=3/);
-  const save = section('void SaveState()', 'bool ApplyLegacySchemaGuard');
+  const save = section('void SaveState()', 'void ClearState()');
   assert.match(save, /\\"setup\\":\{\\"state\\":/);
-  assert.match(save, /waitingLocationSince/);
-  assert.match(save, /\\"deadThesis\\":\{\\"active\\":/);
   assert.match(save, /\\"pending\\":\{\\"active\\":/);
   assert.match(save, /\\"cloudLease\\":\{\\"supported\\":/);
+  assert.doesNotMatch(save, /waitingLocationSince/);
+  assert.doesNotMatch(save, /\\"deadThesis\\":\{\\"active\\":/);
   const load = section('int LoadState()', '//====================== volume sizing');
-  assert.match(load, /\(int\)sch!=APEX_STATE_SCHEMA&&\(int\)sch!=4&&\(int\)sch!=3/);
+  assert.match(load, /\(int\)sch!=APEX_STATE_SCHEMA&&\(int\)sch!=3&&\(int\)sch!=5/);
   assert.match(load, /SetupSnapshotValidToRestore/);
   assert.match(load, /g_pending\.active=JBoolOr\("active"/);
 });
 
-test('v3.8.5: WAF/HTML 401/403 keeps last-good; only XauCloud JSON envelope tombstones', () => {
+test('v3.8.6: WAF/HTML 401/403 keeps last-good; only XauCloud JSON envelope tombstones', () => {
   const den = section('bool IsAuthenticatedDenial(', 'bool CloudSync()');
   assert.match(den, /BodyLooksLikeJsonObject/);
   assert.match(den, /IsXauCloudDenialEnvelope/);
@@ -272,7 +262,7 @@ test('v3.8.5: WAF/HTML 401/403 keeps last-good; only XauCloud JSON envelope tomb
   assert.doesNotMatch(den, /if\(!JsonParseObject\(resp\)\) \{reason="LICENSE_DENIED";return true;\}/);
 });
 
-test('v3.8.5: PLACED fences the campaign; Start does not reset while pending', () => {
+test('v3.8.6: PLACED fences the campaign; Start does not reset while pending', () => {
   const open = section('bool OpenLayer(', '//====================== closing');
   assert.match(open, /e\.cls==EXEC_PENDING \|\| ClassifyBrokerSubmit/);
   assert.match(open, /ORDER_PENDING/);
@@ -280,13 +270,13 @@ test('v3.8.5: PLACED fences the campaign; Start does not reset while pending', (
   const start = section('void Start(Snap', '//====================== add candidates');
   assert.match(start, /campState=CAMP_SUBMITTING/);
   assert.match(start, /FIRST ENTRY PENDING/);
-  const pre = section('string ComputePreflight()', 'bool OpenLayer');
+  const pre = section('string ComputePreflight()', 'double LayerMarginPct()');
   assert.match(pre, /ORDER_PENDING_BROKER_CONFIRMATION/);
   assert.match(pre, /CROSS_TERMINAL_LEASE_NOT_MANAGER/);
   assert.match(pre, /CAMPAIGN_SUBMITTING/);
 });
 
-test('v3.8.5: cloud tick is bounded and never runs before Manage', () => {
+test('v3.8.6: cloud tick is bounded and never runs before Manage', () => {
   const onTimer = section('void OnTimer()', null);
   const iManage = onTimer.indexOf('Manage();');
   const iCloud = onTimer.indexOf('CloudSync()');
@@ -299,13 +289,17 @@ test('v3.8.5: cloud tick is bounded and never runs before Manage', () => {
   assert.match(s, /HEARTBEAT_OK_CONFIG_DEFERRED/);
 });
 
-test('v3.8.5: Observe during ACTIVE campaign cannot arm the opposite thesis', () => {
-  const obs = section('Snap Observe()', 'double ScoreFloorGivenMandatory');
-  assert.match(obs, /only same-direction setups may arm \(reversal-add\)/);
-  assert.match(obs, /canArm&&campState==CAMP_ACTIVE&&campDir!=0&&\(-imp\)!=campDir/);
+test('v3.8.6: CLOSING persists until broker shows zero owned positions', () => {
+  const close = section('bool AttemptClosePass()', 'void FinalizeClose()');
+  assert.match(close, /return CountPos\(\)==0/);
+  assert.match(close, /sent=true means the request was accepted for sending, not that the position is gone/);
+  const svc = section('void ServiceClosing()', 'void RequestClose');
+  assert.match(svc, /closing intent must survive a restart mid-retry/);
+  const rec = section('void ReconcileAgainstBroker()', '//====================== lifecycle');
+  assert.match(rec, /stays CLOSING until zero positions/);
 });
 
-test('v3.8.5: customer-facing WebRequest origin is xaucloud.io everywhere in this repo', async () => {
+test('v3.8.6: customer-facing WebRequest origin is xaucloud.io everywhere in this repo', async () => {
   const ui = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const validation = await fs.readFile(new URL('../VALIDATION.txt', import.meta.url), 'utf8');
@@ -316,7 +310,7 @@ test('v3.8.5: customer-facing WebRequest origin is xaucloud.io everywhere in thi
   assert.match(s, /InpCloudURL="https:\/\/xaucloud\.io"/);
 });
 
-test('v3.8.5: systemd keeps DATA_DIR and does not require a user production may not have', async () => {
+test('v3.8.6: systemd keeps DATA_DIR and does not require a user production may not have', async () => {
   const unit = await fs.readFile(new URL('../deploy/xaucloud-apex.service', import.meta.url), 'utf8');
   const server = await fs.readFile(new URL('../server.mjs', import.meta.url), 'utf8');
   assert.match(unit, /DATA_DIR=\/var\/lib\/xaucloud-apex/);

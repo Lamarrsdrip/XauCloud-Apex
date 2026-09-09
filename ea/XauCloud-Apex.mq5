@@ -1,31 +1,38 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.8.5 "LivePlatform"                              |
+//|  XauCloud Apex v3.8.6 "HardenedCapacity"                          |
 //|                                                                   |
-//|  Strategy skeleton is still:                                      |
-//|      impulse -> liquidity sweep -> rejection -> displacement      |
-//|      -> ORIGIN STORED (confirmation is NOT an entry)              |
-//|      -> WAIT for the displacement-origin retest                   |
-//|      -> ENTER only in the executable origin region                |
-//|      -> pyramid adds at EACH ADD'S OWN location while the         |
-//|         ORIGINAL campaign invalidation is still intact            |
-//|      -> basket exit on target / ratchet / master SL / recovery.   |
+//|  TRADING BASE = v3.8.2 CapacityTruth. Strategy/entries/exits are  |
+//|  unchanged: impulse -> sweep -> rejection -> micro BOS -> first   |
+//|  probe on confirmation (if(s.valid) Start(s)) -> profit-side      |
+//|  pyramiding -> basket exit on target / ratchet / master SL /      |
+//|  recovery-to-entry.                                               |
 //|                                                                   |
-//|  v3.8.5 is LIVE PLATFORM correctness on top of v3.8.4 entry.      |
-//|  Sizing, leverage, UNLIMITED allocation, NORMAL 15/50/100,        |
-//|  ratchet, master SL and recovery stay v3.8.2 CapacityTruth.       |
+//|  This build backports live-platform HARDENING only: PLACED is     |
+//|  pending not reject, late-fill attach, no duplicate resend,       |
+//|  SUBMITTING fence, WAF 401/403 is transport, Manage() before      |
+//|  WebRequest with a tick budget, cross-terminal manager lease,     |
+//|  restart persist of campaign + pending + confirmed setup,         |
+//|  revision is the config-sync authority.                           |
+//|                                                                   |
+//|  NOT in this build: mandatory retest, MODEL C origin box,         |
+//|  swing-liquidity redesign, changed add-location rules,            |
+//|  dead-thesis strategy filter, confirmation-is-not-entry.          |
+//|                                                                   |
+//|  Sizing: NORMAL 15/50/100 and UNLIMITED 100%-then-remaining are   |
+//|  unchanged from v3.8.2.                                           |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
-#property version   "3.850"
+#property version   "3.860"
 #property strict
-#property description "ApexStack: XAUUSD origin-retest entries, own-location adds, truthful live control-plane"
+#property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.8.5-LivePlatform"
-#define APEX_BUILD_ID      "3.8.5"
+#define APEX_VERSION       "XauCloud-Apex_v3.8.6-HardenedCapacity"
+#define APEX_BUILD_ID      "3.8.6"
 #define APEX_MAGIC         8620260903
-#define APEX_STATE_SCHEMA  5
+#define APEX_STATE_SCHEMA  4
 #define APEX_CONFIG_SCHEMA 2
 #define APEX_SCORE_BASE    25.0    // constant, non-discriminating ranking offset -- see APEX-AUDIT-006
 #define APEX_MAX_TRIGGERS  32
@@ -75,7 +82,7 @@ input double InpRecoveryExitArmPctOfSL=40.0;
 // --- APEX-AUDIT-001/003: the setup's OWN level and its OWN configured lifetime decide
 // --- executability. No new numeric threshold is introduced by these two.
 input bool   InpRejectReclaimedExtreme=true;  // Refuse to submit once the live quote has reclaimed the setup's rejected extreme
-input bool   InpRequireFreshTrigger=false;    // TELEMETRY ONLY since v3.8.3: a newer M1 is a retest, not a reject
+input bool   InpRequireFreshTrigger=true;     // The confirming bar must still be the latest closed M1 bar at submission
 
 // --- OWNER DECISION REQUIRED. Astra asked for these gates to EXIST; the numeric values
 // --- are unvalidated hypotheses, so they ship disabled / shadow. Enabling them is a
@@ -358,14 +365,9 @@ struct Setup
    SetupState state;
    string     id,sig,cancelReason;
    int        dir;
-   datetime   armedAt,sweepBarTime,confirmedAt,triggerBarTime,waitingLocationSince;
+   datetime   armedAt,sweepBarTime,confirmedAt,triggerBarTime;
    double     extreme,prior,atr,triggerPrice;
    string     bosKind;
-   double     originHigh,originLow,originClose,originOpen;
-   datetime   originBarTime;
-   double     execHigh,execLow;
-   bool       dead;
-   string     deadReason;
   };
 
 struct Snap
@@ -378,10 +380,6 @@ struct Snap
    string sig,reason,bosKind;
    datetime triggerBarTime;
    double triggerPrice;
-   double originHigh,originLow,originClose,originOpen;
-   datetime originBarTime;
-   double execHigh,execLow;
-   bool   inLocation,locationNow;
   };
 
 struct AddCandidate
@@ -392,7 +390,6 @@ struct AddCandidate
    string   reason,triggerId;
    datetime triggerBarTime;
    int      dir;
-   double   execHigh,execLow,triggerPrice;
   };
 
 int      hAtr=INVALID_HANDLE;
@@ -410,48 +407,6 @@ ulong    masterTicket=0;
 int      masterGuardStage=0;
 datetime campStart=0;
 string   campId="",campSig="";
-double   campInvalidLevel=0,campOriginHigh=0,campOriginLow=0,campOriginClose=0;
-datetime campOriginBar=0;
-datetime g_noRearmBeforeBar=0;
-int      g_noRearmDir=0;
-// Dead-thesis identity: the SAME failed run cannot reincarnate as a "new" setup
-// just because the next M1 printed a slightly higher high. Cleared only by a
-// genuine opposite impulse (new displacement cycle), never by a time cooldown.
-bool     g_deadThesisActive=false;
-int      g_deadThesisDir=0;
-double   g_deadThesisExtreme=0,g_deadThesisPrior=0;
-datetime g_deadThesisSweep=0;
-datetime g_deadThesisArmedAt=0;
-
-// Cross-terminal manager lease (XauCloud config envelope). GlobalVariable remains
-// the same-terminal duplicate-chart fence. Cloud lease is the account fence.
-bool     g_cloudLeaseSupported=false;
-bool     g_cloudLeaseConfirmed=false;
-string   g_cloudManagerId="";
-datetime g_cloudLeaseUntil=0;
-long     g_cloudLeaseGeneration=0;
-
-// Broker submission fence: PLACED != rejected. A late fill must attach here.
-struct PendingSubmit
-  {
-   bool     active;
-   bool     isFirstEntry;
-   ulong    order;
-   int      dir;
-   double   requestedVolume,sl,score,invalidLevel,refPrice,atr,originHigh,originLow;
-   string   why,setupId,family,triggerId;
-   datetime submittedAt,triggerBar;
-   bool     enforceReclaim;
-  };
-PendingSubmit g_pending;
-bool BodyLooksLikeJsonObject(const string resp);
-bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue);
-int  ClassifyBrokerSubmit(uint rc,bool hasFill);
-bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager);
-bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed);
-void ReconcilePending();
-void ClearPending(string reason);
-void ApplyCloudManagerLease(const string mid,datetime until,long generation);
 // APEX-AUDIT-010 closing intent
 string   closingOutcome="",closingReason="";
 datetime closingSince=0;
@@ -476,6 +431,38 @@ datetime g_cloudLastOk=0;
 string   g_cloudLastStatus="NEVER_CONNECTED";
 string   g_cloudProtocolError="";
 
+// Cross-terminal manager lease (XauCloud config envelope). GlobalVariable remains
+// the same-terminal duplicate-chart fence. Cloud lease is the account fence.
+bool     g_cloudLeaseSupported=false;
+bool     g_cloudLeaseConfirmed=false;
+string   g_cloudManagerId="";
+datetime g_cloudLeaseUntil=0;
+long     g_cloudLeaseGeneration=0;
+
+// Broker submission fence: PLACED != rejected. A late fill must attach here.
+struct PendingSubmit
+  {
+   bool     active;
+   bool     isFirstEntry;
+   ulong    order;
+   int      dir;
+   double   requestedVolume,sl,score,invalidLevel,refPrice,atr;
+   string   why,setupId,family,triggerId;
+   datetime submittedAt,triggerBar;
+   bool     enforceReclaim;
+  };
+PendingSubmit g_pending;
+bool BodyLooksLikeJsonObject(const string resp);
+bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue);
+int  ClassifyBrokerSubmit(uint rc,bool hasFill);
+bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager);
+bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed);
+void ReconcilePending();
+void ClearPending(string reason);
+void PromotePendingFill();
+void ApplyCloudManagerLease(const string mid,datetime until,long generation);
+string CampStateName();
+
 // --- risk-loop instrumentation (APEX-AUDIT-002) ---
 ulong    g_lastManageTickMs=0;
 ulong    g_maxRiskLoopGapMs=0;
@@ -491,6 +478,13 @@ bool IsTester(){return (bool)MQLInfoInteger(MQL_TESTER);}
 double clamp(double x,double a,double b){return MathMax(a,MathMin(b,x));}
 string BoolJson(bool v){return v?"true":"false";}
 string NormalizeLicense(string s){s=trim(s);StringToUpper(s);StringReplace(s," ","");return s;}
+string CampStateName()
+  {
+   if(campState==CAMP_CLOSING) return "CLOSING";
+   if(campState==CAMP_SUBMITTING) return "SUBMITTING";
+   if(campState==CAMP_ACTIVE) return "ACTIVE";
+   return "IDLE";
+  }
 
 uint Fnv1a(const string s)
   {
@@ -741,7 +735,7 @@ string TelemetryCommon()
      "\"anchorsKnown\":%s,\"riskLoopMaxGapMs\":%I64u",
      AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),AccountInfoString(ACCOUNT_SERVER),
      AccountInfoString(ACCOUNT_CURRENCY),_Symbol,APEX_VERSION,APEX_BUILD_ID,campId,campSig,campDir,
-     layers,(campState==CAMP_CLOSING?"CLOSING":campState==CAMP_SUBMITTING?"SUBMITTING":campState==CAMP_ACTIVE?"ACTIVE":"IDLE"),CountPos(),BasketVolume(),
+     layers,CampStateName(),CountPos(),BasketVolume(),
      AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),AccountInfoDouble(ACCOUNT_MARGIN_FREE),
      AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),
      BoolJson((bool)TerminalInfoInteger(TERMINAL_CONNECTED)),
@@ -1035,8 +1029,7 @@ void RecordDenial(string reason)
    Print("APEX LICENSE DENIED BY XAUCLOUD | reason=",g_cloudDeniedReason," | new exposure refused, exits still managed");
   }
 
-// True when an HTTP response is a structured, authenticated XauCloud denial rather
-// than a Cloudflare/WAF/proxy HTML 401/403 or a random JSON error page.
+// True when an HTTP response is a structured, authenticated denial rather than an outage.
 bool IsAuthenticatedDenial(int code,const string resp,string &reason)
   {
    reason="";
@@ -1107,7 +1100,7 @@ bool CloudSync()
       license,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_SERVER),_Symbol,(int)_Period,
       APEX_VERSION,APEX_BUILD_ID,AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),CountPos(),BasketVolume(),
-      BoolJson(campState!=CAMP_IDLE),(campState==CAMP_CLOSING?"CLOSING":campState==CAMP_SUBMITTING?"SUBMITTING":campState==CAMP_ACTIVE?"ACTIVE":"IDLE"),
+      BoolJson(campState!=CAMP_IDLE),CampStateName(),
       layers,campId,g_cloudLastCommandRevision,C.configHash,BoolJson(g_observerOnly),g_preflightBlock,
       (g_observerOnly?"OBSERVER_ONLY":g_preflightBlock!=""?g_preflightBlock:C.armed?"SCANNING":"DISARMED"),
       BoolJson((bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)),BoolJson((bool)MQLInfoInteger(MQL_TRADE_ALLOWED)),
@@ -1330,17 +1323,13 @@ void SaveState()
      "\"firstEntryPrice\":%.5f,\"firstSLPrice\":%.5f,\"firstInitialSLPrice\":%.5f,"
      "\"recoveryExitArmed\":%s,\"anchorsKnown\":%s,\"masterTicket\":%I64u,\"masterGuardStage\":%d,"
      "\"closingOutcome\":\"%s\",\"closingReason\":\"%s\",\"closingSince\":%I64d,\"closeAttempts\":%d,"
-     "\"campInvalidLevel\":%.5f,\"campOriginHigh\":%.5f,\"campOriginLow\":%.5f,\"campOriginClose\":%.5f,\"campOriginBar\":%I64d,"
      "\"consumedTriggers\":%s,"
      "\"setup\":{\"state\":%d,\"id\":\"%s\",\"sig\":\"%s\",\"dir\":%d,"
-     "\"armedAt\":%I64d,\"sweepBarTime\":%I64d,\"confirmedAt\":%I64d,\"triggerBarTime\":%I64d,\"waitingLocationSince\":%I64d,"
-     "\"extreme\":%.5f,\"prior\":%.5f,\"atr\":%.5f,\"triggerPrice\":%.5f,\"bosKind\":\"%s\","
-     "\"originHigh\":%.5f,\"originLow\":%.5f,\"originClose\":%.5f,\"originOpen\":%.5f,\"originBarTime\":%I64d,"
-     "\"execHigh\":%.5f,\"execLow\":%.5f},"
-     "\"deadThesis\":{\"active\":%s,\"dir\":%d,\"extreme\":%.5f,\"prior\":%.5f,\"sweep\":%I64d},"
+     "\"armedAt\":%I64d,\"sweepBarTime\":%I64d,\"confirmedAt\":%I64d,\"triggerBarTime\":%I64d,"
+     "\"extreme\":%.5f,\"prior\":%.5f,\"atr\":%.5f,\"triggerPrice\":%.5f,\"bosKind\":\"%s\"},"
      "\"pending\":{\"active\":%s,\"isFirstEntry\":%s,\"order\":%I64u,\"dir\":%d,\"requestedVolume\":%.4f,"
      "\"sl\":%.5f,\"score\":%.2f,\"invalidLevel\":%.5f,\"refPrice\":%.5f,\"atr\":%.5f,"
-     "\"originHigh\":%.5f,\"originLow\":%.5f,\"why\":\"%s\",\"setupId\":\"%s\",\"family\":\"%s\",\"triggerId\":\"%s\","
+     "\"why\":\"%s\",\"setupId\":\"%s\",\"family\":\"%s\",\"triggerId\":\"%s\","
      "\"submittedAt\":%I64d,\"triggerBar\":%I64d,\"enforceReclaim\":%s},"
      "\"cloudLease\":{\"supported\":%s,\"confirmed\":%s,\"managerId\":\"%s\",\"until\":%I64d,\"generation\":%I64d},"
      "\"policy\":{\"accountProfile\":\"%s\",\"targetEq\":%.2f,\"profitRatchetEnabled\":%s,"
@@ -1352,16 +1341,12 @@ void SaveState()
      peakProfitPct,earnedFloorPct,BoolJson(ratchetArmed),
      firstEntryPrice,firstSLPrice,firstInitialSLPrice,
      BoolJson(recoveryExitArmed),BoolJson(anchorsKnown),masterTicket,masterGuardStage,
-     closingOutcome,closingReason,(long)closingSince,closeAttempts,
-     campInvalidLevel,campOriginHigh,campOriginLow,campOriginClose,(long)campOriginBar,TriggersJson(),
-     (int)S.state,S.id,S.sig,S.dir,
-     (long)S.armedAt,(long)S.sweepBarTime,(long)S.confirmedAt,(long)S.triggerBarTime,(long)S.waitingLocationSince,
+     closingOutcome,closingReason,(long)closingSince,closeAttempts,TriggersJson(),
+     (int)S.state,S.id,S.sig,S.dir,(long)S.armedAt,(long)S.sweepBarTime,(long)S.confirmedAt,(long)S.triggerBarTime,
      S.extreme,S.prior,S.atr,S.triggerPrice,S.bosKind,
-     S.originHigh,S.originLow,S.originClose,S.originOpen,(long)S.originBarTime,S.execHigh,S.execLow,
-     BoolJson(g_deadThesisActive),g_deadThesisDir,g_deadThesisExtreme,g_deadThesisPrior,(long)g_deadThesisSweep,
      BoolJson(g_pending.active),BoolJson(g_pending.isFirstEntry),g_pending.order,g_pending.dir,g_pending.requestedVolume,
      g_pending.sl,g_pending.score,g_pending.invalidLevel,g_pending.refPrice,g_pending.atr,
-     g_pending.originHigh,g_pending.originLow,g_pending.why,g_pending.setupId,g_pending.family,g_pending.triggerId,
+     g_pending.why,g_pending.setupId,g_pending.family,g_pending.triggerId,
      (long)g_pending.submittedAt,(long)g_pending.triggerBar,BoolJson(g_pending.enforceReclaim),
      BoolJson(g_cloudLeaseSupported),BoolJson(g_cloudLeaseConfirmed),g_cloudManagerId,(long)g_cloudLeaseUntil,g_cloudLeaseGeneration,
      P.accountProfile,P.targetEq,BoolJson(P.profitRatchetEnabled),P.ratchetTriggerPct,P.ratchetLockPct,
@@ -1369,16 +1354,6 @@ void SaveState()
      BoolJson(P.recoveryExitEnabled),P.recoveryExitArmPctOfSL,P.normalFixedSLGoldMove);
    if(!WriteFileAtomic(StateFile(),j))
       Print("APEX STATE WRITE FAILED | file=",StateFile()," | campaign state may not survive a restart");
-  }
-bool ApplyLegacySchemaGuard(int schema)
-  {
-   if(schema==3 && (campState==CAMP_ACTIVE||campState==CAMP_CLOSING))
-     {
-      anchorsKnown=false;
-      Print("APEX LEGACY_CAMPAIGN_ORIGIN_UNKNOWN_NEW_EXPOSURE_BLOCKED | schema=3 active campaign has no origin/invalidation anchors | existing positions managed, new layers refused");
-      return true;
-     }
-   return false;
   }
 void ClearState(){if(g_observerOnly&&!IsTester())return;FileDelete(StateFile());}
 
@@ -1390,7 +1365,7 @@ int LoadState()
    if(rc<=0) return rc;
    if(!JsonParseObject(payload)) return -1;
    double sch=0;
-   if(!JNumStrict("schema",sch)||((int)sch!=APEX_STATE_SCHEMA&&(int)sch!=4&&(int)sch!=3)) return -1;
+   if(!JNumStrict("schema",sch)||((int)sch!=APEX_STATE_SCHEMA&&(int)sch!=3&&(int)sch!=5)) return -1;
    string owner="";
    if(!JStrStrict("ownerKey",owner)||owner!=OwnerKey()) return -1;   // wrong account/broker/symbol/magic
 
@@ -1420,22 +1395,12 @@ int LoadState()
    closingReason       = JStrOr("closingReason","");
    closingSince        = (datetime)(long)JNumOr("closingSince",0);
    closeAttempts       = (int)JNumOr("closeAttempts",0);
-   campInvalidLevel    = JNumOr("campInvalidLevel",0);
-   campOriginHigh      = JNumOr("campOriginHigh",0);
-   campOriginLow       = JNumOr("campOriginLow",0);
-   campOriginClose     = JNumOr("campOriginClose",0);
-   campOriginBar       = (datetime)(long)JNumOr("campOriginBar",0);
-   ApplyLegacySchemaGuard((int)sch);
    int ti=JIdx("consumedTriggers");
    if(ti>=0&&g_jtype[ti]=='a') TriggersFromJson(g_jval[ti]);
-
-   // Capture nested blobs from the OUTER table before policy parse overwrites it.
-   int si=JIdx("setup"), di=JIdx("deadThesis"), pdi=JIdx("pending"), li=JIdx("cloudLease");
+   int si=JIdx("setup"), pdi=JIdx("pending"), li=JIdx("cloudLease");
    string setupBlob=(si>=0&&g_jtype[si]=='o')?g_jval[si]:"";
-   string deadBlob=(di>=0&&g_jtype[di]=='o')?g_jval[di]:"";
    string pendBlob=(pdi>=0&&g_jtype[pdi]=='o')?g_jval[pdi]:"";
    string leaseBlob=(li>=0&&g_jtype[li]=='o')?g_jval[li]:"";
-
    int pi=JIdx("policy");
    if(pi>=0&&g_jtype[pi]=='o')
      {
@@ -1466,14 +1431,6 @@ int LoadState()
       for(int i=0;i<savedCount;i++){g_jkey[i]=keys[i];g_jval[i]=vals[i];g_jtype[i]=types[i];}
      }
 
-   if(deadBlob!="" && JsonParseObject(deadBlob))
-     {
-      g_deadThesisActive=JBoolOr("active",false);
-      g_deadThesisDir=(int)JNumOr("dir",0);
-      g_deadThesisExtreme=JNumOr("extreme",0);
-      g_deadThesisPrior=JNumOr("prior",0);
-      g_deadThesisSweep=(datetime)(long)JNumOr("sweep",0);
-     }
    if(leaseBlob!="" && JsonParseObject(leaseBlob))
      {
       g_cloudLeaseSupported=JBoolOr("supported",false);
@@ -1494,8 +1451,6 @@ int LoadState()
       g_pending.invalidLevel=JNumOr("invalidLevel",0);
       g_pending.refPrice=JNumOr("refPrice",0);
       g_pending.atr=JNumOr("atr",0);
-      g_pending.originHigh=JNumOr("originHigh",0);
-      g_pending.originLow=JNumOr("originLow",0);
       g_pending.why=JStrOr("why","");
       g_pending.setupId=JStrOr("setupId","");
       g_pending.family=JStrOr("family","");
@@ -1524,24 +1479,13 @@ int LoadState()
          S.sweepBarTime=(datetime)(long)JNumOr("sweepBarTime",0);
          S.confirmedAt=confirmed;
          S.triggerBarTime=(datetime)(long)JNumOr("triggerBarTime",0);
-         S.waitingLocationSince=(datetime)(long)JNumOr("waitingLocationSince",0);
          S.extreme=extreme;
          S.prior=JNumOr("prior",0);
          S.atr=JNumOr("atr",0);
          S.triggerPrice=JNumOr("triggerPrice",0);
          S.bosKind=JStrOr("bosKind","");
-         S.originHigh=JNumOr("originHigh",0);
-         S.originLow=JNumOr("originLow",0);
-         S.originClose=JNumOr("originClose",0);
-         S.originOpen=JNumOr("originOpen",0);
-         S.originBarTime=(datetime)(long)JNumOr("originBarTime",0);
-         S.execHigh=JNumOr("execHigh",0);
-         S.execLow=JNumOr("execLow",0);
-         S.dead=false;S.deadReason="";
-         Print("APEX SETUP RESTORED | id=",S.id," state=",(int)S.state," dir=",S.dir," extreme=",S.extreme);
+         Print("APEX SETUP RESTORED | state=",st," | id=",S.id," | dir=",dir);
         }
-      else
-         Print("APEX SETUP NOT RESTORED | snapshot expired, reclaimed, or incomplete");
      }
    return 1;
   }
@@ -2233,11 +2177,8 @@ void SetupReset(string reason)
       Emit("SETUP_CANCELLED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"cancelReason\":\"%s\",\"extreme\":%.5f,\"ageSec\":%d",
            S.id,S.dir,reason,S.extreme,(int)(TimeCurrent()-S.armedAt)));
    S.state=SETUP_NONE;S.id="";S.dir=0;S.sig="";S.cancelReason=reason;
-   S.armedAt=0;S.sweepBarTime=0;S.confirmedAt=0;S.triggerBarTime=0;S.waitingLocationSince=0;
+   S.armedAt=0;S.sweepBarTime=0;S.confirmedAt=0;S.triggerBarTime=0;
    S.extreme=0;S.prior=0;S.atr=0;S.triggerPrice=0;S.bosKind="";
-   S.originHigh=0;S.originLow=0;S.originClose=0;S.originOpen=0;S.originBarTime=0;
-   S.execHigh=0;S.execLow=0;
-   S.dead=false;S.deadReason="";
   }
 string NewSetupId()
   {
@@ -2253,154 +2194,9 @@ void ArmSetup(int dir,datetime sweepBar,double extreme,double prior,double atr,d
    S.sweepBarTime=sweepBar;
    S.extreme=extreme;S.prior=prior;S.atr=atr;
    S.confirmedAt=0;S.triggerBarTime=0;S.triggerPrice=0;S.bosKind="";S.cancelReason="";
-   S.originHigh=0;S.originLow=0;S.originClose=0;S.originOpen=0;S.originBarTime=0;
-   S.execHigh=0;S.execLow=0;
-   S.waitingLocationSince=0;
-   S.dead=false;S.deadReason="";
    S.sig=dir<0?"SELL_UPSIDE_LIQUIDITY_EXHAUST":"BUY_DOWNSIDE_LIQUIDITY_EXHAUST";
    Emit("WATCH_ARMED",StringFormat(",\"setupId\":\"%s\",\"watchDir\":%d,\"impulseAtr\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"sweepBarTime\":%I64d",
         S.id,dir,impulseMult,extreme,prior,(long)sweepBar));
-  }
-
-//====================== entry-location / thesis-identity helpers ======
-// MODEL C (kept): the executable region is the DISPLACEMENT ORIGIN, not the
-// full confirmation candle. For a SELL that is the premium/upper half of the
-// bar, tightened to the body origin (open) when the open sits in that half.
-// Full-range (MODEL A) lets the dump-close count as an entry. Body-only
-// (MODEL B) still includes the close of a bearish displacement. Replay in
-// tests/native/main.cpp compares the three; MODEL C is the architecture.
-void ComputeExecRegion(int dir,double barHigh,double barLow,double barOpen,double barClose,
-                       double &execHigh,double &execLow)
-  {
-   if(barHigh<barLow){double t=barHigh;barHigh=barLow;barLow=t;}
-   if(barHigh<=barLow){barHigh+=_Point;barLow-=_Point;}
-   double mid=barLow+0.5*(barHigh-barLow);
-   if(dir<0)
-     {
-      execHigh=barHigh;
-      execLow=MathMax(mid,barOpen);
-      if(execLow>=execHigh) execLow=mid;
-      if(execLow>=execHigh) execLow=execHigh-_Point;
-     }
-   else
-     {
-      execLow=barLow;
-      execHigh=MathMin(mid,barOpen);
-      if(execHigh<=execLow) execHigh=mid;
-      if(execHigh<=execLow) execHigh=execLow+_Point;
-     }
-  }
-bool PriceInExecRegion(int dir,double bid,double ask,double execHigh,double execLow)
-  {
-   if(execHigh<=execLow) return false;
-   if(dir<0) return (bid<=execHigh && bid>=execLow);
-   return (ask>=execLow && ask<=execHigh);
-  }
-
-// Swing highs/lows with rolling-window fallback. Extracted so replay can
-// compare this against a pure rolling window on the same tape.
-void LiquidityRefs(MqlRates &m1[],int n,bool useSwing,double &ph,double &pl)
-  {
-   ph=-DBL_MAX;pl=DBL_MAX;
-   int hi=MathMin(n-1,79);
-   if(useSwing && n>12)
-     {
-      bool haveH=false,haveL=false;
-      for(int i=10;i<hi;i++)
-        {
-         if(i-1<0||i+1>=n) continue;
-         if(m1[i].high>m1[i-1].high&&m1[i].high>m1[i+1].high){ph=MathMax(ph,m1[i].high);haveH=true;}
-         if(m1[i].low<m1[i-1].low&&m1[i].low<m1[i+1].low){pl=MathMin(pl,m1[i].low);haveL=true;}
-        }
-      if(haveH&&haveL) return;
-     }
-   ph=-DBL_MAX;pl=DBL_MAX;
-   int start=useSwing?9:9;
-   for(int i=start;i<=hi;i++){ph=MathMax(ph,m1[i].high);pl=MathMin(pl,m1[i].low);}
-  }
-
-void RememberDeadThesis()
-  {
-   g_deadThesisActive=true;
-   g_deadThesisDir=S.dir;
-   g_deadThesisExtreme=S.extreme;
-   g_deadThesisPrior=S.prior;
-   g_deadThesisSweep=S.sweepBarTime;
-  }
-void MaybeClearDeadThesis(int imp,double impulseMult,double needAtr)
-  {
-   // Opposite impulse of the original size = a new displacement cycle.
-   if(!g_deadThesisActive) return;
-   if(impulseMult<needAtr) return;
-   if((-imp)!=g_deadThesisDir) g_deadThesisActive=false;
-  }
-bool DeadThesisBlocks(int setupDir,double newExtreme,double newPrior,double atr)
-  {
-   if(!g_deadThesisActive||setupDir!=g_deadThesisDir) return false;
-   double tol=(atr>0?C.sweepAtr*atr:_Point);
-   bool extending=(setupDir<0)?(newExtreme>=g_deadThesisExtreme):(newExtreme<=g_deadThesisExtreme);
-   bool samePool=(setupDir<0)
-      ?(newPrior>=g_deadThesisPrior-tol && newPrior<=g_deadThesisExtreme+tol)
-      :(newPrior<=g_deadThesisPrior+tol && newPrior>=g_deadThesisExtreme-tol);
-   return extending&&samePool;
-  }
-
-// WAF/HTML 401/403 is TRANSPORT, not an authenticated license denial.
-bool BodyLooksLikeJsonObject(const string resp)
-  {
-   int n=StringLen(resp),i=0;
-   while(i<n)
-     {
-      ushort c=StringGetCharacter(resp,i);
-      if(c==' '||c=='\t'||c=='\r'||c=='\n'){i++;continue;}
-      return c=='{';
-     }
-   return false;
-  }
-bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue)
-  {
-   if(!parsedOk) return false;
-   if(licenseStatus=="ACTIVE") return false;
-   if(licenseStatus=="LICENSE_DENIED"||licenseStatus=="LICENSE_NOT_ACTIVE"||
-      licenseStatus=="LICENSE_DISABLED"||licenseStatus=="LICENSE_EXPIRED"||
-      licenseStatus=="LICENSE_NOT_FOUND"||licenseStatus=="ACCOUNT_MISMATCH"||
-      licenseStatus=="DISABLED"||licenseStatus=="EXPIRED")
-      return true;
-   if(error=="LICENSE_DENIED"||error=="LICENSE_NOT_ACTIVE"||error=="license_not_active"||
-      error=="LICENSE_DISABLED"||error=="LICENSE_EXPIRED"||error=="LICENSE_NOT_FOUND"||
-      error=="ACCOUNT_MISMATCH")
-      return true;
-   if(hasOk && !okValue && (licenseStatus!=""||reason!=""||error!="")) return true;
-   return false;
-  }
-
-// 1 = fill exists, 2 = broker accepted as pending/placed (do NOT reset campaign), 0 = rejected
-int ClassifyBrokerSubmit(uint rc,bool hasFill)
-  {
-   if(hasFill) return 1;
-   if(rc==TRADE_RETCODE_PLACED) return 2;
-   return 0;
-  }
-
-// Cloud manager fencing. Network loss never lets a second terminal open new exposure.
-bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager)
-  {
-   if(!cloudLeaseSupported) return true;          // xaucloud did not echo a lease; same-terminal GlobalVariable still applies
-   if(cloudManagerId=="" ) return weWereConfirmedManager && leaseUntil>=now;
-   if(cloudManagerId==myId && leaseUntil>=now) return true;
-   return false;
-  }
-
-bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed)
-  {
-   if(state!=SETUP_WATCHING && state!=SETUP_CONFIRMED) return false;
-   if(dir==0) return false;
-   if(extreme<=0) return false;
-   datetime ageFrom=(state==SETUP_CONFIRMED&&confirmedAt>0)?confirmedAt:armedAt;
-   if(ageFrom<=0) return false;
-   if(watchExpiryMinutes>0 && now-ageFrom>watchExpiryMinutes*60) return false;
-   if(marketReclaimed) return false;
-   return true;
   }
 
 //====================== observation ===================================
@@ -2417,8 +2213,6 @@ Snap Observe()
    s.impulseMult=0;s.sweepMult=0;s.wickRatio=0;s.swept=false;s.rejected=false;s.microBreak=false;
    s.m3Color=false;s.m5Color=false;s.m3Fresh=false;s.continuation=false;s.pullbackFail=false;
    s.sig="NONE";s.reason="";s.bosKind="NONE";s.triggerBarTime=0;s.triggerPrice=0;
-   s.originHigh=0;s.originLow=0;s.originClose=0;s.originOpen=0;s.originBarTime=0;
-   s.execHigh=0;s.execLow=0;s.inLocation=false;s.locationNow=false;
    if(s.atr<=0){s.reason="NO_ATR";return s;}
 
    MqlRates m1[],m3[],m5[];
@@ -2437,16 +2231,14 @@ Snap Observe()
    for(int i=1;i<=7;i++)
       if((imp>0&&m1[i].close>m1[i].open)||(imp<0&&m1[i].close<m1[i].open))directional++;
 
-   double ph=0,pl=0;
-   LiquidityRefs(m1,ArraySize(m1),true,ph,pl);
-   MaybeClearDeadThesis(imp,s.impulseMult,C.impulseAtr);
+   double ph=-DBL_MAX,pl=DBL_MAX;
+   for(int i=9;i<80;i++){ph=MathMax(ph,m1[i].high);pl=MathMin(pl,m1[i].low);}
 
    // --- APEX-AUDIT-003: a watch whose premise the market has destroyed must die, and a
    // --- genuinely new sweep must be able to take its place immediately.
    if(S.state==SETUP_WATCHING||S.state==SETUP_CONFIRMED)
      {
-      datetime ageFrom=(S.state==SETUP_CONFIRMED&&S.confirmedAt>0)?S.confirmedAt:S.armedAt;
-      if(TimeCurrent()-ageFrom>C.watchExpiryMinutes*60)
+      if(TimeCurrent()-S.armedAt>C.watchExpiryMinutes*60)
         {S.state=SETUP_EXPIRED;SetupReset("EXPIRED");}
       else
         {
@@ -2458,51 +2250,16 @@ Snap Observe()
             if(S.dir<0&&m1[i].high>S.extreme){newExtreme=true;break;}
             if(S.dir>0&&m1[i].low<S.extreme){newExtreme=true;break;}
            }
-         if(newExtreme)
-           {
-            if(S.state==SETUP_CONFIRMED)
-              {
-               g_noRearmBeforeBar=m1[1].time;g_noRearmDir=S.dir;
-               RememberDeadThesis();
-               S.dead=true;S.deadReason="NEW_EXTREME_BEYOND_SWEPT_LEVEL";
-               S.state=SETUP_INVALIDATED;SetupReset("NEW_EXTREME_BEYOND_SWEPT_LEVEL");
-              }
-            else
-              {
-               double updated=S.extreme;datetime updatedSweep=S.sweepBarTime;
-               for(int i=1;i<=8;i++)
-                 {
-                  if(m1[i].time<=S.sweepBarTime)break;
-                  if(S.dir<0&&m1[i].high>updated){updated=m1[i].high;updatedSweep=m1[i].time;}
-                  if(S.dir>0&&m1[i].low<updated){updated=m1[i].low;updatedSweep=m1[i].time;}
-                 }
-               // Local BOS of the running high: prior becomes the high we just replaced.
-               S.prior=S.extreme;
-               S.extreme=updated;S.sweepBarTime=updatedSweep;
-               Emit("WATCH_EXTREME_UPDATED",StringFormat(
-                    ",\"setupId\":\"%s\",\"watchDir\":%d,\"extreme\":%.5f,\"sweepBarTime\":%I64d",
-                    S.id,S.dir,S.extreme,(long)S.sweepBarTime));
-              }
-           }
+         if(newExtreme){S.state=SETUP_INVALIDATED;SetupReset("NEW_EXTREME_BEYOND_SWEPT_LEVEL");}
         }
      }
 
    bool canArm=(S.state==SETUP_NONE);
-   if(canArm&&g_noRearmDir!=0&&m1[1].time<=g_noRearmBeforeBar&&(-imp)==g_noRearmDir)
-      canArm=false;
-   if(canArm&&g_noRearmDir!=0&&m1[1].time>g_noRearmBeforeBar)
-      g_noRearmDir=0;
-   // During an ACTIVE campaign, only same-direction setups may arm (reversal-add).
-   // Opposite watches are a new campaign thesis, not an add, and must not mutate S.
-   if(canArm&&campState==CAMP_ACTIVE&&campDir!=0&&(-imp)!=campDir)
-      canArm=false;
    if(canArm&&s.impulseMult>=C.impulseAtr&&directional>=5)
      {
       double ex=imp>0?m1[1].high:m1[1].low;
-      double priorRef=imp>0?ph:pl;
       bool swept=imp>0?ex>=ph+C.sweepAtr*s.atr:ex<=pl-C.sweepAtr*s.atr;
-      if(swept&&!DeadThesisBlocks(-imp,ex,priorRef,s.atr))
-         ArmSetup(-imp,m1[1].time,ex,priorRef,s.atr,s.impulseMult);
+      if(swept) ArmSetup(-imp,m1[1].time,ex,imp>0?ph:pl,s.atr,s.impulseMult);
      }
 
    if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason="NO_ACTIVE_SETUP";return s;}
@@ -2510,9 +2267,6 @@ Snap Observe()
    s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.swept=true;
    s.impulseMult=MathAbs(m1[1].close-m1[8].close)/s.atr;
    s.price=s.dir>0?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
-   s.originHigh=S.originHigh;s.originLow=S.originLow;s.originClose=S.originClose;
-   s.originBarTime=S.originBarTime;
-   s.triggerBarTime=S.triggerBarTime;s.triggerPrice=S.triggerPrice;s.bosKind=S.bosKind;
 
    int rb=MathMax(1,MathMin(C.rejectionBars,8));
    bool rej=false;double bestW=0;
@@ -2571,63 +2325,13 @@ Snap Observe()
    if(C.requireM5Context&&!m5Available){s.reason="M5_HISTORY_UNAVAILABLE_BUT_REQUIRED";return s;}
 
    double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
-   bool newlyConfirmed=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold;
-   if(S.state==SETUP_CONFIRMED)
+   s.valid=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold;
+   s.reason=s.valid?"CONFIRMED_EXHAUSTION_REVERSAL":"WATCHING_FOR_REJECTION_AND_BOS";
+   if(s.valid&&S.state==SETUP_WATCHING)
      {
-      double liveBid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      double liveAsk=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-      bool reclaimed=(S.dir<0)?(liveAsk>=S.extreme):(liveBid<=S.extreme);
-      if(reclaimed&&InpRejectReclaimedExtreme)
-        {
-         RememberDeadThesis();
-         g_noRearmBeforeBar=m1[1].time;g_noRearmDir=S.dir;
-         S.state=SETUP_INVALIDATED;SetupReset("RECLAIMED_INVALIDATION_LEVEL");
-         s.valid=false;s.reason="SETUP_DEAD_RECLAIMED";s.inLocation=false;
-         return s;
-        }
-      s.valid=true;
-      s.triggerBarTime=S.triggerBarTime;
-      s.triggerPrice=S.triggerPrice;
-      s.bosKind=S.bosKind;
-      s.originHigh=S.originHigh;s.originLow=S.originLow;s.originClose=S.originClose;
-      s.originOpen=S.originOpen;s.originBarTime=S.originBarTime;
-      s.execHigh=S.execHigh;s.execLow=S.execLow;
+      S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();
+      S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=bosKind;
      }
-   else
-     {
-      s.valid=newlyConfirmed;
-      s.reason=s.valid?"SETUP_CONFIRMED_ORIGIN_STORED":"WATCHING_FOR_REJECTION_AND_BOS";
-      if(s.valid)
-        {
-         S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.waitingLocationSince=TimeCurrent();
-         S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=bosKind;
-         S.originHigh=m1[1].high;S.originLow=m1[1].low;S.originClose=m1[1].close;S.originOpen=m1[1].open;
-         S.originBarTime=m1[1].time;
-         if(S.originHigh<S.originLow){double _t=S.originHigh;S.originHigh=S.originLow;S.originLow=_t;}
-         if(S.originHigh==S.originLow){S.originHigh+=_Point;S.originLow-=_Point;}
-         ComputeExecRegion(S.dir,S.originHigh,S.originLow,S.originOpen,S.originClose,S.execHigh,S.execLow);
-         s.originHigh=S.originHigh;s.originLow=S.originLow;s.originClose=S.originClose;
-         s.originOpen=S.originOpen;s.originBarTime=S.originBarTime;
-         s.execHigh=S.execHigh;s.execLow=S.execLow;
-         Emit("SETUP_LOCATED",StringFormat(
-              ",\"setupId\":\"%s\",\"setupDir\":%d,\"originHigh\":%.5f,\"originLow\":%.5f,"
-              "\"originClose\":%.5f,\"originOpen\":%.5f,\"execHigh\":%.5f,\"execLow\":%.5f,"
-              "\"originBarTime\":%I64d,\"extreme\":%.5f,\"bosKind\":\"%s\"",
-              S.id,S.dir,S.originHigh,S.originLow,S.originClose,S.originOpen,S.execHigh,S.execLow,
-              (long)S.originBarTime,S.extreme,S.bosKind));
-        }
-     }
-   if(S.execHigh>S.execLow)
-     {
-      double liveBid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      double liveAsk=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-      s.inLocation=PriceInExecRegion(s.dir,liveBid,liveAsk,S.execHigh,S.execLow);
-      s.locationNow=s.inLocation;
-      s.execHigh=S.execHigh;s.execLow=S.execLow;
-     }
-   else s.inLocation=false;
-   if(S.state==SETUP_CONFIRMED)
-      s.reason=s.inLocation?"RETEST_EXECUTABLE":"WAITING_FOR_ENTRY_LOCATION";
    return s;
   }
 
@@ -2646,18 +2350,15 @@ struct Gate
    double   bid,ask,price,extensionAtr;
    long     quoteAgeMs;
    bool     reclaimed,triggerStale,quoteStale,extended;
-   bool     inLocation,leftLocation;
   };
 
 // Run IMMEDIATELY before every submission, and again after anything that can block.
 // "The setup happened" and "this is still an executable price" are separate questions.
 bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
-                    datetime triggerBar,bool enforceReclaim,Gate &g,
-                    double originHigh=0,double originLow=0)
+                    datetime triggerBar,bool enforceReclaim,Gate &g)
   {
    g.ok=false;g.reason="";g.bid=0;g.ask=0;g.price=0;g.extensionAtr=0;g.quoteAgeMs=0;
    g.reclaimed=false;g.triggerStale=false;g.quoteStale=false;g.extended=false;
-   g.inLocation=false;g.leftLocation=false;
 
    MqlTick tk;
    if(!SymbolInfoTick(_Symbol,tk)||tk.bid<=0||tk.ask<=0){g.reason="NO_FRESH_QUOTE";return false;}
@@ -2669,16 +2370,15 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
    if(InpMaxQuoteAgeMs>0&&g.quoteAgeMs>InpMaxQuoteAgeMs)
      {g.quoteStale=true;g.reason=StringFormat("STALE_QUOTE_%I64dms",g.quoteAgeMs);return false;}
 
-   // v3.8.3: a newer closed M1 than the origin/trigger bar is the RETEST.
-   // triggerStale is measured for telemetry and NEVER blocks.
-   if(triggerBar>0)
+   // The confirming bar must still be the latest closed M1 bar. This is what makes a
+   // stored, already-completed candle pattern unable to authorise an entry later.
+   if(InpRequireFreshTrigger&&triggerBar>0)
      {
       datetime lastClosed=iTime(_Symbol,PERIOD_M1,1);
       if(lastClosed!=triggerBar)
         {g.triggerStale=true;
-         if(InpRequireFreshTrigger)
-            g.reason=StringFormat("TRIGGER_BAR_NO_LONGER_LATEST_%I64d_vs_%I64d",(long)triggerBar,(long)lastClosed);
-        }
+         g.reason=StringFormat("TRIGGER_BAR_NO_LONGER_LATEST_%I64d_vs_%I64d",(long)triggerBar,(long)lastClosed);
+         return false;}
      }
 
    // The setup's OWN rejected extreme is the invalidation level. No invented threshold.
@@ -2690,22 +2390,6 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
          g.reason=StringFormat("RECLAIMED_INVALIDATION_LEVEL_%.5f",invalidLevel);
          return false;}
      }
-
-   // Executable region of THIS submission (first entry = displacement origin;
-   // adds = that add family's own location). Empty 0/0 means "no location
-   // constraint on this call" and is only legal for callers that already
-   // enforced campaign invalidation some other way. Schema-3 campaigns never
-   // reach here: ComputePreflight returns ANCHORS_UNRECONCILED.
-   if(originHigh>originLow)
-     {
-      g.inLocation=(dir<0)?(g.bid<=originHigh&&g.bid>=originLow)
-                          :(g.ask>=originLow&&g.ask<=originHigh);
-      if(!g.inLocation)
-        {g.leftLocation=true;
-         g.reason=StringFormat("PRICE_LEFT_ORIGIN_BOX_%.5f_%.5f",originLow,originHigh);
-         return false;}
-     }
-   else g.inLocation=true;
 
    if(atr>0&&refPrice>0)
      {
@@ -2722,6 +2406,65 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
         }
      }
    g.ok=true;g.reason="OK";
+   return true;
+  }
+
+
+// WAF/HTML 401/403 is TRANSPORT, not an authenticated license denial.
+bool BodyLooksLikeJsonObject(const string resp)
+  {
+   int n=StringLen(resp),i=0;
+   while(i<n)
+     {
+      ushort c=StringGetCharacter(resp,i);
+      if(c==' '||c=='\t'||c=='\r'||c=='\n'){i++;continue;}
+      return c=='{';
+     }
+   return false;
+  }
+bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue)
+  {
+   if(!parsedOk) return false;
+   if(licenseStatus=="ACTIVE") return false;
+   if(licenseStatus=="LICENSE_DENIED"||licenseStatus=="LICENSE_NOT_ACTIVE"||
+      licenseStatus=="LICENSE_DISABLED"||licenseStatus=="LICENSE_EXPIRED"||
+      licenseStatus=="LICENSE_NOT_FOUND"||licenseStatus=="ACCOUNT_MISMATCH"||
+      licenseStatus=="DISABLED"||licenseStatus=="EXPIRED")
+      return true;
+   if(error=="LICENSE_DENIED"||error=="LICENSE_NOT_ACTIVE"||error=="license_not_active"||
+      error=="LICENSE_DISABLED"||error=="LICENSE_EXPIRED"||error=="LICENSE_NOT_FOUND"||
+      error=="ACCOUNT_MISMATCH")
+      return true;
+   if(hasOk && !okValue && (licenseStatus!=""||reason!=""||error!="")) return true;
+   return false;
+  }
+
+// 1 = fill exists, 2 = broker accepted as pending/placed (do NOT reset campaign), 0 = rejected
+int ClassifyBrokerSubmit(uint rc,bool hasFill)
+  {
+   if(hasFill) return 1;
+   if(rc==TRADE_RETCODE_PLACED) return 2;
+   return 0;
+  }
+
+// Cloud manager fencing. Network loss never lets a second terminal open new exposure.
+bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager)
+  {
+   if(!cloudLeaseSupported) return true;
+   if(cloudManagerId=="" ) return weWereConfirmedManager && leaseUntil>=now;
+   if(cloudManagerId==myId && leaseUntil>=now) return true;
+   return false;
+  }
+
+bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed)
+  {
+   if(state!=SETUP_WATCHING && state!=SETUP_CONFIRMED) return false;
+   if(dir==0) return false;
+   if(extreme<=0) return false;
+   datetime ageFrom=(state==SETUP_CONFIRMED&&confirmedAt>0)?confirmedAt:armedAt;
+   if(ageFrom<=0) return false;
+   if(watchExpiryMinutes>0 && now-ageFrom>watchExpiryMinutes*60) return false;
+   if(marketReclaimed) return false;
    return true;
   }
 
@@ -2752,8 +2495,6 @@ void ApplyCloudManagerLease(const string mid,datetime until,long generation)
      }
    else
      {
-      // Lease expired or empty holder. Fail-closed for NEW exposure if we were not the
-      // confirmed manager; protection of an existing basket continues.
       if(!(g_cloudLeaseConfirmed && mid==g_instanceId))
          g_cloudLeaseConfirmed=false;
      }
@@ -2767,7 +2508,6 @@ void ClearPending(string reason)
    if(g_pending.isFirstEntry && campState==CAMP_SUBMITTING)
      {
       campState=CAMP_IDLE;campId="";campSig="";campDir=0;
-      campInvalidLevel=0;campOriginHigh=0;campOriginLow=0;campOriginClose=0;campOriginBar=0;
       layers=0;ClearState();
       Print("APEX PENDING ABANDONED | first entry not filled | setup preserved if still valid | reason=",reason);
      }
@@ -2899,8 +2639,7 @@ bool IsSizeOnlyRejection(uint rc,int mt5err)
   }
 
 bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPrice,
-               double atr,datetime triggerBar,bool enforceReclaim,
-               double originHigh=0,double originLow=0)
+               double atr,datetime triggerBar,bool enforceReclaim)
   {
    g_preflightBlock=ComputePreflight();
    if(g_preflightBlock!="")
@@ -2914,7 +2653,7 @@ bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPri
    // FINAL executable-price eligibility, immediately before sizing and submission.
    Gate g;
    ulong decidedAt=GetTickCount64();
-   if(!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g,originHigh,originLow))
+   if(!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g))
      {
       Emit("ENTRY_REJECTED_AT_GATE",StringFormat(
          ",\"reason\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"invalidationLevel\":%.5f,\"referencePrice\":%.5f,"
@@ -2943,7 +2682,7 @@ bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPri
    while(true)
      {
       // Re-validate the executable price before EVERY submission attempt.
-      if(attempt>0&&!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g,originHigh,originLow))
+      if(attempt>0&&!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g))
         {
          Emit("ENTRY_REJECTED_AT_GATE",StringFormat(
             ",\"reason\":\"%s\",\"stage\":\"SIZING_RETRY\",\"attempt\":%d,\"why\":\"%s\",\"setupId\":\"%s\"",
@@ -3027,8 +2766,6 @@ bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPri
       g_pending.invalidLevel=invalidLevel;
       g_pending.refPrice=refPrice;
       g_pending.atr=atr;
-      g_pending.originHigh=originHigh;
-      g_pending.originLow=originLow;
       g_pending.why=why;
       g_pending.setupId=S.id;
       g_pending.family="";
@@ -3109,7 +2846,8 @@ bool AttemptClosePass()
             uint rc=trade.ResultRetcode();
             if(rc==TRADE_RETCODE_MARKET_CLOSED)
               {NoteMarketClosed("POSITION_CLOSE",rc);return false;}
-            if(sent) ResetMarketClosedBackoff();
+            // sent=true means the request was accepted for sending, not that the position is gone.
+            if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_DONE_PARTIAL) ResetMarketClosedBackoff();
            }
         }
       if(!any)break;
@@ -3131,7 +2869,6 @@ void FinalizeClose()
    campState=CAMP_IDLE;campDir=0;layers=0;lastAdd=0;peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;
    firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;anchorsKnown=true;
    masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";
-   campInvalidLevel=0;campOriginHigh=0;campOriginLow=0;campOriginClose=0;campOriginBar=0;
    closingOutcome="";closingReason="";closingSince=0;closeAttempts=0;
    ClearTriggers();
    SetupReset("CAMPAIGN_ENDED");
@@ -3199,14 +2936,7 @@ void Start(Snap &s)
    // APEX-AUDIT-002/008: submit FIRST, then report. v3.7.1 emitted CAMPAIGN_START (a
    // blocking WebRequest) before the order existed, and reported a campaign that the
    // broker might have rejected.
-   campInvalidLevel=S.extreme;
-   campOriginHigh=S.originHigh;campOriginLow=S.originLow;campOriginClose=S.originClose;
-   campOriginBar=S.originBarTime;
-   double refPx=(S.originClose>0?S.originClose:S.triggerPrice);
-   double locH=(S.execHigh>S.execLow?S.execHigh:S.originHigh);
-   double locL=(S.execHigh>S.execLow?S.execLow:S.originLow);
-   if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED",S.extreme,refPx,s.atr,S.triggerBarTime,true,
-                 locH,locL))
+   if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
      {
       if(g_pending.active)
         {
@@ -3216,7 +2946,6 @@ void Start(Snap &s)
          return;
         }
       campState=CAMP_IDLE;campId="";campSig="";campDir=0;
-      campInvalidLevel=0;campOriginHigh=0;campOriginLow=0;campOriginClose=0;campOriginBar=0;
       ClearState();
       return;
      }
@@ -3244,7 +2973,7 @@ AddCandidate BuildAddCandidate()
   {
    AddCandidate a;
    a.addEligible=false;a.family="NONE";a.score=0;a.atr=ATR();a.reason="NO_NEW_CONFIRMATION";
-   a.triggerId="";a.triggerBarTime=0;a.dir=campDir;a.execHigh=0;a.execLow=0;a.triggerPrice=0;
+   a.triggerId="";a.triggerBarTime=0;a.dir=campDir;
    if(a.atr<=0){a.reason="NO_ATR";return a;}
 
    MqlRates m1[];
@@ -3254,14 +2983,13 @@ AddCandidate BuildAddCandidate()
 
    // Family 1 -- REVERSAL: only a genuinely CONFIRMED same-direction setup counts.
    Snap rev=Observe();
-   if(rev.valid&&rev.dir==campDir&&S.state==SETUP_CONFIRMED&&rev.inLocation)
+   if(rev.valid&&rev.dir==campDir&&S.state==SETUP_CONFIRMED)
      {
       a.family="REVERSAL";
       a.score=rev.score;
       a.reason="CONFIRMED_REVERSAL_IN_CAMPAIGN_DIRECTION";
       a.triggerId=StringFormat("REV|%s|%I64d",S.id,(long)S.triggerBarTime);
       a.triggerBarTime=S.triggerBarTime;
-      a.execHigh=S.execHigh;a.execLow=S.execLow;a.triggerPrice=S.triggerPrice;
       a.addEligible=true;
       return a;
      }
@@ -3287,12 +3015,6 @@ AddCandidate BuildAddCandidate()
    a.score=60+(cont?20:0)+(pf?15:0);        // unchanged from v3.7.1
    a.reason=cont?"CONTINUATION_BREAK":"FAILED_PULLBACK";
    a.triggerId=StringFormat("%s|%s|%I64d",a.family,campId,(long)bar);
-   // Continuation / failed-pullback fire AT the break, not on a retest of
-   // the first campaign candle. The trigger bar itself is this add's location.
-   a.execHigh=MathMax(m1[1].high,m1[1].low);
-   a.execLow=MathMin(m1[1].high,m1[1].low);
-   if(a.execHigh<=a.execLow){a.execHigh+=_Point;a.execLow-=_Point;}
-   a.triggerPrice=m1[1].close;
    a.addEligible=true;
    return a;
   }
@@ -3459,16 +3181,12 @@ void Manage()
       return;
      }
 
-   bool enforceReclaim=true;
-   double invalidLevel=(campInvalidLevel>0?campInvalidLevel:S.extreme);
-   double refPrice=(a.triggerPrice>0?a.triggerPrice:(campOriginClose>0?campOriginClose:S.triggerPrice));
+   bool enforceReclaim=(a.family=="REVERSAL");
+   double invalidLevel=enforceReclaim?S.extreme:0;
+   double refPrice=enforceReclaim?S.triggerPrice:0;
    datetime trigBar=a.triggerBarTime;
-   // THIS add's own location. Campaign origin is thesis invalidation (reclaim),
-   // not the required entry box.
-   double addOH=a.execHigh;
-   double addOL=a.execLow;
 
-   if(OpenLayer(campDir,a.score,a.reason,invalidLevel,refPrice,a.atr,trigBar,enforceReclaim,addOH,addOL))
+   if(OpenLayer(campDir,a.score,a.reason,invalidLevel,refPrice,a.atr,trigBar,enforceReclaim))
      {
       ConsumeTrigger(a.triggerId);
       SaveState();
@@ -3640,13 +3358,13 @@ int OnInit()
       " | armed=",C.armed?"true":"false",
       " | rev=",g_cloudLastCommandRevision,
       " | configHash=",C.configHash,
-      " | campaignState=",(campState==CAMP_CLOSING?"CLOSING":campState==CAMP_SUBMITTING?"SUBMITTING":campState==CAMP_ACTIVE?"ACTIVE":"IDLE"),
+      " | campaignState=",CampStateName(),
       " | observerOnly=",g_observerOnly?"true":"false",
       " | profile=",ExecutionProfile(),
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | entry=origin-retest");
+      " | entry=confirm-then-start v3.8.2");
    return INIT_SUCCEEDED;
   }
 
@@ -3712,5 +3430,5 @@ void OnTimer()
    if(g_preflightBlock!="") return;
 
    Snap s=Observe();
-   if(s.valid&&s.inLocation) Start(s);
+   if(s.valid) Start(s);
   }

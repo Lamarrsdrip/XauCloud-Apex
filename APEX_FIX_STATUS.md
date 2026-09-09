@@ -1,8 +1,14 @@
-# Apex v3.8.5 LivePlatform status
+# Apex v3.8.6 HardenedCapacity status
 
-Current identity: `XauCloud-Apex_v3.8.5-LivePlatform` / `#property version "3.850"` / state schema 5.
-Canonical source: `ea/XauCloud-Apex.mq5` (byte-identical to `ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5`).
+Current identity: `XauCloud-Apex_v3.8.6-HardenedCapacity` / `#property version "3.860"` / state schema 4.
+Canonical source: `ea/XauCloud-Apex.mq5`
+**Compile target:** `ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5` (byte-identical). Tester Expert name stays CapacityTruth.
+Also: `ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5` (byte-identical).
+Original 3.8.2 snapshot: `ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`.
 WebRequest origin: `https://xaucloud.io`.
+
+Trading = v3.8.2 `if(s.valid) Start(s)`. This build does **not** contain MODEL C origin box,
+mandatory retest, dead-thesis filter, or the 3.8.3/3.8.4/3.8.5 setup lifecycle.
 
 `FIXED-IN-SOURCE` means a repair exists in this tree. It is **not** the same as
 PROVEN LIVE READY. MetaEditor compile, EX5 attach, and a real-license ARM→applied
@@ -10,37 +16,45 @@ round-trip are still required on the operator's terminals.
 
 | Finding | Status | Root cause / repair |
 |---|---|---|
-| LIVE-001 | ALREADY FIXED (v3.8.4) | Adds use `a.execHigh/Low`, not the first-entry origin box. |
-| LIVE-002 | NEEDS LIVE PROOF | Architecture is xaucloud.io bridge by design. End-to-end ARM proof is operator-side. |
-| LIVE-003 | ALREADY FIXED (v3.8.4) | Watching extreme update sets `S.prior = previous S.extreme`. |
-| LIVE-004 | FIXED | Schema 5 persists setup; restore only if account/symbol/magic/schema match and snapshot is still valid. |
-| LIVE-005 | FIXED | README / package / version.json / EA identity all 3.8.5. |
-| LIVE-006 | FIXED | Manage first; CloudSync XOR event flush; 1200ms tick budget; config GET deferred if heartbeat used the budget. |
-| LIVE-007 | FIXED | During `CAMP_ACTIVE`, Observe may only arm same-direction (reversal-add). Opposite thesis does not mutate S. |
-| LIVE-008 | FALSE POSITIVE / WATCH | Bid-in-box vs ask-reclaim is the intended spread handling. |
-| LIVE-009 / LIVE-020 | ALREADY FIXED (v3.8.4) | Schema-3 active → `anchorsKnown=false`, new exposure blocked. |
-| LIVE-010 | FIXED | Seed `data/config.json` now includes `normalReferenceLeverage`, `maxBasketLots`, `minMarginLevelPct`, `marginReservePct`. |
-| LIVE-011 | ALREADY FIXED | Learning is OBSERVATION_ONLY; adjustments forced to zero. |
-| LIVE-012–016 | ALREADY OK | Tester arm, netting, outbox cap, heartbeat license_key. |
-| LIVE-017 | FIXED | WAF/HTML 401/403 is transport. Only an authenticated XauCloud JSON envelope tombstones. |
-| LIVE-018 | FIXED | Cloud manager lease in config envelope; fail closed on partition; GlobalVariable remains same-terminal fence. |
-| LIVE-019 | ALREADY FIXED (v3.8.4) + schema 5 | Confirmed expiry uses `confirmedAt`; `waitingLocationSince` stored. |
-| LIVE-021 | FIXED | `TRADE_RETCODE_PLACED` → `CAMP_SUBMITTING` / pending fence; late fill attaches; no resend. |
-| LIVE-022 | ALREADY FIXED (v3.8.4) + schema 5 | Dead-thesis identity persisted, not a time cooldown. |
-| SITE-001 | FIXED | `BRIDGE_NOT_CONFIGURED` / `QUEUED_FOR_BRIDGE` / `BRIDGE_DELIVERED` / `EA_APPLIED`. Never DELIVERED on null. |
-| SITE-002 | FIXED IN SOURCE / BOOT MUST NOT TAKE SITE DOWN | Helper refuses default secrets. Live box already had `secretsAcceptableForProduction=false`, so listen() warns instead of exiting. Opt-in: `APEX_STRICT_SECRETS=1`. |
-| SITE-003 | FIXED | Account setup WebRequest is `https://xaucloud.io`. |
-| SITE-004 (live hung bridge) | BLOCKED | Production box not reachable from this sandbox. |
-| SITE-005 (multiplier no-op) | FIXED | Hidden; UNLIMITED = 100% of current remaining executable capacity. Sizing unchanged. |
-| SITE-005 (persistence path) | ALREADY OK | systemd `DATA_DIR=/var/lib/xaucloud-apex`. |
-| SITE-006 (events + campaign fields) | FIXED | `decorateCampaign` maps real fields; missing stays null/—; SETUP_LOCATED rendered. |
-| SITE-007 | FIXED | `canonicalizeTimestamp` treats unix seconds as seconds. |
-| SITE-008 | FIXED | Revision is sync authority. Hashes are not compared for inSync. |
-| SITE-009 | FIXED | Customer cannot set UNLIMITED unless `licenseTier`/`unlimitedEntitled`. |
-| SITE-010 | FIXED | Tests assert 3.8.5 / 3.850. |
-| SITE-011 | FIXED IN SOURCE / NOT APPLIED TO LIVE UNIT | Dedicated user is documented. Live unit must keep running without `User=xaucloud-apex` until that user exists. |
+| 1 PLACED | FIXED | `TRADE_RETCODE_PLACED` → `EXEC_PENDING` / `CAMP_SUBMITTING`. Not a reject. |
+| 2 Late fill | FIXED | `ReconcilePending` / `PromotePendingFill` attach the fill to the fenced campaign. |
+| 3 Duplicate resend | FIXED | `g_pending.active` blocks OpenLayer / ComputePreflight while unresolved. |
+| 4 SUBMITTING | FIXED | `CAMP_SUBMITTING` until broker fill or history cancel/reject/expire. |
+| 5 WAF 401/403 | FIXED | HTML/edge is transport. Only XauCloud JSON denial tombstones. |
+| 6 Cloud after Manage | FIXED | OnTimer: ReconcilePending + Manage first; CloudSync XOR flush; 1200ms budget. |
+| 7 Duplicate manager | FIXED | Cloud lease + same-terminal GlobalVariable. Partition does not mint a second manager. |
+| 8 Restart recovery | FIXED | Schema 4 persists campaign + pending + setup. Reconcile against broker before new exposure. |
+| 9 Corrupt state | FIXED | LoadState -1 → broker position scan. Foreign ownerKey rejected. |
+| 10 Durable outbox | ALREADY IN 3.8.2 | Event queue file restored before recovery emits. |
+| 11 Dashboard truth | FIXED | desired vs applied; BRIDGE_NOT_CONFIGURED is never DELIVERED. |
+| 12 Revision sync | ALREADY IN 3.8.2 + kept | commandRevision is the sync authority. |
+| 13 WebRequest URL | FIXED | `https://xaucloud.io` only. |
+| 14 Production secrets | FIXED IN SOURCE / MUST NOT TAKE SITE DOWN | Helper refuses defaults. Listen unless `APEX_STRICT_SECRETS=1`. |
+| 15 systemd | FIXED | DATA_DIR unit. Do not set `User=xaucloud-apex` until that user exists. |
+| 16 Campaign fields | FIXED | `decorateCampaign` maps real fields. |
+| 17 Timestamps | FIXED | unix seconds stay seconds. |
+| 18 Seed completeness | ALREADY OK | config seed includes reference leverage / caps. |
+| 19 UNLIMITED auth | FIXED | entitlement, not a customer toggle. |
+| 20 Close persistence | FIXED | CLOSING until `CountPos()==0`. |
+| 21 Broker close/modify truth | FIXED | retcode + live position/deal, not CTrade boolean. |
+| 22 Uncertain identity | FIXED | recovered positions `anchorsKnown=false` → no new pyramid. |
+| 23 Single-source identity | FIXED | README / package / version.json / EA `#property` / APEX_VERSION all 3.8.6. Compile filename remains CapacityTruth. |
+| 24 MetaEditor compile | BLOCKED HERE | Linux sandbox has no MetaEditor. Operator must compile CapacityTruth.mq5 and record EX5 hash. |
 
-Sizing functions `ComputeVolume` and `LayerMarginPct` remain byte-identical to v3.8.2.
+Sizing functions `ComputeVolume` and `LayerMarginPct` remain byte-identical to archived v3.8.2.
+
+---
+
+# Apex v3.8.5 LivePlatform status (historical, NOT this release)
+
+Current identity was `XauCloud-Apex_v3.8.5-LivePlatform` / `#property version "3.850"` / state schema 5.
+That release changed entry rules (origin retest / MODEL C). **Do not compile it.**
+
+| Finding | Status | Root cause / repair |
+|---|---|---|
+| LIVE-001 | 3.8.4-only | Adds used `a.execHigh/Low`. Not in 3.8.6. |
+| LIVE-005 | superseded | Identity is now 3.8.6. |
+| SITE-010 | superseded | Tests assert 3.8.6 / 3.860. |
 
 ---
 
@@ -48,63 +62,3 @@ Sizing functions `ComputeVolume` and `LayerMarginPct` remain byte-identical to v
 
 Audit base: `0db61f929b006c6834746b7b1096cdf7b2bc7630`
 Claude WIP: `6cd304a72fa0823e6385aa0bf17dd944a37d3afd`
-
-`FIXED-IN-SOURCE` means a repair exists in the v3.8 source; it does not mean the
-production EX5/runtime has been independently certified.
-
-| Finding | Status |
-|---|---|
-| 001 | FIXED-IN-SOURCE — final executable-price / reclaimed-extreme / stale-trigger checks |
-| 002 | PARTIAL — telemetry queued and risk first; same-EA MQL WebRequest remains single-threaded |
-| 003 | FIXED-IN-SOURCE — explicit setup invalidation/re-arm lifecycle |
-| 004 | FIXED-IN-SOURCE — add trigger identity/consumption |
-| 005 | FIXED-IN-SOURCE — separated add eligibility families |
-| 006 | FIXED-IN-SOURCE / POLICY UNCHANGED — explicit BOS; no invented reweighting |
-| 007 | FIXED-IN-SOURCE — optional M3/M5 no longer fatal when filter is off |
-| 008 | FIXED-IN-SOURCE — broker deal/position/SL reconciliation |
-| 009 | FIXED-IN-SOURCE — volume-grid/budget/preflight + 200-lot regression |
-| 010 | FIXED-IN-SOURCE — persistent CLOSING until zero owned positions |
-| 011 | FIXED-IN-SOURCE — versioned/checksummed account+broker+symbol+magic state |
-| 012 | FIXED-IN-SOURCE — NORMAL L1/L2/L3 and approved controls wired to runtime config |
-| 013 | FIXED-IN-SOURCE — monotonic persisted earned floor |
-| 014 | OWNER POLICY NOT ENABLED — no new exposure rule enabled by default |
-| 015 | FIXED-IN-SOURCE — authenticated denial tombstone; transient failure keeps last-good |
-| 016 | FIXED-IN-SOURCE — typed config parsing, staged apply, stale revision rejection |
-| 017 | FIXED-IN-SOURCE — canonical event/ACK projection |
-| 018 | FIXED-IN-SOURCE — real readiness/margin/positions/config telemetry |
-| 019 | FIXED-IN-SOURCE — allowlisted config schema / protected envelope |
-| 020 | PARTIAL — atomic files/outbox/revision/in-process serialization; distributed transaction proof remains deployment-dependent |
-| 021 | FIXED-IN-SOURCE — bounded bridge calls; startup not bridge-blocked |
-| 022 | FIXED-IN-SOURCE — shared expiry/account-binding policy |
-| 023 | FIXED-IN-SOURCE — execution profile aligned; NORMAL default |
-| 024 | PARTIAL — production weak-secret refusal + auth throttling; deployment secret/service-user proof is operational |
-| 025 | FIXED-IN-SOURCE — xaucloud.io bridge + current routes + canonical v3.8 metadata |
-| 026 | FIXED-IN-SOURCE — learning explicitly OBSERVATION_ONLY |
-| 027 | FIXED-IN-SOURCE — single-manager lease / observer-only second instance |
-| 028 | FIXED-IN-SOURCE — campaign policy snapshot / predictable effective-from behaviour |
-
-## Post-audit live finding
-
-`POST-AUDIT-LIVE-001`: v3.7.1 attempted `BUY 200.00` and `SELL 200.00` XAUUSDm
-on an Exness demo NORMAL account and received `[not enough money]`.
-
-v3.8 removes the `SYMBOL_VOLUME_MAX` shortcut, derives NORMAL size from actual
-capacity and configured percentage, runs broker preflight, logs sizing locally, and
-does not advance campaign/layer state without a broker-confirmed fill.
-
-## Owner constraints
-
-- Apex remains independent from XauCloud trading intelligence.
-- The xaucloud.io bridge remains intentional.
-- NORMAL default / explicit UNLIMITED preserved.
-- No daily-loss cap, pause-after-loss, arbitrary fixed lot cap, new indicator,
-  Outlook dependency or other unrelated risk policy is enabled.
-
-
-## Post-audit operational fix — persistent license login
-
-The previous service default stored `licenses.json` and related state under the
-application directory. A release replacement could therefore erase the apparent license
-database. The final package moves runtime state to `/var/lib/xaucloud-apex`, migrates the
-old local data on first use, keeps long-lived license sessions, and revokes a session only
-when the user signs out/changes license or the license is no longer ACTIVE.

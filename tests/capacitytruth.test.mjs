@@ -11,17 +11,22 @@ test('the canonical and versioned EA files are byte-identical',()=>{
   // The canonical file is what gets compiled and deployed; the versioned file is what
   // the release is archived under. v3.8.2 shipped them divergent once -- the versioned
   // copy still held a build that could not compile -- so this is now enforced.
+  // Owner compile target is ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 so Tester keeps
+  // selecting the same Expert name.
   const canonical=fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5',import.meta.url));
   const versioned=fs.readFileSync(new URL('../'+version.versionedEaFile,import.meta.url));
+  const hardened=fs.readFileSync(new URL('../'+version.hardenedEaFile,import.meta.url));
   assert.equal(sha(canonical),sha(versioned),
     `${version.eaFile} and ${version.versionedEaFile} must be identical`);
+  assert.equal(sha(canonical),sha(hardened),
+    `${version.eaFile} and ${version.hardenedEaFile} must be identical`);
 });
 
 test('version.json, the EA banner and #property version all agree',()=>{
-  assert.equal(version.version,'3.8.5');
+  assert.equal(version.version,'3.8.6');
   assert.ok(ea.includes(version.eaVersion),'EA must define the version.json eaVersion string');
   const prop=ea.match(/#property version\s+"([\d.]+)"/)?.[1];
-  assert.equal(prop,'3.850');
+  assert.equal(prop,'3.860');
 });
 function floorStep(v,step=0.01){return Math.floor((v+1e-12)/step)*step;}
 function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0.01}){
@@ -32,9 +37,11 @@ function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0
   return Math.min(byCapacity,byMoney);
 }
 
-test('canonical EA is v3.8.5 LivePlatform with v3.8.2 CapacityTruth sizing intact',()=>{
-  assert.match(ea,/#property version\s+"3\.850"/);
-  assert.match(ea,/XauCloud-Apex_v3\.8\.5-LivePlatform/);
+test('canonical EA is v3.8.6 HardenedCapacity with v3.8.2 CapacityTruth trading intact',()=>{
+  assert.match(ea,/#property version\s+"3\.860"/);
+  assert.match(ea,/XauCloud-Apex_v3\.8\.6-HardenedCapacity/);
+  assert.match(ea,/if\(s\.valid\) Start\(s\);/);
+  assert.doesNotMatch(ea,/if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.match(ea,/TrustedMarginPerLot/);
   assert.match(ea,/NORMAL_REFERENCE_LEVERAGE/);
 });

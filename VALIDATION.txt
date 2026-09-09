@@ -1,41 +1,47 @@
-XauCloud Apex v3.8.5 LivePlatform validation
-===========================================
+XauCloud Apex v3.8.6 HardenedCapacity validation
+===============================================
 Canonical EA: ea/XauCloud-Apex.mq5
-Versioned EA: ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5 (must be byte-identical)
-#property version: 3.850
-Identity: XauCloud-Apex_v3.8.5-LivePlatform
-State schema: 5
+Compile target (Tester Expert name): ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5
+Hardened copy: ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5
+All three must be byte-identical.
+Original 3.8.2 snapshot (sizing baseline): ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5
+#property version: 3.860
+Identity: XauCloud-Apex_v3.8.6-HardenedCapacity
+State schema: 4
 WebRequest origin: https://xaucloud.io
 EA routes (on xaucloud.io, NOT apex.xaucloud.io):
 - POST /api/cloud/monitor/heartbeat
 - GET  /api/cloud/apex/config
 - POST /api/cloud/apex/event
 
-What this release repairs (live platform, not a new risk model):
-- Confirmation is not an entry. OnTimer enters only on a valid origin retest.
-- Adds use THEIR own location. Campaign origin is thesis invalidation, not the add box.
-- Schema-3 active campaigns fail closed for NEW exposure; existing baskets still manage.
-- Confirmed / watching setups persist across restart (schema 5). Invalid snapshots are not resurrected.
-- Dead-thesis identity persists. Same-run reincarnation is blocked by structure, not a cooldown.
-- TRADE_RETCODE_PLACED fences the campaign as SUBMITTING. No duplicate resend. Late fill attaches.
+Trading is UNCHANGED from v3.8.2 CapacityTruth:
+- if(s.valid) Start(s) on confirmation. No origin box. No mandatory retest.
+- No MODEL C, no dead-thesis strategy filter, no new setup lifecycle.
+- NORMAL 15/50/100 and UNLIMITED 100%-then-remaining are byte-identical to 3.8.2.
+
+What this release repairs (24 non-strategy hardenings):
+- TRADE_RETCODE_PLACED is pending, not a reject. Late fill attaches. No duplicate resend.
+- CAMP_SUBMITTING fences the campaign until broker confirmation.
 - WAF/HTML 401/403 is transport. Only an authenticated XauCloud JSON envelope tombstones.
-- Cross-terminal manager lease via the XauCloud config envelope (plus same-terminal GlobalVariable).
-- Dashboard distinguishes DESIRED vs APPLIED. BRIDGE_NOT_CONFIGURED is never called DELIVERED.
+- Manage()/close first. Cloud work is budgeted and never outranks live management.
+- Cross-terminal manager lease (plus same-terminal GlobalVariable).
+- Campaign + pending + confirmed setup persist across restart (schema 4). Corrupt/foreign state is rebuilt from broker positions.
+- Uncertain recovered identity: manage/close existing, do not pyramid.
+- CLOSING persists until the broker shows zero owned positions.
+- Close/modify reconcile retcode + actual position/deal, not CTrade boolean.
+- Dashboard distinguishes DESIRED vs APPLIED. Unix emittedAt is seconds.
 - UNLIMITED is a license entitlement. Customer Settings cannot self-escalate.
-- UNLIMITED multiplier UI is hidden: each valid add uses 100% of current remaining capacity.
 - Production secret helper refuses default/short secrets. Boot still listens unless APEX_STRICT_SECRETS=1.
 - systemd keeps DATA_DIR=/var/lib/xaucloud-apex. Do not set User=xaucloud-apex until that user exists.
-
-Sizing: UNLIMITED 100%-then-remaining and NORMAL 15/50/100 are unchanged from v3.8.2.
+- WebRequest allowlist is https://xaucloud.io, never apex.xaucloud.io.
 
 Automated validation:
 - npm test (Node + native C++ extract harness)
-- Canonical vs versioned EA SHA-256 identity
+- Canonical vs CapacityTruth vs HardenedCapacity SHA-256 identity
 - MetaEditor compile is REQUIRED on a Windows/Mac MT5 host (not this Linux runtime)
 
 Still requires on the Mac / VPS (operator, not this build):
-- Compile ea/XauCloud-Apex.mq5 in MetaEditor. Do not copy an old EX5.
+- Compile ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 in MetaEditor. Do not copy an old EX5.
 - Allow WebRequest for https://xaucloud.io only.
-- Do NOT attach the new EA, remove the existing EA, restart MT5, or toggle Algo Trading
-  from this environment. The owner attaches/switches.
-- Dashboard ARM → XauCloud → EA applied_revision == desired_revision → DISARM still manages open baskets.
+- Confirm Experts log APEX_READY XauCloud-Apex_v3.8.6-HardenedCapacity.
+- Do NOT attach v3.8.3 / v3.8.4 / v3.8.5. Those changed entry rules.

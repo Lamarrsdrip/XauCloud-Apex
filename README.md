@@ -1,17 +1,21 @@
-# XauCloud Apex v3.8.5 — LivePlatform
+# XauCloud Apex v3.8.6 — HardenedCapacity
 
-Apex is an independent XAUUSD trading bot built to reproduce the reference trader's
-setup selection, patience, confirmation and entry behaviour. It is **not** the XauCloud
-trading strategy and does not consume XauCloud Outlook, Manual Trading Intelligence,
-TradeBrain, Global Brain or the XauCloud M10 strategy.
+Apex is an independent XAUUSD trading bot. **Trading behavior is v3.8.2 CapacityTruth**
+(`if(s.valid) Start(s)` on confirmation). v3.8.6 only backports 24 non-strategy
+live-platform hardenings. It is **not** the XauCloud trading strategy and does not
+consume XauCloud Outlook, Manual Trading Intelligence, TradeBrain, Global Brain or
+the XauCloud M10 strategy.
 
 ## Canonical architecture
 
 - Canonical EA source: `ea/XauCloud-Apex.mq5`
-- Versioned source copy: `ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5` (byte-identical)
+- **Compile this file in MetaEditor:** `ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`
+  (byte-identical to canonical). Tester / chart Expert name stays
+  `XauCloud-Apex-v3.8.2-CapacityTruth`.
+- Also archived as `ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5` (byte-identical).
+- Original untouched 3.8.2 snapshot: `ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`
 - Canonical MT5 WebRequest origin: **`https://xaucloud.io`** (never `https://apex.xaucloud.io`)
-- XauCloud is intentionally the Apex **infrastructure bridge only**:
-  licensing, configuration, heartbeat and events.
+- XauCloud is the Apex **infrastructure bridge only**: licensing, configuration, heartbeat and events.
 - Heartbeat: `POST /api/cloud/monitor/heartbeat`
 - Config: `GET /api/cloud/apex/config`
 - Event/ACK telemetry: `POST /api/cloud/apex/event`
@@ -32,22 +36,25 @@ and is hidden. Sizing semantics are unchanged from v3.8.2 CapacityTruth.
 
 ## MT5 setup
 
-1. Compile `ea/XauCloud-Apex.mq5` in MetaEditor (`#property version "3.850"`).
+1. In MetaEditor compile **`ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`**
+   (`#property version "3.860"`). This overwrites the EX5 your Tester already selects.
+   Do not compile v3.8.3 / v3.8.4 / v3.8.5 sources.
 2. MT5 -> Tools -> Options -> Expert Advisors.
 3. Enable Allow WebRequest for listed URL.
 4. Add **`https://xaucloud.io`**. Do not add `https://apex.xaucloud.io` for WebRequest.
-5. Attach Apex to XAUUSD/XAUUSDm.
+5. Attach Apex to XAUUSD/XAUUSDm (or keep the existing CapacityTruth chart).
 6. Enter the Apex license in `InpApexLicense`.
 7. Enable Algo Trading.
 8. Arm the correct license/account from the Apex dashboard.
-9. Confirm Experts log `APEX_READY XauCloud-Apex_v3.8.5-LivePlatform`.
+9. Confirm Experts log `APEX_READY XauCloud-Apex_v3.8.6-HardenedCapacity`.
 10. Dashboard pills must show **desired** vs **applied** revision. A local save is not "Apex armed".
 
 Expected EA identity:
 
-`XauCloud-Apex_v3.8.5-LivePlatform`
+`XauCloud-Apex_v3.8.6-HardenedCapacity`
 
-Do not deploy an older v3.8.4 / v3.8.3 / v3.8.2 EX5 after promoting this source.
+Do **not** attach v3.8.3 EntryLocation, v3.8.4 EntryRetest, or v3.8.5 LivePlatform.
+Those changed entry rules. This build is 3.8.2 entries + 24 hardenings only.
 
 ## Production
 

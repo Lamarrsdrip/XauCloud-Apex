@@ -217,126 +217,18 @@ test('APEX-AUDIT-001: the extension threshold is measured always and enforced on
   assert.equal(shadow.extensionAtr,5);
 });
 
-test('v3.8.3: a newer M1 than the trigger is a RETEST and is legal',{skip},()=>{
-  assert.equal(R.gate_stale_trigger_bar.ok,true,'waiting for the retest must not be rejected as stale');
-  assert.equal(R.gate_stale_trigger_bar.triggerStale,true,'stale is still measured for telemetry');
+test('v3.8.2: a newer M1 than the trigger is NOT an entry (fresh-trigger default)',{skip},()=>{
+  assert.equal(R.gate_stale_trigger_bar.ok,false,'v3.8.2 CapacityTruth refuses a stale confirming bar');
+  assert.equal(R.gate_stale_trigger_bar.triggerStale,true);
+  assert.match(R.gate_stale_trigger_bar.reason,/TRIGGER_BAR_NO_LONGER_LATEST/);
 });
 
-test('v3.8.3: retest inside the origin box is executable; chase through it is not',{skip},()=>{
-  assert.equal(R.gate_retest_in_origin_box.ok,true);
-  assert.equal(R.gate_retest_in_origin_box.inLocation,true);
-  assert.equal(R.gate_chase_left_origin_box.ok,false);
-  assert.equal(R.gate_chase_left_origin_box.leftLocation,true);
-  assert.match(R.gate_chase_left_origin_box.reason,/PRICE_LEFT_ORIGIN_BOX/);
-});
-
-test('v3.8.4: dump close is not an entry; origin retest is',{skip},()=>{
-  const r=R.exec_region_sell_location;
-  assert.equal(r.atClose,false,'MODEL C must not enter at the displacement close');
-  assert.equal(r.atOrigin,true);
-  assert.equal(r.chased,false);
-  assert.equal(R.exec_model_compare.modelA_accepts_close,true);
-  assert.equal(R.exec_model_compare.modelB_accepts_close,true,'body still contains the dump close');
-  assert.equal(R.exec_model_compare.modelC_accepts_close,false);
-  assert.ok(R.exec_model_compare.modelC_dist_to_invalid < R.exec_model_compare.modelA_dist_to_invalid);
-  assert.equal(R.exec_region_buy_location.atClose,false);
-  assert.equal(R.exec_region_buy_location.atOrigin,true);
-});
-
-test('v3.8.4: continuation add is allowed outside the first campaign box',{skip},()=>{
-  assert.equal(R.gate_add_continuation_outside_first_box.ok,true);
-  assert.equal(R.gate_add_continuation_outside_first_box.inLocation,true);
-});
-
-test('v3.8.4: continuation add is blocked once campaign invalidation is reclaimed',{skip},()=>{
+test('v3.8.2: reclaim of the setup invalidation still blocks the add/entry',{skip},()=>{
   assert.equal(R.gate_add_blocked_after_invalidation_reclaim.ok,false);
   assert.equal(R.gate_add_blocked_after_invalidation_reclaim.reclaimed,true);
 });
 
-test('v3.8.4: schema-3 ACTIVE campaign blocks new exposure; IDLE and schema-4 do not',{skip},()=>{
-  assert.equal(R.schema3_active_blocks.blocked,true);
-  assert.equal(R.schema3_active_blocks.anchorsKnown,false);
-  assert.equal(R.schema3_idle_ok.blocked,false);
-  assert.equal(R.schema3_idle_ok.anchorsKnown,true);
-  assert.equal(R.schema4_active_ok.blocked,false);
-  assert.equal(R.schema4_active_ok.anchorsKnown,true);
-  assert.equal(R.schema4_active_ok.campOriginHigh,4404.5);
-  assert.equal(R.schema4_active_ok.campInvalidLevel,4410);
-});
-
-test('v3.8.4: reversal add uses its OWN origin, not the first campaign box',{skip},()=>{
-  assert.equal(R.gate_add_reversal_own_origin.ok,true);
-  assert.equal(R.gate_add_reversal_own_origin.inLocation,true);
-});
-
-test('v3.8.4: same-run reincarnation is blocked; opposite impulse starts a new cycle',{skip},()=>{
-  const r=R.dead_thesis_identity;
-  assert.equal(r.sameRunBlocked,true);
-  assert.equal(r.newPoolAllowed,true);
-  assert.equal(r.clearedByOppositeImpulse,true);
-  assert.equal(r.stillActiveAfterClear,false);
-});
-
-test('v3.8.4 Observe: sweep arms WATCHING and does not enter',{skip},()=>{
-  const r=R.obs_1_sweep_watching;
-  assert.equal(r.state,1);
-  assert.equal(r.valid,false);
-  assert.equal(r.inLocation,false);
-});
-
-test('v3.8.4 Observe: confirm stores origin, dump is not executable, retest is',{skip},()=>{
-  const r=R.obs_pipeline;
-  assert.equal(r.watchState,1);
-  assert.equal(r.confirmed,true);
-  assert.equal(r.noEntryAtDump,true);
-  assert.equal(r.retestIn,true);
-  assert.match(r.reasonConfirm,/WAITING_FOR_ENTRY_LOCATION/);
-  assert.match(r.retestReason,/RETEST_EXECUTABLE/);
-  assert.ok(r.execHigh>r.execLow);
-  assert.ok(r.execLow>=(r.originHigh+r.originLow)/2-1e-9,'exec region is the upper/origin half');
-});
-
-test('v3.8.4 Observe: chase through the origin is not an entry',{skip},()=>{
-  assert.equal(R.obs_chase_no_entry.inLocation,false);
-  assert.equal(R.obs_chase_no_entry.valid,true,'setup stays confirmed while waiting');
-});
-
-test('v3.8.4 Observe: reclaim of the swept extreme kills the setup',{skip},()=>{
-  assert.ok(R.obs_reclaim_kills_or_blocks.state===0||R.obs_reclaim_kills_or_blocks.reason==='SETUP_DEAD_RECLAIMED');
-});
-
-test('v3.8.4 Observe: same candle as the sweep cannot confirm',{skip},()=>{
-  assert.equal(R.obs_same_candle_no_confirm.blocked,true);
-  assert.equal(R.obs_same_candle_no_confirm.valid,false);
-  assert.equal(R.obs_same_candle_no_confirm.state,1);
-});
-
-test('v3.8.4 Observe: confirmation is immediately executable only at the origin portion',{skip},()=>{
-  assert.equal(R.obs_confirm_at_origin_executable.state,2);
-  assert.equal(R.obs_confirm_at_origin_executable.valid,true);
-  assert.equal(R.obs_confirm_at_origin_executable.inLocation,true);
-  assert.match(R.obs_confirm_at_origin_executable.reason,/RETEST_EXECUTABLE/);
-});
-
-test('v3.8.4 Observe: same-run slightly-higher-high cannot reincarnate',{skip},()=>{
-  assert.equal(R.obs_same_run_no_reincarnate.state,0);
-  assert.equal(R.obs_same_run_no_reincarnate.valid,false);
-  assert.equal(R.obs_same_run_no_reincarnate.deadActive,true);
-});
-
-test('v3.8.4 Observe: a new independent liquidity cycle CAN arm',{skip},()=>{
-  assert.equal(R.obs_new_independent_cycle_arms.state,1);
-  assert.equal(R.obs_new_independent_cycle_arms.valid,false);
-  assert.equal(R.obs_new_independent_cycle_arms.dir,-1);
-});
-
-test('v3.8.4: swing liquidity refs a confirmed pivot; rolling takes the grind high',{skip},()=>{
-  assert.equal(R.liq_swing_vs_rolling.swingUsesPivotNotGrind,true);
-  assert.equal(R.liq_swing_vs_rolling.rollingTakesGrindHigh,true);
-  assert.ok(R.liq_swing_vs_rolling.swingPh < R.liq_swing_vs_rolling.rollingPh);
-});
-
-test('v3.8.5: WAF/HTML 401/403 is not an authenticated license denial',{skip},()=>{
+test('v3.8.6: WAF/HTML 401/403 is not an authenticated license denial',{skip},()=>{
   const r=R.waf_vs_license_envelope;
   assert.equal(r.htmlIsJson,false);
   assert.equal(r.emptyIsJson,false);
@@ -347,7 +239,7 @@ test('v3.8.5: WAF/HTML 401/403 is not an authenticated license denial',{skip},()
   assert.equal(r.activeDenied,false);
 });
 
-test('v3.8.5: TRADE_RETCODE_PLACED is pending, not a reject',{skip},()=>{
+test('v3.8.6: TRADE_RETCODE_PLACED is pending, not a reject',{skip},()=>{
   const r=R.placed_is_pending_not_reject;
   assert.equal(r.filled,1);
   assert.equal(r.placed,2);
@@ -355,7 +247,7 @@ test('v3.8.5: TRADE_RETCODE_PLACED is pending, not a reject',{skip},()=>{
   assert.equal(r.nomoney,0);
 });
 
-test('v3.8.5: cross-terminal lease — only the confirmed manager opens new exposure',{skip},()=>{
+test('v3.8.6: cross-terminal lease — only the confirmed manager opens new exposure',{skip},()=>{
   const r=R.cross_terminal_lease;
   assert.equal(r.noCloudAllows,true,'same-terminal GlobalVariable still applies when cloud does not echo a lease');
   assert.equal(r.weHold,true);
@@ -365,7 +257,7 @@ test('v3.8.5: cross-terminal lease — only the confirmed manager opens new expo
   assert.equal(r.partitionWithPriorUntilOk,true,'the live manager keeps protecting until the lease actually expires');
 });
 
-test('v3.8.5: restart-while-confirmed restores; expired/reclaimed snapshots do not',{skip},()=>{
+test('v3.8.6: restart-while-confirmed restores; expired/reclaimed snapshots do not',{skip},()=>{
   const r=R.restart_while_confirmed;
   assert.equal(r.watchingOk,true);
   assert.equal(r.confirmedOk,true);

@@ -1,38 +1,36 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.8.6 "HardenedCapacity"                          |
+//|  XauCloud Apex v3.8.2 "CapacityTruth"                                  |
 //|                                                                   |
-//|  TRADING BASE = v3.8.2 CapacityTruth. Strategy/entries/exits are  |
-//|  unchanged: impulse -> sweep -> rejection -> micro BOS -> first   |
-//|  probe on confirmation (if(s.valid) Start(s)) -> profit-side      |
-//|  pyramiding -> basket exit on target / ratchet / master SL /      |
-//|  recovery-to-entry.                                               |
+//|  The reversal strategy is UNCHANGED from v3.7.1:                  |
+//|      impulse -> liquidity sweep -> rejection -> micro break of     |
+//|      structure -> first (probe) position -> pyramid adds only      |
+//|      while the basket is floating-profitable -> basket exit on     |
+//|      target / earned ratchet floor / master SL / recovery-to-entry.|
 //|                                                                   |
-//|  This build backports live-platform HARDENING only: PLACED is     |
-//|  pending not reject, late-fill attach, no duplicate resend,       |
-//|  SUBMITTING fence, WAF 401/403 is transport, Manage() before      |
-//|  WebRequest with a tick budget, cross-terminal manager lease,     |
-//|  restart persist of campaign + pending + confirmed setup,         |
-//|  revision is the config-sync authority.                           |
+//|  v3.8.2 keeps the v3.8.1 strategy/entries/exits unchanged and repairs live sizing truth,
+//|  durable event delivery and monitoring integrity after the Sep-08 live incident.
+//|  v3.8.0 implements APEX-AUDIT-001..028. Every change is either     |
+//|  (a) a correctness repair of an already-intended rule, or          |
+//|  (b) an explicitly named control that DEFAULTS TO v3.7.1 BEHAVIOUR.|
 //|                                                                   |
-//|  NOT in this build: mandatory retest, MODEL C origin box,         |
-//|  swing-liquidity redesign, changed add-location rules,            |
-//|  dead-thesis strategy filter, confirmation-is-not-entry.          |
-//|                                                                   |
-//|  Sizing: NORMAL 15/50/100 and UNLIMITED 100%-then-remaining are   |
-//|  unchanged from v3.8.2.                                           |
+//|  NO new trading restriction, risk-management policy, exposure cap, |
+//|  stop rule, cooldown or indicator has been enabled by default.     |
+//|  Controls marked "OWNER DECISION REQUIRED" ship disabled (0/false) |
+//|  so that out-of-the-box behaviour is identical to v3.7.1 except    |
+//|  where a defect is being corrected.                                |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
-#property version   "3.860"
+#property version   "3.820"
 #property strict
 #property description "ApexStack: XAUUSD exhaustion/reversal campaign with aggressive profit-side pyramiding"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.8.6-HardenedCapacity"
-#define APEX_BUILD_ID      "3.8.6"
+#define APEX_VERSION       "XauCloud-Apex_v3.8.2-CapacityTruth"
+#define APEX_BUILD_ID      "3.8.2"
 #define APEX_MAGIC         8620260903
-#define APEX_STATE_SCHEMA  4
+#define APEX_STATE_SCHEMA  3
 #define APEX_CONFIG_SCHEMA 2
 #define APEX_SCORE_BASE    25.0    // constant, non-discriminating ranking offset -- see APEX-AUDIT-006
 #define APEX_MAX_TRIGGERS  32
@@ -55,7 +53,6 @@ input string InpCloudURL="https://xaucloud.io";        // canonical XauCloud lic
 input string InpApexLicense="";                        // ONLY credential customer enters
 input int    InpConfigPollSeconds=8;                   // remote command/config sync
 input int    InpCloudTimeoutMs=2500;                   // bounded transport budget per request (APEX-AUDIT-002)
-input int    InpCloudTickBudgetMs=1200;                // max WebRequest time this timer tick; Manage() always runs first
 input bool   InpCloudDiagnostics=true;
 input int    InpScanMilliseconds=250;
 input bool   InpRequireRemoteArm=true;
@@ -344,7 +341,7 @@ string CfgStr(const string k,string cur)
 
 //====================== runtime state ================================
 // APEX-AUDIT-010: a campaign is never "not a campaign" while it still owns positions.
-enum CampState { CAMP_IDLE=0, CAMP_ACTIVE=1, CAMP_CLOSING=2, CAMP_SUBMITTING=3 };
+enum CampState { CAMP_IDLE=0, CAMP_ACTIVE=1, CAMP_CLOSING=2 };
 // APEX-AUDIT-003: an explicit setup lifecycle instead of one frozen boolean.
 enum SetupState { SETUP_NONE=0, SETUP_WATCHING=1, SETUP_CONFIRMED=2, SETUP_INVALIDATED=3, SETUP_EXPIRED=4, SETUP_CONSUMED=5 };
 // APEX-AUDIT-008: a broker request outcome is not a Boolean.
@@ -431,38 +428,6 @@ datetime g_cloudLastOk=0;
 string   g_cloudLastStatus="NEVER_CONNECTED";
 string   g_cloudProtocolError="";
 
-// Cross-terminal manager lease (XauCloud config envelope). GlobalVariable remains
-// the same-terminal duplicate-chart fence. Cloud lease is the account fence.
-bool     g_cloudLeaseSupported=false;
-bool     g_cloudLeaseConfirmed=false;
-string   g_cloudManagerId="";
-datetime g_cloudLeaseUntil=0;
-long     g_cloudLeaseGeneration=0;
-
-// Broker submission fence: PLACED != rejected. A late fill must attach here.
-struct PendingSubmit
-  {
-   bool     active;
-   bool     isFirstEntry;
-   ulong    order;
-   int      dir;
-   double   requestedVolume,sl,score,invalidLevel,refPrice,atr;
-   string   why,setupId,family,triggerId;
-   datetime submittedAt,triggerBar;
-   bool     enforceReclaim;
-  };
-PendingSubmit g_pending;
-bool BodyLooksLikeJsonObject(const string resp);
-bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue);
-int  ClassifyBrokerSubmit(uint rc,bool hasFill);
-bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager);
-bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed);
-void ReconcilePending();
-void ClearPending(string reason);
-void PromotePendingFill();
-void ApplyCloudManagerLease(const string mid,datetime until,long generation);
-string CampStateName();
-
 // --- risk-loop instrumentation (APEX-AUDIT-002) ---
 ulong    g_lastManageTickMs=0;
 ulong    g_maxRiskLoopGapMs=0;
@@ -478,13 +443,6 @@ bool IsTester(){return (bool)MQLInfoInteger(MQL_TESTER);}
 double clamp(double x,double a,double b){return MathMax(a,MathMin(b,x));}
 string BoolJson(bool v){return v?"true":"false";}
 string NormalizeLicense(string s){s=trim(s);StringToUpper(s);StringReplace(s," ","");return s;}
-string CampStateName()
-  {
-   if(campState==CAMP_CLOSING) return "CLOSING";
-   if(campState==CAMP_SUBMITTING) return "SUBMITTING";
-   if(campState==CAMP_ACTIVE) return "ACTIVE";
-   return "IDLE";
-  }
 
 uint Fnv1a(const string s)
   {
@@ -735,7 +693,7 @@ string TelemetryCommon()
      "\"anchorsKnown\":%s,\"riskLoopMaxGapMs\":%I64u",
      AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_COMPANY),AccountInfoString(ACCOUNT_SERVER),
      AccountInfoString(ACCOUNT_CURRENCY),_Symbol,APEX_VERSION,APEX_BUILD_ID,campId,campSig,campDir,
-     layers,CampStateName(),CountPos(),BasketVolume(),
+     layers,(campState==CAMP_CLOSING?"CLOSING":campState==CAMP_ACTIVE?"ACTIVE":"IDLE"),CountPos(),BasketVolume(),
      AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),AccountInfoDouble(ACCOUNT_MARGIN_FREE),
      AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),
      BoolJson((bool)TerminalInfoInteger(TERMINAL_CONNECTED)),
@@ -1034,29 +992,11 @@ bool IsAuthenticatedDenial(int code,const string resp,string &reason)
   {
    reason="";
    if(code!=401&&code!=403) return false;
-   if(!BodyLooksLikeJsonObject(resp))
-     {
-      Print("APEX CLOUD EDGE DENIAL | http=",code," | body is not a XauCloud JSON envelope | last-good config retained | TRANSPORT_OR_WAF");
-      return false;
-     }
-   if(!JsonParseObject(resp))
-     {
-      Print("APEX CLOUD EDGE DENIAL | http=",code," | JSON object did not parse | last-good config retained");
-      return false;
-     }
-   string ls="",err="",rsn="";
-   bool okVal=true; bool hasOk=JBoolStrict("ok",okVal);
-   JStrStrict("licenseStatus",ls);
-   JStrStrict("error",err);
-   JStrStrict("reason",rsn);
-   if(!IsXauCloudDenialEnvelope(true,ls,err,rsn,hasOk,okVal))
-     {
-      Print("APEX CLOUD PROTOCOL/EDGE 401/403 | not an authenticated license envelope | last-good config retained | body=",StringSubstr(resp,0,180));
-      return false;
-     }
-   if(ls!="" && ls!="ACTIVE") reason=ls;
-   else if(err!="") reason=err;
-   else if(rsn!="") reason=rsn;
+   if(!JsonParseObject(resp)) {reason="LICENSE_DENIED";return true;}   // 403 with any body is still a denial
+   string r="";
+   if(JStrStrict("reason",r)&&r!="") reason=r;
+   else if(JStrStrict("error",r)&&r!="") reason=r;
+   else if(JStrStrict("licenseStatus",r)&&r!="") reason=r;
    else reason="LICENSE_DENIED";
    return true;
   }
@@ -1084,7 +1024,6 @@ bool CloudSync()
       if(InpCloudDiagnostics)Print("APEX LICENSE MISSING | enter Apex license in EA Inputs");
       return false;
      }
-   ulong cloudTickStart=GetTickCount64();
    string b=StringFormat(
       "{\"license_key\":\"%s\",\"account_number\":\"%I64d\",\"broker_server\":\"%s\","
       "\"symbol\":\"%s\",\"timeframe\":\"%d\",\"ea_version\":\"%s\",\"build_id\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
@@ -1095,19 +1034,18 @@ bool CloudSync()
       "\"account_connected\":%s,\"symbol_trade_mode\":%d,"
       "\"account_profile\":\"%s\",\"broker_reported_leverage\":%I64d,"
       "\"configured_normal_reference_leverage\":%I64d,\"margin_at_1_lot\":%.4f,"
-      "\"instance_id\":\"%s\",\"lease_generation\":%I64d,\"lease_until\":%I64d,\"want_manager\":true,"
-      "\"magic\":%I64d,\"ea_active\":true,\"bot_state\":\"APEX\"}",
+      "\"ea_active\":true,\"bot_state\":\"APEX\"}",
       license,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_SERVER),_Symbol,(int)_Period,
       APEX_VERSION,APEX_BUILD_ID,AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),CountPos(),BasketVolume(),
-      BoolJson(campState!=CAMP_IDLE),CampStateName(),
+      BoolJson(campState!=CAMP_IDLE),(campState==CAMP_CLOSING?"CLOSING":campState==CAMP_ACTIVE?"ACTIVE":"IDLE"),
       layers,campId,g_cloudLastCommandRevision,C.configHash,BoolJson(g_observerOnly),g_preflightBlock,
       (g_observerOnly?"OBSERVER_ONLY":g_preflightBlock!=""?g_preflightBlock:C.armed?"SCANNING":"DISARMED"),
       BoolJson((bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)),BoolJson((bool)MQLInfoInteger(MQL_TRADE_ALLOWED)),
       BoolJson((bool)TerminalInfoInteger(TERMINAL_CONNECTED)),
       BoolJson(AccountInfoInteger(ACCOUNT_LOGIN)>0),(int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_MODE),
       ExecutionProfile(),AccountInfoInteger(ACCOUNT_LEVERAGE),C.normalReferenceLeverage,
-      HeartbeatMarginAtOneLot(),g_instanceId,g_cloudLeaseGeneration,(long)g_cloudLeaseUntil,InpMagic);
+      HeartbeatMarginAtOneLot());
 
    string r;int code=0,err=0;
    if(!Http("POST","/api/cloud/monitor/heartbeat",b,r,code,err))
@@ -1117,14 +1055,6 @@ bool CloudSync()
       if(IsAuthenticatedDenial(code,r,reason)){RecordDenial(reason);return false;}
       CloudFailure("HEARTBEAT",code,err,r);
       return false;                    // transport failure never alters C.armed
-     }
-
-   int budget=MathMax(400,InpCloudTickBudgetMs);
-   if((int)(GetTickCount64()-cloudTickStart)>=budget)
-     {
-      Print("APEX CLOUD BUDGET | skipped config poll this tick after heartbeat | usedMs=",(int)(GetTickCount64()-cloudTickStart)," budgetMs=",budget);
-      g_cloudLastStatus="HEARTBEAT_OK_CONFIG_DEFERRED";
-      return true;
      }
 
    string configPath=StringFormat("/api/cloud/apex/config?license_key=%s&account=%I64d",
@@ -1154,14 +1084,6 @@ bool CloudSync()
       return false;
      }
    if(ls!="ACTIVE"){RecordDenial(ls);return false;}
-
-   string mid=""; JStrStrict("managerInstanceId",mid);
-   if(mid=="") JStrStrict("manager_instance_id",mid);
-   double untilD=0,genD=0;
-   datetime until=0; long gen=0;
-   if(JNumStrict("managerLeaseUntil",untilD)||JNumStrict("manager_lease_until",untilD)) until=(datetime)(long)untilD;
-   if(JNumStrict("managerGeneration",genD)||JNumStrict("manager_generation",genD)) gen=(long)genD;
-   ApplyCloudManagerLease(mid,until,gen);
 
    // APEX-AUDIT-016: reject a revision rollback BEFORE applying anything.
    double revd=0;
@@ -1324,14 +1246,6 @@ void SaveState()
      "\"recoveryExitArmed\":%s,\"anchorsKnown\":%s,\"masterTicket\":%I64u,\"masterGuardStage\":%d,"
      "\"closingOutcome\":\"%s\",\"closingReason\":\"%s\",\"closingSince\":%I64d,\"closeAttempts\":%d,"
      "\"consumedTriggers\":%s,"
-     "\"setup\":{\"state\":%d,\"id\":\"%s\",\"sig\":\"%s\",\"dir\":%d,"
-     "\"armedAt\":%I64d,\"sweepBarTime\":%I64d,\"confirmedAt\":%I64d,\"triggerBarTime\":%I64d,"
-     "\"extreme\":%.5f,\"prior\":%.5f,\"atr\":%.5f,\"triggerPrice\":%.5f,\"bosKind\":\"%s\"},"
-     "\"pending\":{\"active\":%s,\"isFirstEntry\":%s,\"order\":%I64u,\"dir\":%d,\"requestedVolume\":%.4f,"
-     "\"sl\":%.5f,\"score\":%.2f,\"invalidLevel\":%.5f,\"refPrice\":%.5f,\"atr\":%.5f,"
-     "\"why\":\"%s\",\"setupId\":\"%s\",\"family\":\"%s\",\"triggerId\":\"%s\","
-     "\"submittedAt\":%I64d,\"triggerBar\":%I64d,\"enforceReclaim\":%s},"
-     "\"cloudLease\":{\"supported\":%s,\"confirmed\":%s,\"managerId\":\"%s\",\"until\":%I64d,\"generation\":%I64d},"
      "\"policy\":{\"accountProfile\":\"%s\",\"targetEq\":%.2f,\"profitRatchetEnabled\":%s,"
      "\"ratchetTriggerPct\":%.4f,\"ratchetLockPct\":%.4f,\"ratchetStepPct\":%.4f,\"ratchetLockStepPct\":%.4f,"
      "\"masterBreakEvenEnabled\":%s,\"masterBreakEvenTriggerPct\":%.4f,\"recoveryExitEnabled\":%s,"
@@ -1342,13 +1256,6 @@ void SaveState()
      firstEntryPrice,firstSLPrice,firstInitialSLPrice,
      BoolJson(recoveryExitArmed),BoolJson(anchorsKnown),masterTicket,masterGuardStage,
      closingOutcome,closingReason,(long)closingSince,closeAttempts,TriggersJson(),
-     (int)S.state,S.id,S.sig,S.dir,(long)S.armedAt,(long)S.sweepBarTime,(long)S.confirmedAt,(long)S.triggerBarTime,
-     S.extreme,S.prior,S.atr,S.triggerPrice,S.bosKind,
-     BoolJson(g_pending.active),BoolJson(g_pending.isFirstEntry),g_pending.order,g_pending.dir,g_pending.requestedVolume,
-     g_pending.sl,g_pending.score,g_pending.invalidLevel,g_pending.refPrice,g_pending.atr,
-     g_pending.why,g_pending.setupId,g_pending.family,g_pending.triggerId,
-     (long)g_pending.submittedAt,(long)g_pending.triggerBar,BoolJson(g_pending.enforceReclaim),
-     BoolJson(g_cloudLeaseSupported),BoolJson(g_cloudLeaseConfirmed),g_cloudManagerId,(long)g_cloudLeaseUntil,g_cloudLeaseGeneration,
      P.accountProfile,P.targetEq,BoolJson(P.profitRatchetEnabled),P.ratchetTriggerPct,P.ratchetLockPct,
      P.ratchetStepPct,P.ratchetLockStepPct,BoolJson(P.masterBreakEvenEnabled),P.masterBreakEvenTriggerPct,
      BoolJson(P.recoveryExitEnabled),P.recoveryExitArmPctOfSL,P.normalFixedSLGoldMove);
@@ -1365,7 +1272,7 @@ int LoadState()
    if(rc<=0) return rc;
    if(!JsonParseObject(payload)) return -1;
    double sch=0;
-   if(!JNumStrict("schema",sch)||((int)sch!=APEX_STATE_SCHEMA&&(int)sch!=3&&(int)sch!=5)) return -1;
+   if(!JNumStrict("schema",sch)||(int)sch!=APEX_STATE_SCHEMA) return -1;
    string owner="";
    if(!JStrStrict("ownerKey",owner)||owner!=OwnerKey()) return -1;   // wrong account/broker/symbol/magic
 
@@ -1397,10 +1304,6 @@ int LoadState()
    closeAttempts       = (int)JNumOr("closeAttempts",0);
    int ti=JIdx("consumedTriggers");
    if(ti>=0&&g_jtype[ti]=='a') TriggersFromJson(g_jval[ti]);
-   int si=JIdx("setup"), pdi=JIdx("pending"), li=JIdx("cloudLease");
-   string setupBlob=(si>=0&&g_jtype[si]=='o')?g_jval[si]:"";
-   string pendBlob=(pdi>=0&&g_jtype[pdi]=='o')?g_jval[pdi]:"";
-   string leaseBlob=(li>=0&&g_jtype[li]=='o')?g_jval[li]:"";
    int pi=JIdx("policy");
    if(pi>=0&&g_jtype[pi]=='o')
      {
@@ -1429,63 +1332,6 @@ int LoadState()
       g_jcount=savedCount;
       ArrayResize(g_jkey,savedCount);ArrayResize(g_jval,savedCount);ArrayResize(g_jtype,savedCount);
       for(int i=0;i<savedCount;i++){g_jkey[i]=keys[i];g_jval[i]=vals[i];g_jtype[i]=types[i];}
-     }
-
-   if(leaseBlob!="" && JsonParseObject(leaseBlob))
-     {
-      g_cloudLeaseSupported=JBoolOr("supported",false);
-      g_cloudLeaseConfirmed=JBoolOr("confirmed",false);
-      g_cloudManagerId=JStrOr("managerId","");
-      g_cloudLeaseUntil=(datetime)(long)JNumOr("until",0);
-      g_cloudLeaseGeneration=(long)JNumOr("generation",0);
-     }
-   if(pendBlob!="" && JsonParseObject(pendBlob))
-     {
-      g_pending.active=JBoolOr("active",false);
-      g_pending.isFirstEntry=JBoolOr("isFirstEntry",false);
-      g_pending.order=(ulong)JNumOr("order",0);
-      g_pending.dir=(int)JNumOr("dir",0);
-      g_pending.requestedVolume=JNumOr("requestedVolume",0);
-      g_pending.sl=JNumOr("sl",0);
-      g_pending.score=JNumOr("score",0);
-      g_pending.invalidLevel=JNumOr("invalidLevel",0);
-      g_pending.refPrice=JNumOr("refPrice",0);
-      g_pending.atr=JNumOr("atr",0);
-      g_pending.why=JStrOr("why","");
-      g_pending.setupId=JStrOr("setupId","");
-      g_pending.family=JStrOr("family","");
-      g_pending.triggerId=JStrOr("triggerId","");
-      g_pending.submittedAt=(datetime)(long)JNumOr("submittedAt",0);
-      g_pending.triggerBar=(datetime)(long)JNumOr("triggerBar",0);
-      g_pending.enforceReclaim=JBoolOr("enforceReclaim",true);
-     }
-   if(setupBlob!="" && JsonParseObject(setupBlob) && campState==CAMP_IDLE)
-     {
-      int st=(int)JNumOr("state",0);
-      int dir=(int)JNumOr("dir",0);
-      datetime armed=(datetime)(long)JNumOr("armedAt",0);
-      datetime confirmed=(datetime)(long)JNumOr("confirmedAt",0);
-      double extreme=JNumOr("extreme",0);
-      double liveBid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      double liveAsk=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-      bool reclaimed=(dir<0)?(liveAsk>=extreme):(liveBid<=extreme);
-      if(SetupSnapshotValidToRestore(st,dir,confirmed,armed,TimeCurrent(),C.watchExpiryMinutes,extreme,reclaimed&&InpRejectReclaimedExtreme))
-        {
-         S.state=(SetupState)st;
-         S.id=JStrOr("id","");
-         S.sig=JStrOr("sig","");
-         S.dir=dir;
-         S.armedAt=armed;
-         S.sweepBarTime=(datetime)(long)JNumOr("sweepBarTime",0);
-         S.confirmedAt=confirmed;
-         S.triggerBarTime=(datetime)(long)JNumOr("triggerBarTime",0);
-         S.extreme=extreme;
-         S.prior=JNumOr("prior",0);
-         S.atr=JNumOr("atr",0);
-         S.triggerPrice=JNumOr("triggerPrice",0);
-         S.bosKind=JStrOr("bosKind","");
-         Print("APEX SETUP RESTORED | state=",st," | id=",S.id," | dir=",dir);
-        }
      }
    return 1;
   }
@@ -2409,191 +2255,12 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
    return true;
   }
 
-
-// WAF/HTML 401/403 is TRANSPORT, not an authenticated license denial.
-bool BodyLooksLikeJsonObject(const string resp)
-  {
-   int n=StringLen(resp),i=0;
-   while(i<n)
-     {
-      ushort c=StringGetCharacter(resp,i);
-      if(c==' '||c=='\t'||c=='\r'||c=='\n'){i++;continue;}
-      return c=='{';
-     }
-   return false;
-  }
-bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue)
-  {
-   if(!parsedOk) return false;
-   if(licenseStatus=="ACTIVE") return false;
-   if(licenseStatus=="LICENSE_DENIED"||licenseStatus=="LICENSE_NOT_ACTIVE"||
-      licenseStatus=="LICENSE_DISABLED"||licenseStatus=="LICENSE_EXPIRED"||
-      licenseStatus=="LICENSE_NOT_FOUND"||licenseStatus=="ACCOUNT_MISMATCH"||
-      licenseStatus=="DISABLED"||licenseStatus=="EXPIRED")
-      return true;
-   if(error=="LICENSE_DENIED"||error=="LICENSE_NOT_ACTIVE"||error=="license_not_active"||
-      error=="LICENSE_DISABLED"||error=="LICENSE_EXPIRED"||error=="LICENSE_NOT_FOUND"||
-      error=="ACCOUNT_MISMATCH")
-      return true;
-   if(hasOk && !okValue && (licenseStatus!=""||reason!=""||error!="")) return true;
-   return false;
-  }
-
-// 1 = fill exists, 2 = broker accepted as pending/placed (do NOT reset campaign), 0 = rejected
-int ClassifyBrokerSubmit(uint rc,bool hasFill)
-  {
-   if(hasFill) return 1;
-   if(rc==TRADE_RETCODE_PLACED) return 2;
-   return 0;
-  }
-
-// Cloud manager fencing. Network loss never lets a second terminal open new exposure.
-bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager)
-  {
-   if(!cloudLeaseSupported) return true;
-   if(cloudManagerId=="" ) return weWereConfirmedManager && leaseUntil>=now;
-   if(cloudManagerId==myId && leaseUntil>=now) return true;
-   return false;
-  }
-
-bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed)
-  {
-   if(state!=SETUP_WATCHING && state!=SETUP_CONFIRMED) return false;
-   if(dir==0) return false;
-   if(extreme<=0) return false;
-   datetime ageFrom=(state==SETUP_CONFIRMED&&confirmedAt>0)?confirmedAt:armedAt;
-   if(ageFrom<=0) return false;
-   if(watchExpiryMinutes>0 && now-ageFrom>watchExpiryMinutes*60) return false;
-   if(marketReclaimed) return false;
-   return true;
-  }
-
-void ApplyCloudManagerLease(const string mid,datetime until,long generation)
-  {
-   bool echoed=(mid!=""||until>0||generation>0);
-   g_cloudLeaseSupported=echoed;
-   if(!echoed) return;
-   g_cloudManagerId=mid;
-   g_cloudLeaseUntil=until;
-   if(generation>0) g_cloudLeaseGeneration=generation;
-   bool mine=(mid==g_instanceId && until>=TimeCurrent());
-   if(mine)
-     {
-      bool wasObs=g_observerOnly;
-      g_cloudLeaseConfirmed=true;
-      g_observerOnly=false;
-      if(wasObs) Print("APEX CLOUD LEASE ACQUIRED | instance=",g_instanceId," until=",(long)until," gen=",generation);
-     }
-   else if(mid!="" && mid!=g_instanceId && until>=TimeCurrent())
-     {
-      g_cloudLeaseConfirmed=false;
-      if(!g_observerOnly)
-        {
-         g_observerOnly=true;
-         Print("APEX CROSS-TERMINAL OBSERVER | manager=",mid," until=",(long)until," | this instance will NOT submit new exposure");
-        }
-     }
-   else
-     {
-      if(!(g_cloudLeaseConfirmed && mid==g_instanceId))
-         g_cloudLeaseConfirmed=false;
-     }
-  }
-
-void ClearPending(string reason)
-  {
-   if(!g_pending.active) return;
-   Emit("ORDER_PENDING_CLEARED",StringFormat(",\"reason\":\"%s\",\"order\":%I64u,\"setupId\":\"%s\",\"isFirstEntry\":%s",
-        reason,g_pending.order,g_pending.setupId,BoolJson(g_pending.isFirstEntry)));
-   if(g_pending.isFirstEntry && campState==CAMP_SUBMITTING)
-     {
-      campState=CAMP_IDLE;campId="";campSig="";campDir=0;
-      layers=0;ClearState();
-      Print("APEX PENDING ABANDONED | first entry not filled | setup preserved if still valid | reason=",reason);
-     }
-   g_pending.active=false;
-   g_pending.order=0;
-   g_pending.setupId="";
-   g_pending.family="";
-   g_pending.triggerId="";
-   g_pending.why="";
-   SaveState();
-  }
-
-void PromotePendingFill()
-  {
-   if(!g_pending.active) return;
-   layers++;
-   lastAdd=(g_pending.refPrice>0?g_pending.refPrice:SymbolInfoDouble(_Symbol,g_pending.dir>0?SYMBOL_ASK:SYMBOL_BID));
-   if(g_pending.isFirstEntry)
-     {
-      firstEntryPrice=lastAdd;
-      masterTicket=FindOldestApexPosition();
-      masterGuardStage=0;
-      recoveryExitArmed=false;
-      double brokerSL=0;
-      if(masterTicket!=0&&PositionSelectByTicket(masterTicket)) brokerSL=PositionGetDouble(POSITION_SL);
-      firstSLPrice=brokerSL;firstInitialSLPrice=brokerSL;
-      anchorsKnown=true;
-      campState=CAMP_ACTIVE;
-      S.state=SETUP_CONSUMED;
-      Emit("CAMPAIGN_START",StringFormat(
-        ",\"score\":%.2f,\"targetEquity\":%.2f,\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"setupId\":\"%s\","
-        "\"lateFill\":true,\"pendingOrder\":%I64u",
-        g_pending.score,targetEq,cycleStart,firstEntryPrice,g_pending.setupId,g_pending.order));
-      SetupReset("CONSUMED_BY_CAMPAIGN_LATE_FILL");
-     }
-   else
-     {
-      if(g_pending.triggerId!="") ConsumeTrigger(g_pending.triggerId);
-      Emit("LAYER_OPEN",StringFormat(",\"layer\":%d,\"score\":%.2f,\"price\":%.5f,\"setupId\":\"%s\",\"lateFill\":true,\"family\":\"%s\"",
-           layers,g_pending.score,lastAdd,g_pending.setupId,g_pending.family));
-     }
-   Emit("ORDER_FILLED_LATE",StringFormat(",\"order\":%I64u,\"layers\":%d,\"isFirstEntry\":%s",
-        g_pending.order,layers,BoolJson(g_pending.isFirstEntry)));
-   g_pending.active=false;
-   SaveState();
-  }
-
-void ReconcilePending()
-  {
-   if(!g_pending.active) return;
-   int n=CountPos();
-   if(n>0)
-     {
-      PromotePendingFill();
-      return;
-     }
-   bool orderLive=false;
-   if(g_pending.order!=0)
-     {
-      for(int i=OrdersTotal()-1;i>=0;i--)
-        {
-         ulong t=OrderGetTicket(i);
-         if(t==g_pending.order){orderLive=true;break;}
-        }
-     }
-   if(orderLive) return;
-   if(g_pending.order!=0 && HistoryOrderSelect(g_pending.order))
-     {
-      long st=HistoryOrderGetInteger(g_pending.order,ORDER_STATE);
-      if(st==ORDER_STATE_FILLED||st==ORDER_STATE_PARTIAL)
-        {PromotePendingFill();return;}
-      if(st==ORDER_STATE_CANCELED||st==ORDER_STATE_REJECTED||st==ORDER_STATE_EXPIRED)
-        {ClearPending(StringFormat("HISTORY_ORDER_STATE_%d",(int)st));return;}
-     }
-   // Broker has not published a terminal state. Do NOT resend. Do NOT reset the campaign.
-  }
-
 //====================== preflight (APEX-AUDIT-014/027) ================
 // Reports why NEW exposure is refused. Protection/closing of already-open positions is
 // never gated by this -- an existing basket is always managed.
 string ComputePreflight()
   {
    if(g_observerOnly) return "OBSERVER_ONLY_SECOND_INSTANCE";
-   if(g_pending.active) return "ORDER_PENDING_BROKER_CONFIRMATION";
-   if(g_cloudLeaseSupported && !ManagerAllowsNewExposure(g_instanceId,g_cloudManagerId,g_cloudLeaseUntil,TimeCurrent(),g_cloudLeaseSupported,g_cloudLeaseConfirmed))
-      return "CROSS_TERMINAL_LEASE_NOT_MANAGER";
    if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED)) return "TERMINAL_DISCONNECTED";
    if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return "TERMINAL_TRADE_DISABLED";
    if(!(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)) return "EA_TRADE_DISABLED";
@@ -2613,7 +2280,6 @@ string ComputePreflight()
    if(tm==SYMBOL_TRADE_MODE_DISABLED||tm==SYMBOL_TRADE_MODE_CLOSEONLY) return "SYMBOL_TRADE_MODE_RESTRICTED";
    if(g_cloudExplicitDenied) return "LICENSE_DENIED";
    if(campState==CAMP_CLOSING) return "CAMPAIGN_CLOSING";
-   if(campState==CAMP_SUBMITTING) return "CAMPAIGN_SUBMITTING";
    if(campState!=CAMP_IDLE&&!anchorsKnown) return "ANCHORS_UNRECONCILED";
    return "";
   }
@@ -2754,31 +2420,6 @@ bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPri
       e.deal,e.order,e.position,e.fillPrice,e.detail,e.mt5Error,attempt+1,
       g.bid,g.ask,g.extensionAtr,submittedAt-decidedAt,settledAt-submittedAt,why,SizingJson(d,layerIndex));
 
-   if(e.cls==EXEC_PENDING || ClassifyBrokerSubmit(e.retcode,e.filledVolume>1e-9)==2)
-     {
-      g_pending.active=true;
-      g_pending.isFirstEntry=(campState==CAMP_IDLE||campState==CAMP_SUBMITTING||layers==0);
-      g_pending.order=e.order;
-      g_pending.dir=dir;
-      g_pending.requestedVolume=e.requestedVolume;
-      g_pending.sl=sl;
-      g_pending.score=score;
-      g_pending.invalidLevel=invalidLevel;
-      g_pending.refPrice=refPrice;
-      g_pending.atr=atr;
-      g_pending.why=why;
-      g_pending.setupId=S.id;
-      g_pending.family="";
-      g_pending.triggerId="";
-      g_pending.submittedAt=TimeCurrent();
-      g_pending.triggerBar=triggerBar;
-      g_pending.enforceReclaim=enforceReclaim;
-      Emit("ORDER_PENDING",execExtra);
-      SaveState();
-      Print("APEX ORDER PLACED PENDING BROKER CONFIRMATION | order=",e.order," | setup=",S.id," | will NOT resend");
-      return false;
-     }
-
    // APEX-AUDIT-008: internal state advances ONLY on a broker-confirmed fill. A rejected
    // order leaves layers, masterTicket, lastAdd and the campaign exactly as they were.
    if(e.cls!=EXEC_FILLED&&e.cls!=EXEC_PARTIAL)
@@ -2846,8 +2487,7 @@ bool AttemptClosePass()
             uint rc=trade.ResultRetcode();
             if(rc==TRADE_RETCODE_MARKET_CLOSED)
               {NoteMarketClosed("POSITION_CLOSE",rc);return false;}
-            // sent=true means the request was accepted for sending, not that the position is gone.
-            if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_DONE_PARTIAL) ResetMarketClosedBackoff();
+            if(sent) ResetMarketClosedBackoff();
            }
         }
       if(!any)break;
@@ -2938,13 +2578,6 @@ void Start(Snap &s)
    // broker might have rejected.
    if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
      {
-      if(g_pending.active)
-        {
-         campState=CAMP_SUBMITTING;
-         SaveState();
-         Print("APEX FIRST ENTRY PENDING | campaign fenced as SUBMITTING | setup=",S.id," order=",g_pending.order);
-         return;
-        }
       campState=CAMP_IDLE;campId="";campSig="";campDir=0;
       ClearState();
       return;
@@ -3037,11 +2670,6 @@ void Manage()
      {
       if(n==0){FinalizeClose();return;}
       ServiceClosing();
-      return;
-     }
-   if(campState==CAMP_SUBMITTING)
-     {
-      ReconcilePending();
       return;
      }
    if(campState==CAMP_IDLE) return;
@@ -3194,13 +2822,6 @@ void Manage()
            a.triggerId,a.family,a.score));
       if(a.family=="REVERSAL"){S.state=SETUP_CONSUMED;SetupReset("CONSUMED_BY_ADD");}
      }
-   else if(g_pending.active)
-     {
-      g_pending.family=a.family;
-      g_pending.triggerId=a.triggerId;
-      g_pending.isFirstEntry=false;
-      SaveState();
-     }
   }
 
 //====================== restart reconciliation (APEX-AUDIT-011) =======
@@ -3217,15 +2838,6 @@ void ReconcileAgainstBroker()
       Emit("CAMPAIGN_RECOVERED",StringFormat(",\"source\":\"STATE_FILE\",\"campaignState\":\"CLOSING\",\"outcome\":\"%s\",\"reason\":\"%s\",\"positions\":%d",
            closingOutcome,closingReason,n));
       return;                                  // stays CLOSING until zero positions
-     }
-
-   if(campState==CAMP_SUBMITTING)
-     {
-      if(n>0){PromotePendingFill();return;}
-      ReconcilePending();
-      Emit("CAMPAIGN_RECOVERED",StringFormat(",\"source\":\"STATE_FILE\",\"campaignState\":\"SUBMITTING\",\"pendingOrder\":%I64u,\"positions\":%d",
-           g_pending.order,n));
-      return;
      }
 
    if(n==0)
@@ -3358,13 +2970,13 @@ int OnInit()
       " | armed=",C.armed?"true":"false",
       " | rev=",g_cloudLastCommandRevision,
       " | configHash=",C.configHash,
-      " | campaignState=",CampStateName(),
+      " | campaignState=",(campState==CAMP_CLOSING?"CLOSING":campState==CAMP_ACTIVE?"ACTIVE":"IDLE"),
       " | observerOnly=",g_observerOnly?"true":"false",
       " | profile=",ExecutionProfile(),
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | entry=confirm-then-start v3.8.2");
+      " | strategy unchanged from tested v3.8.0");
    return INIT_SUCCEEDED;
   }
 
@@ -3407,22 +3019,17 @@ void OnTimer()
    // 1. PROTECTION / CLOSING first, always.
    if(!g_observerOnly)
      {
-      if(g_pending.active) ReconcilePending();
       if(campState==CAMP_IDLE&&CountPos()>0) ReconcileAgainstBroker();
       Manage();
      }
 
-   // 2/3. Telemetry OR cloud, never both on the same tick, never before Manage.
-   ulong t0=GetTickCount64();
-   bool cloudDue=(now-lastCfg>=InpConfigPollSeconds);
-   if(cloudDue){CloudSync();lastCfg=now;}
-   else FlushEventQueue();
-   ulong used=GetTickCount64()-t0;
-   if(used>(ulong)MathMax(400,InpCloudTickBudgetMs))
-      Print("APEX CLOUD TICK BUDGET | usedMs=",used," cloudDue=",cloudDue?"true":"false");
+   // 2. Telemetry: at most one queued request per tick, never in a decision path.
+   FlushEventQueue();
+
+   // 3. Cloud config/licence sync, after risk has already been serviced this tick.
+   if(now-lastCfg>=InpConfigPollSeconds){CloudSync();lastCfg=now;}
 
    if(g_observerOnly) return;
-   if(campState==CAMP_SUBMITTING) return;
    if(campState!=CAMP_IDLE) return;                // adds are handled inside Manage()
    if(!C.armed) return;
    if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60) return;

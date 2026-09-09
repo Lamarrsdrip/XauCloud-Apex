@@ -1,17 +1,18 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.5",
-  "buildId": "3.8.5-live-platform",
-  "eaVersion": "XauCloud-Apex_v3.8.5-LivePlatform",
+  "version": "3.8.6",
+  "buildId": "3.8.6-hardened-capacity",
+  "eaVersion": "XauCloud-Apex_v3.8.6-HardenedCapacity",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5",
+  "hardenedEaFile": "ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5",
   "configSchema": 2,
-  "stateSchema": 5,
+  "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
   "eaRoutes": [
     "POST /api/cloud/monitor/heartbeat",
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.8.5 LivePlatform: confirmation is not an entry; adds use their own location; schema-5 persists confirmed setups and dead-thesis identity; PLACED is pending not reject; WAF 401/403 is transport; cross-terminal manager lease; dashboard desired vs applied; UNLIMITED is an entitlement; production refuses default secrets. UNLIMITED/NORMAL sizing unchanged from v3.8.2."
+  "notes": "v3.8.6 HardenedCapacity: v3.8.2 CapacityTruth trading (if(s.valid) Start(s)) plus 24 non-strategy live-platform hardenings only. Compile ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5 so the Tester/chart Expert name stays CapacityTruth. APEX_READY prints v3.8.6-HardenedCapacity. No MODEL C, no mandatory retest, no dead-thesis filter, no new setup lifecycle."
 }

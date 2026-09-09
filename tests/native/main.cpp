@@ -27,10 +27,7 @@ static void resetBroker(){
   g_marketClosedRetryAt=0; g_marketClosedBackoffSec=0;
   g_serverRejectedVolume=0; g_serverFilledVolume=0; g_serverEvidenceFreeMargin=0;
   S=Setup();
-  g_deadThesisActive=false; g_deadThesisDir=0; g_deadThesisExtreme=0; g_deadThesisPrior=0; g_deadThesisSweep=0;
-  g_noRearmBeforeBar=0; g_noRearmDir=0;
   campState=CAMP_IDLE; campDir=0; anchorsKnown=true;
-  campInvalidLevel=0; campOriginHigh=0; campOriginLow=0; campOriginClose=0; campOriginBar=0;
   C.requireM3Confirm=false; C.requireM5Context=false; C.learningEnabled=false;
   C.impulseAtr=1.8; C.sweepAtr=0.05; C.rejectionBars=5; C.watchExpiryMinutes=12;
   C.rejectionZoneAtr=0.12; C.entryScore=70;
@@ -76,49 +73,14 @@ static void emitSizing(const std::string &name,int dir,double pct,double price,d
 }
 
 static void emitGate(const std::string &name,int dir,double invalidLevel,double refPrice,
-                     double atr,datetime triggerBar,double originHigh=0,double originLow=0){
+                     double atr,datetime triggerBar){
   Gate g;
-  bool ok=FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,true,g,originHigh,originLow);
+  bool ok=FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,true,g);
   row(StringFormat(
     "{\"test\":\"%s\",\"ok\":%s,\"reason\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,"
-    "\"extensionAtr\":%.4f,\"reclaimed\":%s,\"triggerStale\":%s,\"quoteStale\":%s,\"extended\":%s,"
-    "\"inLocation\":%s,\"leftLocation\":%s}",
+    "\"extensionAtr\":%.4f,\"reclaimed\":%s,\"triggerStale\":%s,\"quoteStale\":%s,\"extended\":%s}",
     name.c_str(),b(ok).c_str(),g.reason.c_str(),g.bid,g.ask,g.extensionAtr,
-    b(g.reclaimed).c_str(),b(g.triggerStale).c_str(),b(g.quoteStale).c_str(),b(g.extended).c_str(),
-    b(g.inLocation).c_str(),b(g.leftLocation).c_str()));
-}
-
-static std::vector<MqlRates> makeSweepTape(double base,double swingExtreme,double sweepExtreme,bool sell){
-  std::vector<MqlRates> bars(90);
-  datetime t0=3000000;
-  for(int i=89;i>=0;i--){
-    bars[i].time=t0+(89-i)*60;
-    bars[i].open=base; bars[i].high=base+2; bars[i].low=base-2; bars[i].close=base+1;
-    bars[i].tick_volume=10; bars[i].spread=1; bars[i].real_volume=10;
-  }
-  if(sell){
-    bars[21].high=swingExtreme-2; bars[21].low=base-1; bars[21].open=base; bars[21].close=base+2;
-    bars[20].high=swingExtreme; bars[20].low=base; bars[20].open=base+2; bars[20].close=swingExtreme-4;
-    bars[19].high=swingExtreme-3; bars[19].low=base-1; bars[19].open=swingExtreme-4; bars[19].close=base+1;
-    double px=base+1;
-    for(int i=8;i>=2;i--){
-      bars[i].open=px; bars[i].close=px+1.5; bars[i].high=px+1.8; bars[i].low=px-0.2;
-      px+=1.5;
-    }
-    bars[1].open=sweepExtreme-6; bars[1].high=sweepExtreme; bars[1].low=sweepExtreme-7; bars[1].close=sweepExtreme-2;
-  }else{
-    bars[21].low=swingExtreme+2; bars[21].high=base+1; bars[21].open=base; bars[21].close=base-2;
-    bars[20].low=swingExtreme; bars[20].high=base; bars[20].open=base-2; bars[20].close=swingExtreme+4;
-    bars[19].low=swingExtreme+3; bars[19].high=base+1; bars[19].open=swingExtreme+4; bars[19].close=base-1;
-    double px=base-1;
-    for(int i=8;i>=2;i--){
-      bars[i].open=px; bars[i].close=px-1.5; bars[i].high=px+0.2; bars[i].low=px-1.8;
-      px-=1.5;
-    }
-    bars[1].open=sweepExtreme+6; bars[1].low=sweepExtreme; bars[1].high=sweepExtreme+7; bars[1].close=sweepExtreme+2;
-  }
-  bars[0]=bars[1];
-  return bars;
+    b(g.reclaimed).c_str(),b(g.triggerStale).c_str(),b(g.quoteStale).c_str(),b(g.extended).c_str()));
 }
 
 int main(){
@@ -302,11 +264,6 @@ int main(){
   BRK.bid=4399.0; BRK.ask=4399.1;
   BRK.lastClosedM1=1000060;                    // a newer bar has closed since the trigger
   emitGate("gate_stale_trigger_bar",-1,4410.0,4400.0,2.0,1000000);
-  // v3.8.3: the same newer bar, but price is back inside the origin box = legal retest
-  emitGate("gate_retest_in_origin_box",-1,4410.0,4400.0,2.0,1000000,4404.0,4396.0);
-  BRK.bid=4390.0; BRK.ask=4390.1;               // dumped through the origin = chase, reject
-  emitGate("gate_chase_left_origin_box",-1,4410.0,4400.0,2.0,1000000,4404.0,4396.0);
-  BRK.bid=4399.0; BRK.ask=4399.1;
   BRK.lastClosedM1=1000000;
   InpMaxQuoteAgeMs=1500;
   BRK.quoteMsc=(long)(BRK.now-10)*1000;        // 10s-old tick
@@ -316,249 +273,13 @@ int main(){
   BRK.bid=4411.0; BRK.ask=4411.1;
   emitGate("gate_reclaim_check_disabled",-1,4410.0,4400.0,2.0,1000000);
 
-  // ---------- v3.8.4: executable region is the displacement ORIGIN, not the dump close
-  resetBroker();
-  {
-    double eh,el;
-    // Strong bearish displacement: high 4404 open 4403 close 4390 low 4389
-    ComputeExecRegion(-1,4404,4389,4403,4390,eh,el);
-    row(StringFormat("{\"test\":\"exec_region_sell_dump\",\"execHigh\":%.5f,\"execLow\":%.5f}",eh,el));
-    bool atClose=PriceInExecRegion(-1,4390.0,4390.1,eh,el);
-    bool atOrigin=PriceInExecRegion(-1,4403.2,4403.3,eh,el);
-    bool chased=PriceInExecRegion(-1,4385.0,4385.1,eh,el);
-    row(StringFormat("{\"test\":\"exec_region_sell_location\",\"atClose\":%s,\"atOrigin\":%s,\"chased\":%s}",
-                     b(atClose).c_str(),b(atOrigin).c_str(),b(chased).c_str()));
-    // MODEL A (full bar) would accept the close. MODEL B (body) still includes the close.
-    // MODEL C must not.
-    bool modelA_close=(4390.0<=4404 && 4390.0>=4389);
-    double bodyHi=4403, bodyLo=4390;
-    bool modelB_close=(4390.0<=bodyHi && 4390.0>=bodyLo);
-    row(StringFormat("{\"test\":\"exec_model_compare\",\"modelA_accepts_close\":%s,\"modelB_accepts_close\":%s,\"modelC_accepts_close\":%s,"
-                     "\"modelA_mae_on_origin_retrace\":%.2f,\"modelC_mae_on_origin_retrace\":%.2f,"
-                     "\"modelA_dist_to_invalid\":%.2f,\"modelC_dist_to_invalid\":%.2f}",
-                     b(modelA_close).c_str(),b(modelB_close).c_str(),b(atClose).c_str(),
-                     4403.0-4390.0, 4410.0-4403.0, 4410.0-4390.0, 4410.0-4403.0));
-    // BUY displacement: low 4375 open 4376 close 4389 high 4390
-    double beh,bel;
-    ComputeExecRegion(1,4390,4375,4376,4389,beh,bel);
-    bool buyAtClose=PriceInExecRegion(1,4388.9,4389.0,beh,bel);
-    bool buyAtOrigin=PriceInExecRegion(1,4375.4,4375.6,beh,bel);
-    row(StringFormat("{\"test\":\"exec_region_buy_location\",\"execHigh\":%.5f,\"execLow\":%.5f,\"atClose\":%s,\"atOrigin\":%s}",
-                     beh,bel,b(buyAtClose).c_str(),b(buyAtOrigin).c_str()));
-  }
-
-  // Continuation add: own location 4384-4386, campaign invalidation 4410, price 4385
+  // Reclaim of campaign invalidation still blocks (v3.8.2 gate, not origin-box)
   resetBroker();
   BRK.lastClosedM1=1000000; BRK.now=1000030;
-  BRK.bid=4385.0; BRK.ask=4385.1;
-  emitGate("gate_add_continuation_outside_first_box",-1,4410.0,4385.0,2.0,1000000,4386.0,4384.0);
   BRK.bid=4411.0; BRK.ask=4411.1;
-  emitGate("gate_add_blocked_after_invalidation_reclaim",-1,4410.0,4385.0,2.0,1000000,4386.0,4384.0);
-  // Reversal add uses its OWN origin (4402-4404), not the first campaign box (4398-4404 dumped to 4385)
-  resetBroker();
-  BRK.lastClosedM1=1000000; BRK.now=1000030;
-  BRK.bid=4403.0; BRK.ask=4403.1;
-  emitGate("gate_add_reversal_own_origin",-1,4410.0,4403.0,2.0,1000000,4404.0,4402.0);
+  emitGate("gate_add_blocked_after_invalidation_reclaim",-1,4410.0,4385.0,2.0,1000000);
 
-  // Schema 3 active campaign fail-closed
-  resetBroker();
-  campState=CAMP_ACTIVE; anchorsKnown=true;
-  bool blocked=ApplyLegacySchemaGuard(3);
-  row(StringFormat("{\"test\":\"schema3_active_blocks\",\"blocked\":%s,\"anchorsKnown\":%s}",
-                   b(blocked).c_str(),b(anchorsKnown).c_str()));
-  resetBroker();
-  campState=CAMP_IDLE; campDir=0; anchorsKnown=true;
-  bool idle=ApplyLegacySchemaGuard(3);
-  row(StringFormat("{\"test\":\"schema3_idle_ok\",\"blocked\":%s,\"anchorsKnown\":%s}",
-                   b(idle).c_str(),b(anchorsKnown).c_str()));
-  resetBroker();
-  campState=CAMP_ACTIVE; anchorsKnown=true;
-  campOriginHigh=4404.5; campOriginLow=4396.0; campInvalidLevel=4410.0; campOriginClose=4398.0; campOriginBar=123;
-  bool s4=ApplyLegacySchemaGuard(4);
-  row(StringFormat("{\"test\":\"schema4_active_ok\",\"blocked\":%s,\"anchorsKnown\":%s,"
-                   "\"campOriginHigh\":%.5f,\"campOriginLow\":%.5f,\"campInvalidLevel\":%.5f}",
-                   b(s4).c_str(),b(anchorsKnown).c_str(),campOriginHigh,campOriginLow,campInvalidLevel));
-
-  // Dead-thesis identity: extending the same high is blocked; opposite impulse clears
-  resetBroker();
-  S.dir=-1; S.extreme=4410; S.prior=4400; S.sweepBarTime=1000000;
-  RememberDeadThesis();
-  bool sameRun=DeadThesisBlocks(-1,4412,4400,2.0);
-  bool newPool=DeadThesisBlocks(-1,4380,4370,2.0);
-  MaybeClearDeadThesis(-1,2.0,1.8); // opposite impulse (down) vs dead SELL
-  bool afterClear=DeadThesisBlocks(-1,4412,4400,2.0);
-  row(StringFormat("{\"test\":\"dead_thesis_identity\",\"sameRunBlocked\":%s,\"newPoolAllowed\":%s,\"clearedByOppositeImpulse\":%s,\"stillActiveAfterClear\":%s}",
-                   b(sameRun).c_str(),b(!newPool).c_str(),b(!g_deadThesisActive).c_str(),b(afterClear).c_str()));
-
-  // Observe pipeline on a synthetic SELL tape (90 M1 bars, index 0 = forming)
-  resetBroker();
-  {
-    std::vector<MqlRates> bars(90);
-    datetime t0=1000000;
-    for(int i=89;i>=0;i--){
-      bars[i].time=t0+(89-i)*60;
-      bars[i].open=4300; bars[i].high=4302; bars[i].low=4298; bars[i].close=4301;
-      bars[i].tick_volume=10; bars[i].spread=1; bars[i].real_volume=10;
-    }
-    for(int i=8;i>=2;i--){
-      double px=4300+(8-i)*1.2;
-      bars[i].open=px; bars[i].close=px+1.0; bars[i].high=px+1.2; bars[i].low=px-0.2;
-    }
-    bars[1].open=4310; bars[1].high=4410; bars[1].low=4309; bars[1].close=4408;
-    bars[0]=bars[1];
-    BRK.m1=bars; BRK.atr=2.0; BRK.bid=4408; BRK.ask=4408.1; BRK.now=bars[0].time+30;
-    BRK.lastClosedM1=bars[1].time;
-    Snap s1=Observe();
-    row(StringFormat("{\"test\":\"obs_1_sweep_watching\",\"state\":%d,\"valid\":%s,\"inLocation\":%s,\"reason\":\"%s\"}",
-                     (int)S.state,b(s1.valid).c_str(),b(s1.inLocation).c_str(),s1.reason.c_str()));
-  }
-
-  // Cleaner Observe tape: construct lookback with a swing high at 4400, sweep 4410, then BOS
-  resetBroker();
-  {
-    std::vector<MqlRates> bars(90);
-    datetime t0=2000000;
-    for(int i=89;i>=0;i--){
-      bars[i].time=t0+(89-i)*60;
-      bars[i].open=4390; bars[i].high=4392; bars[i].low=4388; bars[i].close=4391;
-      bars[i].tick_volume=10; bars[i].spread=1; bars[i].real_volume=10;
-    }
-    bars[21].high=4398; bars[21].low=4389; bars[21].open=4390; bars[21].close=4392;
-    bars[20].high=4400; bars[20].low=4390; bars[20].open=4392; bars[20].close=4396;
-    bars[19].high=4397; bars[19].low=4389; bars[19].open=4396; bars[19].close=4391;
-    double px=4391;
-    for(int i=8;i>=2;i--){
-      bars[i].open=px; bars[i].close=px+1.5; bars[i].high=px+1.8; bars[i].low=px-0.2;
-      px+=1.5;
-    }
-    bars[1].open=4404; bars[1].high=4410.2; bars[1].low=4403; bars[1].close=4408;
-    bars[0]=bars[1];
-    BRK.m1=bars; BRK.atr=2.0; BRK.bid=4408; BRK.ask=4408.1;
-    BRK.now=bars[0].time+30; BRK.lastClosedM1=bars[1].time;
-    Snap sw=Observe();
-    int stWatch=(int)S.state;
-    // Same candle cannot confirm: BOS requires a bar AFTER the sweep.
-    Snap same=Observe();
-    bool sameCandleBlocked=(S.state==SETUP_WATCHING && !same.valid);
-    row(StringFormat("{\"test\":\"obs_same_candle_no_confirm\",\"state\":%d,\"valid\":%s,\"blocked\":%s,\"reason\":\"%s\"}",
-                     (int)S.state,b(same.valid).c_str(),b(sameCandleBlocked).c_str(),same.reason.c_str()));
-    // Advance: displacement/BOS bar. close < m1[2].low and close < prior (4400)
-    for(int i=89;i>=1;i--) bars[i]=bars[i-1];
-    bars[1].time=bars[2].time+60;
-    bars[1].open=4408; bars[1].high=4410.15; bars[1].low=4393; bars[1].close=4395;
-    bars[0]=bars[1];
-    BRK.m1=bars; BRK.bid=4395; BRK.ask=4395.1;
-    BRK.now=bars[0].time+30; BRK.lastClosedM1=bars[1].time;
-    Snap cf=Observe();
-    bool confirmed=S.state==SETUP_CONFIRMED;
-    bool noEntryAtDump=confirmed && !cf.inLocation;
-    // Retest: live price back into exec region (upper half / open of displacement)
-    BRK.bid=S.execLow+0.05; BRK.ask=BRK.bid+0.1;
-    Snap rt=Observe();
-    row(StringFormat(
-      "{\"test\":\"obs_pipeline\",\"watchState\":%d,\"watchValid\":%s,\"confirmed\":%s,"
-      "\"reasonConfirm\":\"%s\",\"noEntryAtDump\":%s,\"retestIn\":%s,\"retestReason\":\"%s\","
-      "\"execHigh\":%.5f,\"execLow\":%.5f,\"originHigh\":%.5f,\"originLow\":%.5f}",
-      stWatch,b(sw.valid).c_str(),b(confirmed).c_str(),cf.reason.c_str(),b(noEntryAtDump).c_str(),
-      b(rt.inLocation).c_str(),rt.reason.c_str(),S.execHigh,S.execLow,S.originHigh,S.originLow));
-
-    // Chase: price runs through exec low
-    BRK.bid=S.execLow-5.0; BRK.ask=BRK.bid+0.1;
-    Snap ch=Observe();
-    row(StringFormat("{\"test\":\"obs_chase_no_entry\",\"inLocation\":%s,\"valid\":%s,\"reason\":\"%s\"}",
-                     b(ch.inLocation).c_str(),b(ch.valid).c_str(),ch.reason.c_str()));
-
-    // Reclaim of swept extreme before retest
-    BRK.bid=4411; BRK.ask=4411.2;
-    Snap rc=Observe();
-    row(StringFormat("{\"test\":\"obs_reclaim_kills_or_blocks\",\"state\":%d,\"reason\":\"%s\",\"extreme\":%.5f}",
-                     (int)S.state,rc.reason.c_str(),S.extreme));
-  }
-
-  // Confirmation bar is immediately executable ONLY if live price is still in the origin portion
-  resetBroker();
-  {
-    std::vector<MqlRates> bars(90);
-    datetime t0=2100000;
-    for(int i=89;i>=0;i--){
-      bars[i].time=t0+(89-i)*60;
-      bars[i].open=4390; bars[i].high=4392; bars[i].low=4388; bars[i].close=4391;
-      bars[i].tick_volume=10; bars[i].spread=1; bars[i].real_volume=10;
-    }
-    bars[21].high=4398; bars[21].low=4389; bars[21].open=4390; bars[21].close=4392;
-    bars[20].high=4400; bars[20].low=4390; bars[20].open=4392; bars[20].close=4396;
-    bars[19].high=4397; bars[19].low=4389; bars[19].open=4396; bars[19].close=4391;
-    double px=4391;
-    for(int i=8;i>=2;i--){
-      bars[i].open=px; bars[i].close=px+1.5; bars[i].high=px+1.8; bars[i].low=px-0.2;
-      px+=1.5;
-    }
-    bars[1].open=4404; bars[1].high=4410.2; bars[1].low=4403; bars[1].close=4408;
-    bars[0]=bars[1];
-    BRK.m1=bars; BRK.atr=2.0; BRK.bid=4408; BRK.ask=4408.1;
-    BRK.now=bars[0].time+30; BRK.lastClosedM1=bars[1].time;
-    Observe();
-    for(int i=89;i>=1;i--) bars[i]=bars[i-1];
-    bars[1].time=bars[2].time+60;
-    bars[1].open=4408; bars[1].high=4410.15; bars[1].low=4393; bars[1].close=4395;
-    bars[0]=bars[1];
-    BRK.m1=bars; BRK.lastClosedM1=bars[1].time; BRK.now=bars[0].time+30;
-    // Price has NOT dumped away: still sitting at the displacement origin (open).
-    BRK.bid=4408.05; BRK.ask=4408.15;
-    Snap atOrigin=Observe();
-    row(StringFormat("{\"test\":\"obs_confirm_at_origin_executable\",\"state\":%d,\"valid\":%s,\"inLocation\":%s,\"reason\":\"%s\"}",
-                     (int)S.state,b(atOrigin.valid).c_str(),b(atOrigin.inLocation).c_str(),atOrigin.reason.c_str()));
-  }
-
-  // Same-run reincarnation through Observe (not just the helper)
-  resetBroker();
-  {
-    g_deadThesisActive=true; g_deadThesisDir=-1; g_deadThesisExtreme=4410.2; g_deadThesisPrior=4400;
-    auto bars=makeSweepTape(4390,4400,4412.5,true);
-    BRK.m1=bars; BRK.atr=2.0; BRK.bid=4410; BRK.ask=4410.1;
-    BRK.now=bars[0].time+30; BRK.lastClosedM1=bars[1].time;
-    Snap s=Observe();
-    row(StringFormat("{\"test\":\"obs_same_run_no_reincarnate\",\"state\":%d,\"valid\":%s,\"deadActive\":%s,\"reason\":\"%s\"}",
-                     (int)S.state,b(s.valid).c_str(),b(g_deadThesisActive).c_str(),s.reason.c_str()));
-  }
-  resetBroker();
-  {
-    g_deadThesisActive=true; g_deadThesisDir=-1; g_deadThesisExtreme=4410.2; g_deadThesisPrior=4400;
-    auto bars=makeSweepTape(4360,4370,4380.5,true);
-    BRK.m1=bars; BRK.atr=2.0; BRK.bid=4378; BRK.ask=4378.1;
-    BRK.now=bars[0].time+30; BRK.lastClosedM1=bars[1].time;
-    Snap s=Observe();
-    row(StringFormat("{\"test\":\"obs_new_independent_cycle_arms\",\"state\":%d,\"valid\":%s,\"dir\":%d,\"reason\":\"%s\"}",
-                     (int)S.state,b(s.valid).c_str(),S.dir,s.reason.c_str()));
-  }
-
-  // Swing vs rolling liquidity on the same tape (no lookahead: only bars 9..79)
-  resetBroker();
-  {
-    std::vector<MqlRates> bars(90);
-    datetime t0=4000000;
-    for(int i=89;i>=0;i--){
-      bars[i].time=t0+(89-i)*60;
-      bars[i].open=4390; bars[i].high=4391; bars[i].low=4389; bars[i].close=4390;
-      bars[i].tick_volume=10; bars[i].spread=1; bars[i].real_volume=10;
-    }
-    // Confirmed swing high at i=25 = 4400 and swing low at i=35 = 4380
-    bars[26].high=4396; bars[25].high=4400; bars[24].high=4395;
-    bars[26].low=4388; bars[25].low=4390; bars[24].low=4388;
-    bars[36].low=4385; bars[35].low=4380; bars[34].low=4386;
-    bars[36].high=4390; bars[35].high=4388; bars[34].high=4390;
-    // Later grind toward present that is NOT a 3-bar swing (monotonic + i=9 still high)
-    bars[13].high=4405; bars[12].high=4406; bars[11].high=4407; bars[10].high=4408; bars[9].high=4409;
-    bars[13].low=4395; bars[12].low=4396; bars[11].low=4397; bars[10].low=4398; bars[9].low=4399;
-    double swingPh,swingPl,rollPh,rollPl;
-    LiquidityRefs(bars.data(),(int)bars.size(),true,swingPh,swingPl);
-    LiquidityRefs(bars.data(),(int)bars.size(),false,rollPh,rollPl);
-    row(StringFormat("{\"test\":\"liq_swing_vs_rolling\",\"swingPh\":%.5f,\"rollingPh\":%.5f,"
-                     "\"swingUsesPivotNotGrind\":%s,\"rollingTakesGrindHigh\":%s}",
-                     swingPh,rollPh,b(swingPh<=4400.01 && swingPh>=4399.0).c_str(),b(rollPh>=4408.0).c_str()));
-  }
-
-  // v3.8.5: WAF HTML 403 is transport; authenticated XauCloud JSON envelope is denial
+  // v3.8.6: WAF HTML 403 is transport; authenticated XauCloud JSON envelope is denial
   resetBroker();
   {
     bool html=BodyLooksLikeJsonObject("<html>cloudflare 403</html>");

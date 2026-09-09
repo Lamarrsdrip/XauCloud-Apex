@@ -76,18 +76,6 @@ export function generateExtractedHeader(){
     extract(cur,'LargestVolumeWithinMargin'),
     extract(cur,'LargestVolumePassingCheck'),
     extract(cur,'ComputeVolume'),
-    extract(cur,'ComputeExecRegion'),
-    extract(cur,'PriceInExecRegion'),
-    extract(cur,'LiquidityRefs'),
-    extract(cur,'RememberDeadThesis'),
-    extract(cur,'MaybeClearDeadThesis'),
-    extract(cur,'DeadThesisBlocks'),
-    extract(cur,'Fnv1a'),
-    extract(cur,'NewSetupId'),
-    extract(cur,'SetupReset'),
-    extract(cur,'ArmSetup'),
-    extract(cur,'Observe'),
-    extract(cur,'ApplyLegacySchemaGuard'),
     extract(cur,'FinalEntryGate'),
     extract(cur,'IsSizeOnlyRejection'),
     extract(cur,'BodyLooksLikeJsonObject'),
@@ -101,18 +89,9 @@ export function generateExtractedHeader(){
 #define APEX_SCORE_BASE 25.0
 Setup S;
 string g_instanceId="native";
-bool g_deadThesisActive=false;
-int g_deadThesisDir=0;
-double g_deadThesisExtreme=0;
-double g_deadThesisPrior=0;
-datetime g_deadThesisSweep=0;
-datetime g_noRearmBeforeBar=0;
-int g_noRearmDir=0;
 CampState campState=CAMP_IDLE;
 int campDir=0;
 bool anchorsKnown=true;
-double campInvalidLevel=0,campOriginHigh=0,campOriginLow=0,campOriginClose=0;
-datetime campOriginBar=0;
 ApexBosMode InpBosMode=BOS_V371_CLOSE_OR_WICK;
 bool InpRequireFreshM3=false;
 

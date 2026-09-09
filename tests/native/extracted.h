@@ -29,7 +29,6 @@ struct Gate
    double   bid,ask,price,extensionAtr;
    long     quoteAgeMs;
    bool     reclaimed,triggerStale,quoteStale,extended;
-   bool     inLocation,leftLocation;
   };
 
 struct Setup
@@ -37,14 +36,9 @@ struct Setup
    SetupState state;
    string     id,sig,cancelReason;
    int        dir;
-   datetime   armedAt,sweepBarTime,confirmedAt,triggerBarTime,waitingLocationSince;
+   datetime   armedAt,sweepBarTime,confirmedAt,triggerBarTime;
    double     extreme,prior,atr,triggerPrice;
    string     bosKind;
-   double     originHigh,originLow,originClose,originOpen;
-   datetime   originBarTime;
-   double     execHigh,execLow;
-   bool       dead;
-   string     deadReason;
   };
 
 struct Snap
@@ -57,27 +51,14 @@ struct Snap
    string sig,reason,bosKind;
    datetime triggerBarTime;
    double triggerPrice;
-   double originHigh,originLow,originClose,originOpen;
-   datetime originBarTime;
-   double execHigh,execLow;
-   bool   inLocation,locationNow;
   };
 
 #define APEX_SCORE_BASE 25.0
 Setup S;
 string g_instanceId="native";
-bool g_deadThesisActive=false;
-int g_deadThesisDir=0;
-double g_deadThesisExtreme=0;
-double g_deadThesisPrior=0;
-datetime g_deadThesisSweep=0;
-datetime g_noRearmBeforeBar=0;
-int g_noRearmDir=0;
 CampState campState=CAMP_IDLE;
 int campDir=0;
 bool anchorsKnown=true;
-double campInvalidLevel=0,campOriginHigh=0,campOriginLow=0,campOriginClose=0;
-datetime campOriginBar=0;
 ApexBosMode InpBosMode=BOS_V371_CLOSE_OR_WICK;
 bool InpRequireFreshM3=false;
 
@@ -472,366 +453,11 @@ SizingDecision ComputeVolume(int dir,double pct,double price,double sl)
    return d;
   }
 
-void ComputeExecRegion(int dir,double barHigh,double barLow,double barOpen,double barClose,
-                       double &execHigh,double &execLow)
-  {
-   if(barHigh<barLow){double t=barHigh;barHigh=barLow;barLow=t;}
-   if(barHigh<=barLow){barHigh+=_Point;barLow-=_Point;}
-   double mid=barLow+0.5*(barHigh-barLow);
-   if(dir<0)
-     {
-      execHigh=barHigh;
-      execLow=MathMax(mid,barOpen);
-      if(execLow>=execHigh) execLow=mid;
-      if(execLow>=execHigh) execLow=execHigh-_Point;
-     }
-   else
-     {
-      execLow=barLow;
-      execHigh=MathMin(mid,barOpen);
-      if(execHigh<=execLow) execHigh=mid;
-      if(execHigh<=execLow) execHigh=execLow+_Point;
-     }
-  }
-
-bool PriceInExecRegion(int dir,double bid,double ask,double execHigh,double execLow)
-  {
-   if(execHigh<=execLow) return false;
-   if(dir<0) return (bid<=execHigh && bid>=execLow);
-   return (ask>=execLow && ask<=execHigh);
-  }
-
-void LiquidityRefs(MqlRates *m1,int n,bool useSwing,double &ph,double &pl)
-  {
-   ph=-DBL_MAX;pl=DBL_MAX;
-   int hi=MathMin(n-1,79);
-   if(useSwing && n>12)
-     {
-      bool haveH=false,haveL=false;
-      for(int i=10;i<hi;i++)
-        {
-         if(i-1<0||i+1>=n) continue;
-         if(m1[i].high>m1[i-1].high&&m1[i].high>m1[i+1].high){ph=MathMax(ph,m1[i].high);haveH=true;}
-         if(m1[i].low<m1[i-1].low&&m1[i].low<m1[i+1].low){pl=MathMin(pl,m1[i].low);haveL=true;}
-        }
-      if(haveH&&haveL) return;
-     }
-   ph=-DBL_MAX;pl=DBL_MAX;
-   int start=useSwing?9:9;
-   for(int i=start;i<=hi;i++){ph=MathMax(ph,m1[i].high);pl=MathMin(pl,m1[i].low);}
-  }
-
-void RememberDeadThesis()
-  {
-   g_deadThesisActive=true;
-   g_deadThesisDir=S.dir;
-   g_deadThesisExtreme=S.extreme;
-   g_deadThesisPrior=S.prior;
-   g_deadThesisSweep=S.sweepBarTime;
-  }
-
-void MaybeClearDeadThesis(int imp,double impulseMult,double needAtr)
-  {
-   // Opposite impulse of the original size = a new displacement cycle.
-   if(!g_deadThesisActive) return;
-   if(impulseMult<needAtr) return;
-   if((-imp)!=g_deadThesisDir) g_deadThesisActive=false;
-  }
-
-bool DeadThesisBlocks(int setupDir,double newExtreme,double newPrior,double atr)
-  {
-   if(!g_deadThesisActive||setupDir!=g_deadThesisDir) return false;
-   double tol=(atr>0?C.sweepAtr*atr:_Point);
-   bool extending=(setupDir<0)?(newExtreme>=g_deadThesisExtreme):(newExtreme<=g_deadThesisExtreme);
-   bool samePool=(setupDir<0)
-      ?(newPrior>=g_deadThesisPrior-tol && newPrior<=g_deadThesisExtreme+tol)
-      :(newPrior<=g_deadThesisPrior+tol && newPrior>=g_deadThesisExtreme-tol);
-   return extending&&samePool;
-  }
-
-uint Fnv1a(const string s)
-  {
-   uint h=2166136261;
-   for(int i=0;i<StringLen(s);i++){h^=(uint)StringGetCharacter(s,i);h*=16777619;}
-   return h;
-  }
-
-string NewSetupId()
-  {
-   return StringFormat("S%lld-%08x",(long)TimeCurrent(),
-      Fnv1a(g_instanceId+IntegerToString((int)GetTickCount())+IntegerToString(MathRand())));
-  }
-
-void SetupReset(string reason)
-  {
-   if(S.state==SETUP_WATCHING||S.state==SETUP_CONFIRMED)
-      Emit("SETUP_CANCELLED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"cancelReason\":\"%s\",\"extreme\":%.5f,\"ageSec\":%d",
-           S.id,S.dir,reason,S.extreme,(int)(TimeCurrent()-S.armedAt)));
-   S.state=SETUP_NONE;S.id="";S.dir=0;S.sig="";S.cancelReason=reason;
-   S.armedAt=0;S.sweepBarTime=0;S.confirmedAt=0;S.triggerBarTime=0;S.waitingLocationSince=0;
-   S.extreme=0;S.prior=0;S.atr=0;S.triggerPrice=0;S.bosKind="";
-   S.originHigh=0;S.originLow=0;S.originClose=0;S.originOpen=0;S.originBarTime=0;
-   S.execHigh=0;S.execLow=0;
-   S.dead=false;S.deadReason="";
-  }
-
-void ArmSetup(int dir,datetime sweepBar,double extreme,double prior,double atr,double impulseMult)
-  {
-   S.state=SETUP_WATCHING;
-   S.id=NewSetupId();
-   S.dir=dir;
-   S.armedAt=TimeCurrent();
-   S.sweepBarTime=sweepBar;
-   S.extreme=extreme;S.prior=prior;S.atr=atr;
-   S.confirmedAt=0;S.triggerBarTime=0;S.triggerPrice=0;S.bosKind="";S.cancelReason="";
-   S.originHigh=0;S.originLow=0;S.originClose=0;S.originOpen=0;S.originBarTime=0;
-   S.execHigh=0;S.execLow=0;
-   S.waitingLocationSince=0;
-   S.dead=false;S.deadReason="";
-   S.sig=dir<0?"SELL_UPSIDE_LIQUIDITY_EXHAUST":"BUY_DOWNSIDE_LIQUIDITY_EXHAUST";
-   Emit("WATCH_ARMED",StringFormat(",\"setupId\":\"%s\",\"watchDir\":%d,\"impulseAtr\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"sweepBarTime\":%lld",
-        S.id,dir,impulseMult,extreme,prior,(long)sweepBar));
-  }
-
-Snap Observe()
-  {
-   Snap s;
-   s.valid=false;s.dir=0;s.score=0;s.atr=ATR();s.price=0;s.extreme=0;
-   s.impulseMult=0;s.sweepMult=0;s.wickRatio=0;s.swept=false;s.rejected=false;s.microBreak=false;
-   s.m3Color=false;s.m5Color=false;s.m3Fresh=false;s.continuation=false;s.pullbackFail=false;
-   s.sig="NONE";s.reason="";s.bosKind="NONE";s.triggerBarTime=0;s.triggerPrice=0;
-   s.originHigh=0;s.originLow=0;s.originClose=0;s.originOpen=0;s.originBarTime=0;
-   s.execHigh=0;s.execLow=0;s.inLocation=false;s.locationNow=false;
-   if(s.atr<=0){s.reason="NO_ATR";return s;}
-
-   std::vector<MqlRates> m1,m3,m5;
-   if(!Rates(PERIOD_M1,90,m1)){s.reason="NO_M1_HISTORY";return s;}
-   // APEX-AUDIT-007: optional-timeframe history is now NON-FATAL. It is still requested
-   // because the ranking score consumes the candle-colour context (intended behaviour),
-   // but its absence can no longer disable the M1 scanner. It is only MANDATORY when the
-   // corresponding filter is switched on.
-   bool m3Available=Rates(PERIOD_M3,24,m3);
-   bool m5Available=Rates(PERIOD_M5,18,m5);
-
-   double move=m1[1].close-m1[8].close;
-   int imp=move>=0?1:-1;
-   s.impulseMult=MathAbs(move)/s.atr;
-   int directional=0;
-   for(int i=1;i<=7;i++)
-      if((imp>0&&m1[i].close>m1[i].open)||(imp<0&&m1[i].close<m1[i].open))directional++;
-
-   double ph=0,pl=0;
-   LiquidityRefs(m1.data(),(int)m1.size(),true,ph,pl);
-   MaybeClearDeadThesis(imp,s.impulseMult,C.impulseAtr);
-
-   // --- APEX-AUDIT-003: a watch whose premise the market has destroyed must die, and a
-   // --- genuinely new sweep must be able to take its place immediately.
-   if(S.state==SETUP_WATCHING||S.state==SETUP_CONFIRMED)
-     {
-      datetime ageFrom=(S.state==SETUP_CONFIRMED&&S.confirmedAt>0)?S.confirmedAt:S.armedAt;
-      if(TimeCurrent()-ageFrom>C.watchExpiryMinutes*60)
-        {S.state=SETUP_EXPIRED;SetupReset("EXPIRED");}
-      else
-        {
-         // a later bar printing an extreme BEYOND the swept one means the rejection failed
-         bool newExtreme=false;
-         for(int i=1;i<=8;i++)
-           {
-            if(m1[i].time<=S.sweepBarTime)break;
-            if(S.dir<0&&m1[i].high>S.extreme){newExtreme=true;break;}
-            if(S.dir>0&&m1[i].low<S.extreme){newExtreme=true;break;}
-           }
-         if(newExtreme)
-           {
-            if(S.state==SETUP_CONFIRMED)
-              {
-               g_noRearmBeforeBar=m1[1].time;g_noRearmDir=S.dir;
-               RememberDeadThesis();
-               S.dead=true;S.deadReason="NEW_EXTREME_BEYOND_SWEPT_LEVEL";
-               S.state=SETUP_INVALIDATED;SetupReset("NEW_EXTREME_BEYOND_SWEPT_LEVEL");
-              }
-            else
-              {
-               double updated=S.extreme;datetime updatedSweep=S.sweepBarTime;
-               for(int i=1;i<=8;i++)
-                 {
-                  if(m1[i].time<=S.sweepBarTime)break;
-                  if(S.dir<0&&m1[i].high>updated){updated=m1[i].high;updatedSweep=m1[i].time;}
-                  if(S.dir>0&&m1[i].low<updated){updated=m1[i].low;updatedSweep=m1[i].time;}
-                 }
-               // Local BOS of the running high: prior becomes the high we just replaced.
-               S.prior=S.extreme;
-               S.extreme=updated;S.sweepBarTime=updatedSweep;
-               Emit("WATCH_EXTREME_UPDATED",StringFormat(
-                    ",\"setupId\":\"%s\",\"watchDir\":%d,\"extreme\":%.5f,\"sweepBarTime\":%lld",
-                    S.id,S.dir,S.extreme,(long)S.sweepBarTime));
-              }
-           }
-        }
-     }
-
-   bool canArm=(S.state==SETUP_NONE);
-   if(canArm&&g_noRearmDir!=0&&m1[1].time<=g_noRearmBeforeBar&&(-imp)==g_noRearmDir)
-      canArm=false;
-   if(canArm&&g_noRearmDir!=0&&m1[1].time>g_noRearmBeforeBar)
-      g_noRearmDir=0;
-   // During an ACTIVE campaign, only same-direction setups may arm (reversal-add).
-   // Opposite watches are a new campaign thesis, not an add, and must not mutate S.
-   if(canArm&&campState==CAMP_ACTIVE&&campDir!=0&&(-imp)!=campDir)
-      canArm=false;
-   if(canArm&&s.impulseMult>=C.impulseAtr&&directional>=5)
-     {
-      double ex=imp>0?m1[1].high:m1[1].low;
-      double priorRef=imp>0?ph:pl;
-      bool swept=imp>0?ex>=ph+C.sweepAtr*s.atr:ex<=pl-C.sweepAtr*s.atr;
-      if(swept&&!DeadThesisBlocks(-imp,ex,priorRef,s.atr))
-         ArmSetup(-imp,m1[1].time,ex,priorRef,s.atr,s.impulseMult);
-     }
-
-   if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason="NO_ACTIVE_SETUP";return s;}
-
-   s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.swept=true;
-   s.impulseMult=MathAbs(m1[1].close-m1[8].close)/s.atr;
-   s.price=s.dir>0?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
-   s.originHigh=S.originHigh;s.originLow=S.originLow;s.originClose=S.originClose;
-   s.originBarTime=S.originBarTime;
-   s.triggerBarTime=S.triggerBarTime;s.triggerPrice=S.triggerPrice;s.bosKind=S.bosKind;
-
-   int rb=MathMax(1,MathMin(C.rejectionBars,8));
-   bool rej=false;double bestW=0;
-   for(int i=1;i<=rb;i++)
-     {
-      if(m1[i].time<=S.sweepBarTime)continue;
-      double body=MathMax(_Point,MathAbs(m1[i].close-m1[i].open));
-      double up=m1[i].high-MathMax(m1[i].open,m1[i].close);
-      double lo=MathMin(m1[i].open,m1[i].close)-m1[i].low;
-      if(s.dir<0)
-        {bestW=MathMax(bestW,up/body);
-         if(m1[i].high>=S.extreme-C.rejectionZoneAtr*s.atr&&m1[i].close<S.prior)rej=true;}
-      else
-        {bestW=MathMax(bestW,lo/body);
-         if(m1[i].low<=S.extreme+C.rejectionZoneAtr*s.atr&&m1[i].close>S.prior)rej=true;}
-     }
-
-   // --- APEX-AUDIT-006: explicit, truthfully-named confirmation predicate.
-   // BOS_V371_CLOSE_OR_WICK is byte-for-byte the v3.7.1 rule; nothing is removed by default.
-   bool bos=false;string bosKind="NONE";
-   if(m1[1].time>S.sweepBarTime)
-     {
-      bool closeBreak = s.dir<0 ? (m1[1].close<m1[2].low) : (m1[1].close>m1[2].high);
-      bool wickConfirm= s.dir<0 ? (m1[1].low<m1[3].low  && m1[1].close<m1[2].open)
-                                : (m1[1].high>m1[3].high&& m1[1].close>m1[2].open);
-      if(closeBreak){bos=true;bosKind="CLOSE_BREAK_PRIOR_BAR_EXTREME";}
-      else if(InpBosMode==BOS_V371_CLOSE_OR_WICK&&wickConfirm){bos=true;bosKind="WICK_BREACH_3BAR_PLUS_CLOSE_BEYOND_PRIOR_OPEN";}
-     }
-   s.rejected=rej;s.microBreak=bos;s.wickRatio=bestW;s.bosKind=bosKind;
-   if(bos){s.triggerBarTime=m1[1].time;s.triggerPrice=m1[1].close;}
-
-   if(m3Available)
-     {
-      s.m3Color=s.dir<0?(m3[1].close<m3[1].open&&m3[1].close<(m3[1].high+m3[1].low)/2)
-                       :(m3[1].close>m3[1].open&&m3[1].close>(m3[1].high+m3[1].low)/2);
-      s.m3Fresh=(m3[1].time>=S.sweepBarTime);
-     }
-   if(m5Available)
-      s.m5Color=s.dir<0?m5[1].close<m5[1].open:m5[1].close>m5[1].open;
-
-   // Ranking score. UNCALIBRATED and UNCHANGED numerically from v3.7.1. It is a ranking,
-   // not a probability: with the mandatory gates satisfied the score already exceeds the
-   // default entryScore threshold, so the threshold is informational at those defaults.
-   // The redundancy is reported (scoreFloorGivenMandatory) rather than silently repaired
-   // by inventing new weights -- calibration needs held-out labelled data we do not have.
-   double score=APEX_SCORE_BASE
-               +clamp(s.impulseMult/C.impulseAtr*15,0,18)
-               +(s.rejected?24:0)+(s.microBreak?22:0)
-               +(s.m3Color?8:0)+(s.m5Color?3:0)
-               +clamp(bestW*2,0,5);
-   s.score=clamp(score,0,100);
-
-   bool m3Gate=(!C.requireM3Confirm)||(s.m3Color&&(!InpRequireFreshM3||s.m3Fresh));
-   bool m5Gate=(!C.requireM5Context)||s.m5Color;
-   if(C.requireM3Confirm&&!m3Available){s.reason="M3_HISTORY_UNAVAILABLE_BUT_REQUIRED";return s;}
-   if(C.requireM5Context&&!m5Available){s.reason="M5_HISTORY_UNAVAILABLE_BUT_REQUIRED";return s;}
-
-   double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
-   bool newlyConfirmed=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold;
-   if(S.state==SETUP_CONFIRMED)
-     {
-      double liveBid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      double liveAsk=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-      bool reclaimed=(S.dir<0)?(liveAsk>=S.extreme):(liveBid<=S.extreme);
-      if(reclaimed&&InpRejectReclaimedExtreme)
-        {
-         RememberDeadThesis();
-         g_noRearmBeforeBar=m1[1].time;g_noRearmDir=S.dir;
-         S.state=SETUP_INVALIDATED;SetupReset("RECLAIMED_INVALIDATION_LEVEL");
-         s.valid=false;s.reason="SETUP_DEAD_RECLAIMED";s.inLocation=false;
-         return s;
-        }
-      s.valid=true;
-      s.triggerBarTime=S.triggerBarTime;
-      s.triggerPrice=S.triggerPrice;
-      s.bosKind=S.bosKind;
-      s.originHigh=S.originHigh;s.originLow=S.originLow;s.originClose=S.originClose;
-      s.originOpen=S.originOpen;s.originBarTime=S.originBarTime;
-      s.execHigh=S.execHigh;s.execLow=S.execLow;
-     }
-   else
-     {
-      s.valid=newlyConfirmed;
-      s.reason=s.valid?"SETUP_CONFIRMED_ORIGIN_STORED":"WATCHING_FOR_REJECTION_AND_BOS";
-      if(s.valid)
-        {
-         S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.waitingLocationSince=TimeCurrent();
-         S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=bosKind;
-         S.originHigh=m1[1].high;S.originLow=m1[1].low;S.originClose=m1[1].close;S.originOpen=m1[1].open;
-         S.originBarTime=m1[1].time;
-         if(S.originHigh<S.originLow){double _t=S.originHigh;S.originHigh=S.originLow;S.originLow=_t;}
-         if(S.originHigh==S.originLow){S.originHigh+=_Point;S.originLow-=_Point;}
-         ComputeExecRegion(S.dir,S.originHigh,S.originLow,S.originOpen,S.originClose,S.execHigh,S.execLow);
-         s.originHigh=S.originHigh;s.originLow=S.originLow;s.originClose=S.originClose;
-         s.originOpen=S.originOpen;s.originBarTime=S.originBarTime;
-         s.execHigh=S.execHigh;s.execLow=S.execLow;
-         Emit("SETUP_LOCATED",StringFormat(
-              ",\"setupId\":\"%s\",\"setupDir\":%d,\"originHigh\":%.5f,\"originLow\":%.5f,"
-              "\"originClose\":%.5f,\"originOpen\":%.5f,\"execHigh\":%.5f,\"execLow\":%.5f,"
-              "\"originBarTime\":%lld,\"extreme\":%.5f,\"bosKind\":\"%s\"",
-              S.id,S.dir,S.originHigh,S.originLow,S.originClose,S.originOpen,S.execHigh,S.execLow,
-              (long)S.originBarTime,S.extreme,S.bosKind));
-        }
-     }
-   if(S.execHigh>S.execLow)
-     {
-      double liveBid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      double liveAsk=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-      s.inLocation=PriceInExecRegion(s.dir,liveBid,liveAsk,S.execHigh,S.execLow);
-      s.locationNow=s.inLocation;
-      s.execHigh=S.execHigh;s.execLow=S.execLow;
-     }
-   else s.inLocation=false;
-   if(S.state==SETUP_CONFIRMED)
-      s.reason=s.inLocation?"RETEST_EXECUTABLE":"WAITING_FOR_ENTRY_LOCATION";
-   return s;
-  }
-
-bool ApplyLegacySchemaGuard(int schema)
-  {
-   if(schema==3 && (campState==CAMP_ACTIVE||campState==CAMP_CLOSING))
-     {
-      anchorsKnown=false;
-      Print("APEX LEGACY_CAMPAIGN_ORIGIN_UNKNOWN_NEW_EXPOSURE_BLOCKED | schema=3 active campaign has no origin/invalidation anchors | existing positions managed, new layers refused");
-      return true;
-     }
-   return false;
-  }
-
 bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
-                    datetime triggerBar,bool enforceReclaim,Gate &g,
-                    double originHigh=0,double originLow=0)
+                    datetime triggerBar,bool enforceReclaim,Gate &g)
   {
    g.ok=false;g.reason="";g.bid=0;g.ask=0;g.price=0;g.extensionAtr=0;g.quoteAgeMs=0;
    g.reclaimed=false;g.triggerStale=false;g.quoteStale=false;g.extended=false;
-   g.inLocation=false;g.leftLocation=false;
 
    MqlTick tk;
    if(!SymbolInfoTick(_Symbol,tk)||tk.bid<=0||tk.ask<=0){g.reason="NO_FRESH_QUOTE";return false;}
@@ -843,16 +469,15 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
    if(InpMaxQuoteAgeMs>0&&g.quoteAgeMs>InpMaxQuoteAgeMs)
      {g.quoteStale=true;g.reason=StringFormat("STALE_QUOTE_%lldms",g.quoteAgeMs);return false;}
 
-   // v3.8.3: a newer closed M1 than the origin/trigger bar is the RETEST.
-   // triggerStale is measured for telemetry and NEVER blocks.
-   if(triggerBar>0)
+   // The confirming bar must still be the latest closed M1 bar. This is what makes a
+   // stored, already-completed candle pattern unable to authorise an entry later.
+   if(InpRequireFreshTrigger&&triggerBar>0)
      {
       datetime lastClosed=iTime(_Symbol,PERIOD_M1,1);
       if(lastClosed!=triggerBar)
         {g.triggerStale=true;
-         if(InpRequireFreshTrigger)
-            g.reason=StringFormat("TRIGGER_BAR_NO_LONGER_LATEST_%lld_vs_%lld",(long)triggerBar,(long)lastClosed);
-        }
+         g.reason=StringFormat("TRIGGER_BAR_NO_LONGER_LATEST_%lld_vs_%lld",(long)triggerBar,(long)lastClosed);
+         return false;}
      }
 
    // The setup's OWN rejected extreme is the invalidation level. No invented threshold.
@@ -864,22 +489,6 @@ bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,
          g.reason=StringFormat("RECLAIMED_INVALIDATION_LEVEL_%.5f",invalidLevel);
          return false;}
      }
-
-   // Executable region of THIS submission (first entry = displacement origin;
-   // adds = that add family's own location). Empty 0/0 means "no location
-   // constraint on this call" and is only legal for callers that already
-   // enforced campaign invalidation some other way. Schema-3 campaigns never
-   // reach here: ComputePreflight returns ANCHORS_UNRECONCILED.
-   if(originHigh>originLow)
-     {
-      g.inLocation=(dir<0)?(g.bid<=originHigh&&g.bid>=originLow)
-                          :(g.ask>=originLow&&g.ask<=originHigh);
-      if(!g.inLocation)
-        {g.leftLocation=true;
-         g.reason=StringFormat("PRICE_LEFT_ORIGIN_BOX_%.5f_%.5f",originLow,originHigh);
-         return false;}
-     }
-   else g.inLocation=true;
 
    if(atr>0&&refPrice>0)
      {
@@ -943,7 +552,7 @@ int ClassifyBrokerSubmit(uint rc,bool hasFill)
 
 bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager)
   {
-   if(!cloudLeaseSupported) return true;          // xaucloud did not echo a lease; same-terminal GlobalVariable still applies
+   if(!cloudLeaseSupported) return true;
    if(cloudManagerId=="" ) return weWereConfirmedManager && leaseUntil>=now;
    if(cloudManagerId==myId && leaseUntil>=now) return true;
    return false;

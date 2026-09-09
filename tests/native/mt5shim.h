@@ -190,7 +190,7 @@ inline bool Rates(ENUM_TIMEFRAMES tf,int n,std::vector<MqlRates> &r){
 }
 
 enum SetupState { SETUP_NONE=0, SETUP_WATCHING=1, SETUP_CONFIRMED=2, SETUP_INVALIDATED=3, SETUP_EXPIRED=4, SETUP_CONSUMED=5 };
-enum CampState { CAMP_IDLE=0, CAMP_ACTIVE=1, CAMP_CLOSING=2 };
+enum CampState { CAMP_IDLE=0, CAMP_ACTIVE=1, CAMP_CLOSING=2, CAMP_SUBMITTING=3 };
 enum ApexBosMode { BOS_V371_CLOSE_OR_WICK=0, BOS_CLOSE_BREAK_ONLY=1 };
 
 // ---- Apex globals the extracted functions reference ---------------------

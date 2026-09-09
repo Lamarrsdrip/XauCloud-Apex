@@ -89,7 +89,12 @@ export function generateExtractedHeader(){
     extract(cur,'Observe'),
     extract(cur,'ApplyLegacySchemaGuard'),
     extract(cur,'FinalEntryGate'),
-    extract(cur,'IsSizeOnlyRejection')
+    extract(cur,'IsSizeOnlyRejection'),
+    extract(cur,'BodyLooksLikeJsonObject'),
+    extract(cur,'IsXauCloudDenialEnvelope'),
+    extract(cur,'ClassifyBrokerSubmit'),
+    extract(cur,'ManagerAllowsNewExposure'),
+    extract(cur,'SetupSnapshotValidToRestore')
   ].join('\n\n');
   const currentParts=structs+`
 
@@ -104,6 +109,7 @@ datetime g_deadThesisSweep=0;
 datetime g_noRearmBeforeBar=0;
 int g_noRearmDir=0;
 CampState campState=CAMP_IDLE;
+int campDir=0;
 bool anchorsKnown=true;
 double campInvalidLevel=0,campOriginHigh=0,campOriginLow=0,campOriginClose=0;
 datetime campOriginBar=0;

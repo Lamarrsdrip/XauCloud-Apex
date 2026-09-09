@@ -1,4 +1,50 @@
-# Apex v3.8.0 Fix Status
+# Apex v3.8.5 LivePlatform status
+
+Current identity: `XauCloud-Apex_v3.8.5-LivePlatform` / `#property version "3.850"` / state schema 5.
+Canonical source: `ea/XauCloud-Apex.mq5` (byte-identical to `ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5`).
+WebRequest origin: `https://xaucloud.io`.
+
+`FIXED-IN-SOURCE` means a repair exists in this tree. It is **not** the same as
+PROVEN LIVE READY. MetaEditor compile, EX5 attach, and a real-license ARM→applied
+round-trip are still required on the operator's terminals.
+
+| Finding | Status | Root cause / repair |
+|---|---|---|
+| LIVE-001 | ALREADY FIXED (v3.8.4) | Adds use `a.execHigh/Low`, not the first-entry origin box. |
+| LIVE-002 | NEEDS LIVE PROOF | Architecture is xaucloud.io bridge by design. End-to-end ARM proof is operator-side. |
+| LIVE-003 | ALREADY FIXED (v3.8.4) | Watching extreme update sets `S.prior = previous S.extreme`. |
+| LIVE-004 | FIXED | Schema 5 persists setup; restore only if account/symbol/magic/schema match and snapshot is still valid. |
+| LIVE-005 | FIXED | README / package / version.json / EA identity all 3.8.5. |
+| LIVE-006 | FIXED | Manage first; CloudSync XOR event flush; 1200ms tick budget; config GET deferred if heartbeat used the budget. |
+| LIVE-007 | FIXED | During `CAMP_ACTIVE`, Observe may only arm same-direction (reversal-add). Opposite thesis does not mutate S. |
+| LIVE-008 | FALSE POSITIVE / WATCH | Bid-in-box vs ask-reclaim is the intended spread handling. |
+| LIVE-009 / LIVE-020 | ALREADY FIXED (v3.8.4) | Schema-3 active → `anchorsKnown=false`, new exposure blocked. |
+| LIVE-010 | FIXED | Seed `data/config.json` now includes `normalReferenceLeverage`, `maxBasketLots`, `minMarginLevelPct`, `marginReservePct`. |
+| LIVE-011 | ALREADY FIXED | Learning is OBSERVATION_ONLY; adjustments forced to zero. |
+| LIVE-012–016 | ALREADY OK | Tester arm, netting, outbox cap, heartbeat license_key. |
+| LIVE-017 | FIXED | WAF/HTML 401/403 is transport. Only an authenticated XauCloud JSON envelope tombstones. |
+| LIVE-018 | FIXED | Cloud manager lease in config envelope; fail closed on partition; GlobalVariable remains same-terminal fence. |
+| LIVE-019 | ALREADY FIXED (v3.8.4) + schema 5 | Confirmed expiry uses `confirmedAt`; `waitingLocationSince` stored. |
+| LIVE-021 | FIXED | `TRADE_RETCODE_PLACED` → `CAMP_SUBMITTING` / pending fence; late fill attaches; no resend. |
+| LIVE-022 | ALREADY FIXED (v3.8.4) + schema 5 | Dead-thesis identity persisted, not a time cooldown. |
+| SITE-001 | FIXED | `BRIDGE_NOT_CONFIGURED` / `QUEUED_FOR_BRIDGE` / `BRIDGE_DELIVERED` / `EA_APPLIED`. Never DELIVERED on null. |
+| SITE-002 | FIXED | `assertProductionSecrets()` on `NODE_ENV=production`. systemd sets it. |
+| SITE-003 | FIXED | Account setup WebRequest is `https://xaucloud.io`. |
+| SITE-004 (live hung bridge) | BLOCKED | Production box not reachable from this sandbox. |
+| SITE-005 (multiplier no-op) | FIXED | Hidden; UNLIMITED = 100% of current remaining executable capacity. Sizing unchanged. |
+| SITE-005 (persistence path) | ALREADY OK | systemd `DATA_DIR=/var/lib/xaucloud-apex`. |
+| SITE-006 (events + campaign fields) | FIXED | `decorateCampaign` maps real fields; missing stays null/—; SETUP_LOCATED rendered. |
+| SITE-007 | FIXED | `canonicalizeTimestamp` treats unix seconds as seconds. |
+| SITE-008 | FIXED | Revision is sync authority. Hashes are not compared for inSync. |
+| SITE-009 | FIXED | Customer cannot set UNLIMITED unless `licenseTier`/`unlimitedEntitled`. |
+| SITE-010 | FIXED | Tests assert 3.8.5 / 3.850. |
+| SITE-011 | FIXED | systemd `User=xaucloud-apex` + `NODE_ENV=production`. |
+
+Sizing functions `ComputeVolume` and `LayerMarginPct` remain byte-identical to v3.8.2.
+
+---
+
+# Apex v3.8.0 Fix Status (historical)
 
 Audit base: `0db61f929b006c6834746b7b1096cdf7b2bc7630`
 Claude WIP: `6cd304a72fa0823e6385aa0bf17dd944a37d3afd`

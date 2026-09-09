@@ -3,9 +3,15 @@ Description=XauCloud Apex
 After=network.target
 [Service]
 Type=simple
+# Dedicated service user. Create once:
+#   useradd --system --home-dir /var/lib/xaucloud-apex --shell /usr/sbin/nologin xaucloud-apex
+#   chown -R xaucloud-apex:xaucloud-apex /var/lib/xaucloud-apex /opt/xaucloud-apex
+User=xaucloud-apex
+Group=xaucloud-apex
 WorkingDirectory=/opt/xaucloud-apex
 EnvironmentFile=/opt/xaucloud-apex/.env
 StateDirectory=xaucloud-apex
+Environment=NODE_ENV=production
 Environment=DATA_DIR=/var/lib/xaucloud-apex
 Environment=SESSION_TTL_DAYS=3650
 ExecStart=/usr/bin/node /opt/xaucloud-apex/server.mjs

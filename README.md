@@ -1,4 +1,4 @@
-# XauCloud Apex v3.8.0 — Astra Audit Repair
+# XauCloud Apex v3.8.5 — LivePlatform
 
 Apex is an independent XAUUSD trading bot built to reproduce the reference trader's
 setup selection, patience, confirmation and entry behaviour. It is **not** the XauCloud
@@ -8,8 +8,8 @@ TradeBrain, Global Brain or the XauCloud M10 strategy.
 ## Canonical architecture
 
 - Canonical EA source: `ea/XauCloud-Apex.mq5`
-- Versioned source copy: `ea/XauCloud-Apex-v3.8.0.mq5`
-- Canonical MT5 WebRequest origin: `https://xaucloud.io`
+- Versioned source copy: `ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5` (byte-identical)
+- Canonical MT5 WebRequest origin: **`https://xaucloud.io`** (never `https://apex.xaucloud.io`)
 - XauCloud is intentionally the Apex **infrastructure bridge only**:
   licensing, configuration, heartbeat and events.
 - Heartbeat: `POST /api/cloud/monitor/heartbeat`
@@ -17,32 +17,44 @@ TradeBrain, Global Brain or the XauCloud M10 strategy.
 - Event/ACK telemetry: `POST /api/cloud/apex/event`
 - Customer enters only the Apex license in `InpApexLicense`.
 
+Do **not** reconnect the EA to `apex.xaucloud.io`. The website talks to XauCloud through
+`APEX_BRIDGE_SECRET`. The EA talks to XauCloud through WebRequest.
+
 ## Account profiles
 
-`NORMAL` is the default. `UNLIMITED` is used only after an explicit user/admin choice.
+`NORMAL` is the default. `UNLIMITED` is a **license entitlement**, not a customer toggle.
 A broker offering 1:500 leverage does not automatically make an account UNLIMITED.
 
 NORMAL keeps the approved confirmation-first ladder (default L1 15%, L2 50%, L3+ 100%).
-v3.8.0 repairs the defect that could collapse those percentages into the broker's
-`SYMBOL_VOLUME_MAX` (200 lots in the observed Exness XAUUSDm demo incident). Broker
-preflight and fill reconciliation now happen before campaign/layer state advances.
+UNLIMITED each valid add uses **100% of CURRENT executable remaining capacity**.
+The old "UNLIMITED Profile Multiplier" UI field is a no-op under `baseMarginPct=100`
+and is hidden. Sizing semantics are unchanged from v3.8.2 CapacityTruth.
 
 ## MT5 setup
 
-1. Compile `ea/XauCloud-Apex.mq5` in MetaEditor.
+1. Compile `ea/XauCloud-Apex.mq5` in MetaEditor (`#property version "3.850"`).
 2. MT5 -> Tools -> Options -> Expert Advisors.
 3. Enable Allow WebRequest for listed URL.
-4. Add `https://xaucloud.io`.
+4. Add **`https://xaucloud.io`**. Do not add `https://apex.xaucloud.io` for WebRequest.
 5. Attach Apex to XAUUSD/XAUUSDm.
 6. Enter the Apex license in `InpApexLicense`.
 7. Enable Algo Trading.
 8. Arm the correct license/account from the Apex dashboard.
+9. Confirm Experts log `APEX_READY XauCloud-Apex_v3.8.5-LivePlatform`.
+10. Dashboard pills must show **desired** vs **applied** revision. A local save is not "Apex armed".
 
 Expected EA identity:
 
-`XauCloud-Apex_v3.8.0-AstraFix`
+`XauCloud-Apex_v3.8.5-LivePlatform`
 
-Do not deploy an older v3.7.x EX5 after promoting this source.
+Do not deploy an older v3.8.4 / v3.8.3 / v3.8.2 EX5 after promoting this source.
+
+## Production
+
+`deploy/xaucloud-apex.service` sets `NODE_ENV=production`, `User=xaucloud-apex`, and
+`DATA_DIR=/var/lib/xaucloud-apex`. Production **refuses to start** with the published
+default `ADMIN_TOKEN` / `SESSION_SECRET`, missing secrets, short secrets, or `http://`
+XauCloud. Create the service user before enabling the unit.
 
 ## Validation
 

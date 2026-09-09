@@ -42,6 +42,52 @@ export function assertProductionSecrets(env=process.env){
   return [];
 }
 
+export function canonicalizeTimestamp(value, fallback=new Date()){
+  const fb=fallback instanceof Date?fallback:new Date(fallback);
+  const iso=()=>fb.toISOString();
+  if(value==null||value==='') return iso();
+  if(typeof value==='number' && Number.isFinite(value)){
+    const ms=value>0 && value<1e12?value*1000:value;
+    const d=new Date(ms);
+    return Number.isNaN(d.getTime())?iso():d.toISOString();
+  }
+  const s=String(value).trim();
+  if(/^-?\d+(\.\d+)?$/.test(s)){
+    const n=Number(s);
+    const ms=n>0 && n<1e12?n*1000:n;
+    const d=new Date(ms);
+    return Number.isNaN(d.getTime())?iso():d.toISOString();
+  }
+  const d=new Date(s);
+  return Number.isNaN(d.getTime())?iso():d.toISOString();
+}
+
+export function classifyConfigDelivery(delivery, configured){
+  const localSaved=true;
+  if(!configured) return {status:'BRIDGE_NOT_CONFIGURED',queued:false,localSaved};
+  if(delivery==null) return {status:'BRIDGE_NOT_CONFIGURED',queued:false,localSaved};
+  if(delivery.queued) return {status:'QUEUED_FOR_BRIDGE',queued:true,localSaved,reason:delivery.reason||null};
+  if(delivery.ok===false) return {status:'BRIDGE_FAILED',queued:false,localSaved,reason:delivery.reason||delivery.error||null};
+  return {status:'BRIDGE_DELIVERED',queued:false,localSaved};
+}
+
+export function licenseAllowsUnlimited(lic){
+  if(!lic) return false;
+  if(lic.unlimitedEntitled===true) return true;
+  const tier=String(lic.licenseTier||'').toUpperCase();
+  if(tier==='UNLIMITED') return true;
+  // Historical admin-created licenses stored the entitlement on the LICENSE record
+  // as accountProfile, before licenseTier existed. Customer config is NOT this field.
+  if(!lic.licenseTier && String(lic.accountProfile||'').toUpperCase()==='UNLIMITED') return true;
+  return false;
+}
+
+export function numOrNull(v){
+  if(v===null||v===undefined||v==='') return null;
+  const n=typeof v==='number'?v:Number(v);
+  return Number.isFinite(n)?n:null;
+}
+
 const SESSION_TTL_DAYS=Math.max(1,Number(process.env.SESSION_TTL_DAYS||3650));
 const SESSION_TTL_MS=SESSION_TTL_DAYS*24*60*60*1000;
 const LEGACY_DATA=path.join(__dirname,'data');
@@ -51,6 +97,7 @@ const LICENSE_CONFIGS=path.join(DATA,'license-configs.json');
 const EVENTS=path.join(DATA,'events.ndjson');
 const LICENSES=path.join(DATA,'licenses.json');
 const OUTBOX=path.join(DATA,'bridge-outbox.ndjson');
+const MANAGER_LEASES=path.join(DATA,'manager-leases.json');
 const APEX_PUBLIC_ORIGIN=String(process.env.APEX_PUBLIC_ORIGIN||'https://apex.xaucloud.io').trim().replace(/\/+$/,'');
 const NOTIFICATIONS=createNotificationEngine({dataDir:DATA,origin:APEX_PUBLIC_ORIGIN,logger:console});
 const XAUCLOUD_BASE_URL=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
@@ -372,15 +419,75 @@ async function syncBridgeLicense(key,lic,{resetAccount=false,queueOnFailure=fals
     return {queued:true,reason:String(e?.message||e)};
   }
 }
-async function syncBridgeConfig(key,config,commandRevision=0,{queueOnFailure=false}={}){
+async function syncBridgeConfig(key,config,commandRevision=0,{queueOnFailure=false,extra={}}={}){
   if(!bridgeConfigured())return null;
-  const payload={license:normalizeLicense(key),config:clean(config),commandRevision:Number(commandRevision||0)};
+  const leases=await readJson(MANAGER_LEASES,{}).catch(()=>({}));
+  const lease=leases[normalizeLicense(key)]||null;
+  const payload={
+    license:normalizeLicense(key),
+    config:{
+      ...clean(config),
+      ...(lease?{
+        managerInstanceId:lease.instanceId,
+        managerGeneration:lease.generation,
+        managerLeaseUntil:Math.floor(lease.expiresAt/1000),
+        managerAccount:lease.account||'',
+        managerSymbol:lease.symbol||'',
+        managerMagic:lease.magic||0
+      }:{}),
+      ...extra
+    },
+    commandRevision:Number(commandRevision||0)
+  };
   try{return await bridgeRequest('/api/cloud/apex/bridge/config/upsert',{method:'POST',payload})}
   catch(e){
     if(!queueOnFailure)throw e;
     await outboxAppend({route:'/api/cloud/apex/bridge/config/upsert',payload,kind:'config',license:normalizeLicense(key)});
     return {queued:true,reason:String(e?.message||e)};
   }
+}
+
+const MANAGER_LEASE_MS=45_000;
+export function nextManagerLease(current,claim,now=Date.now()){
+  const instanceId=String(claim?.instanceId||'').trim();
+  if(!instanceId) return {lease:current||null,changed:false,reason:'NO_INSTANCE_ID'};
+  if(current && current.instanceId===instanceId && current.expiresAt>now){
+    return {lease:{...current,expiresAt:now+MANAGER_LEASE_MS,account:claim.account||current.account,symbol:claim.symbol||current.symbol,magic:claim.magic||current.magic,lastSeen:now},changed:true,reason:'REFRESH'};
+  }
+  if(current && current.instanceId!==instanceId && current.expiresAt>now){
+    return {lease:current,changed:false,reason:'HELD_BY_OTHER'};
+  }
+  const generation=Number(current?.generation||0)+1;
+  return {lease:{instanceId,generation,expiresAt:now+MANAGER_LEASE_MS,account:claim.account||'',symbol:claim.symbol||'',magic:claim.magic||0,lastSeen:now},changed:true,reason:current?'TAKEOVER_AFTER_EXPIRY':'GRANT'};
+}
+
+async function reconcileManagerLeases(){
+  if(!bridgeConfigured())return {checked:0,updated:0,reason:'BRIDGE_NOT_CONFIGURED'};
+  const licenses=await readLicenses();
+  const leases=await readJson(MANAGER_LEASES,{});
+  let checked=0,updated=0;
+  for(const [rawKey,lic] of Object.entries(licenses)){
+    if(licenseStatusFor(lic)!=='ACTIVE')continue;
+    const key=normalizeLicense(rawKey);
+    checked++;
+    const st=await readBridgeStatusSafe(key);
+    const hb=st.ok && st.data?.heartbeat && typeof st.data.heartbeat==='object'?st.data.heartbeat:null;
+    const instanceId=String(hb?.instance_id||hb?.instanceId||lic.instanceId||'').trim();
+    if(!instanceId)continue;
+    const claim={
+      instanceId,
+      account:String(hb?.account_number||lic.lastAccount||lic.account||''),
+      symbol:String(hb?.symbol||lic.symbol||''),
+      magic:Number(hb?.magic||lic.magic||0)
+    };
+    const nxt=nextManagerLease(leases[key],claim,Date.now());
+    if(!nxt.changed)continue;
+    leases[key]=nxt.lease;
+    updated++;
+    await syncBridgeConfig(key,await getLicenseConfig(key),Number(lic.commandRevision||0),{queueOnFailure:true}).catch(()=>null);
+  }
+  if(updated) await atomic(MANAGER_LEASES,leases);
+  return {checked,updated};
 }
 async function readBridgeStatus(key){
   return bridgeRequest('/api/cloud/apex/bridge/status?license='+encodeURIComponent(normalizeLicense(key)));
@@ -467,6 +574,9 @@ async function saveLicenseConfig(key,partial,{bumpRevision=true,expectedRevision
     const licenses=await readLicenses();
     const lic=licenses[key];
     if(!lic)throw Object.assign(new Error('license_not_found'),{httpStatus:404});
+    if(partial && partial.accountProfile==='UNLIMITED' && !licenseAllowsUnlimited(lic))
+      throw Object.assign(new Error('UNLIMITED_NOT_ENTITLED'),{httpStatus:403,
+        detail:{licenseTier:lic.licenseTier||lic.accountProfile||'NORMAL'}});
     const currentRevision=Number(lic.commandRevision||0);
     if(expectedRevision!==null&&Number(expectedRevision)!==currentRevision)
       throw Object.assign(new Error('revision_conflict'),{httpStatus:409,detail:{expectedRevision:Number(expectedRevision),currentRevision}});
@@ -474,6 +584,12 @@ async function saveLicenseConfig(key,partial,{bumpRevision=true,expectedRevision
     const v=validateConfig(partial,prev);
     if(strict&&!v.ok)throw Object.assign(new Error('invalid_config'),{httpStatus:400,detail:{errors:v.errors}});
     const next=clean(v.config);
+    if(next.accountProfile==='UNLIMITED' && !licenseAllowsUnlimited(lic)){
+      if(partial && partial.accountProfile==='UNLIMITED')
+        throw Object.assign(new Error('UNLIMITED_NOT_ENTITLED'),{httpStatus:403,
+          detail:{licenseTier:lic.licenseTier||lic.accountProfile||'NORMAL'}});
+      next.accountProfile='NORMAL';
+    }
     const revision=bumpRevision?currentRevision+1:currentRevision;
     all[key]=next;
 
@@ -489,7 +605,8 @@ async function saveLicenseConfig(key,partial,{bumpRevision=true,expectedRevision
       await writeLicenses(licenses);
     }
     const delivery=await syncBridgeConfig(key,next,revision,{queueOnFailure:true});
-    return {config:next,revision,configHash:configHash(next),delivery};
+    return {config:next,revision,configHash:configHash(next),
+      delivery:classifyConfigDelivery(delivery,bridgeConfigured())};
   });
 }
 
@@ -618,6 +735,8 @@ async function stampHeartbeat(v,payload){
     lic.observerOnly=Boolean(payload.observerOnly??payload.observer_only);
     lic.preflightBlock=String(payload.preflightBlock||payload.preflight_block||'').slice(0,64);
     lic.scanGate=String(payload.scanGate||payload.scan_gate||'').slice(0,64);
+    lic.instanceId=String(payload.instance_id||payload.instanceId||lic.instanceId||'').slice(0,120);
+    lic.magic=Number(payload.magic??lic.magic??0);
     lic.updatedAt=now;
     licenses[v.key]=lic;
     await writeLicenses(licenses);
@@ -639,11 +758,13 @@ function eventId(e){
 }
 async function appendEvent(e){
   await fs.mkdir(DATA,{recursive:true});
-  const row={ts:new Date().toISOString(),...e};
+  const row={...e};
+  row.ts=canonicalizeTimestamp(e.ts||e.emittedAt);
+  row.emittedAtRaw=e.emittedAt??e.ts??null;
   row.eventId=eventId(row);
   await fs.appendFile(EVENTS,JSON.stringify(row)+'\n');
   // Push is best-effort and fully decoupled from trading/event acceptance.
-  NOTIFICATIONS.ingest(row).catch(e=>console.error('APEX_PUSH_INGEST_FAILED',String(e?.message||e)));
+  NOTIFICATIONS.ingest(row).catch(err=>console.error('APEX_PUSH_INGEST_FAILED',String(err?.message||err)));
   return row;
 }
 async function allEvents(){
@@ -657,7 +778,8 @@ async function ingestRemoteEvents(key,remoteEvents,known){
   const lines=[];
   for(const raw of remoteEvents){
     const row={...raw,license:key};
-    row.ts=row.ts||row.emittedAt||new Date().toISOString();
+    row.ts=canonicalizeTimestamp(row.ts||row.emittedAt);
+    row.emittedAtRaw=raw.emittedAt??raw.ts??null;
     row.eventId=eventId(row);
     if(known.has(row.eventId))continue;
     known.add(row.eventId);
@@ -670,7 +792,8 @@ async function ingestRemoteEvents(key,remoteEvents,known){
 }
 function sortEvents(events){
   return [...events].sort((a,b)=>{
-    const ta=Date.parse(a.ts||0)||0,tb=Date.parse(b.ts||0)||0;
+    const ta=Date.parse(canonicalizeTimestamp(a.ts||a.emittedAt,0))||0;
+    const tb=Date.parse(canonicalizeTimestamp(b.ts||b.emittedAt,0))||0;
     return ta===tb?String(a.eventId||'').localeCompare(String(b.eventId||'')):ta-tb;
   });
 }
@@ -711,6 +834,55 @@ export function projectCampaign(events){
     }
   }
   return c;
+}
+export function decorateCampaign(projected, hb={}, lastSeen=null){
+  if(!projected && !(hb && (hb.campaign_active||hb.campaignActive))) return null;
+  const c=projected?{...projected}:{};
+  if(!projected){
+    c.campaignId=hb.campaign_id||hb.campaignId||null;
+    c.state=String(hb.campaign_state||hb.campaignState||'ACTIVE');
+    c.layers=numOrNull(hb.layers);
+    c.source='HEARTBEAT';
+    c.direction=null;
+  }
+  const startEquity=numOrNull(c.cycleStart??c.startEquity);
+  const hbEquity=numOrNull(hb.equity);
+  const hbBalance=numOrNull(hb.balance);
+  const currentEquity=hbEquity;
+  const floatingFromHb=(hbEquity!=null && startEquity!=null)?hbEquity-startEquity
+    :(hbEquity!=null && hbBalance!=null)?hbEquity-hbBalance:null;
+  const target=numOrNull(c.targetEquity);
+  const profitPct=(startEquity>0 && currentEquity!=null)?((currentEquity-startEquity)/startEquity)*100:null;
+  const progressPct=(startEquity!=null && target!=null && target>startEquity && currentEquity!=null)
+    ? ((currentEquity-startEquity)/(target-startEquity))*100 : null;
+  const totalVolume=numOrNull(c.basketVolume ?? hb.basket_volume ?? hb.basketVolume);
+  const layers=numOrNull(c.layers ?? hb.layers);
+  return {
+    campaignId:c.campaignId||null,
+    direction:c.direction||null,
+    state:c.state||null,
+    campaignState:c.state||null,
+    closingState:c.state==='CLOSING'?c.state:null,
+    startedAt:c.startedAt||null,
+    layers,
+    firstEntry:numOrNull(c.entryPrice??c.firstEntryPrice),
+    startEquity,
+    currentEquity,
+    floatingPL:floatingFromHb,
+    profitPct,
+    targetEquity:target,
+    progressPct,
+    totalVolume,
+    basketVolume:totalVolume,
+    profitFloor:numOrNull(c.earnedFloorPct),
+    setupId:c.setupId||null,
+    bosKind:c.bosKind||null,
+    lastLiveUpdate:lastSeen||c.lastEventAt||null,
+    lastEventAt:c.lastEventAt||null,
+    signature:c.signature||null,
+    anchorsKnown:c.anchorsKnown,
+    source:c.source||'EVENTS'
+  };
 }
 export function projectAck(events){
   let ack={revision:0,status:null,at:null,appliedRevision:0,configHash:null};
@@ -782,6 +954,11 @@ function humanEvent(e){
   switch(e.type){
     case 'WATCH_ARMED':return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
     case 'SETUP_CANCELLED':return `Setup cancelled — ${e.cancelReason||'no longer valid'}`;
+    case 'SETUP_LOCATED':return `Setup confirmed — waiting for origin retest`;
+    case 'WATCH_EXTREME_UPDATED':return `Watched extreme updated`;
+    case 'ORDER_PENDING':return `Broker accepted the order as pending — waiting for fill`;
+    case 'ORDER_FILLED_LATE':return `Late fill attached to the campaign`;
+    case 'ORDER_PENDING_CLEARED':return `Pending order cleared — ${e.reason||''}`;
     case 'CAMPAIGN_START':return `${d} campaign started`;
     case 'LAYER_OPEN':return `Market confirmed continuation — added position ${e.layer}`;
     case 'ENTRY_REJECTED_AT_GATE':return `Entry skipped at the final price check — ${e.reason||''}`;
@@ -825,10 +1002,12 @@ function settingsView(c){return {
   masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,
   recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
   maxBasketLots:c.maxBasketLots,minMarginLevelPct:c.minMarginLevelPct,marginReservePct:c.marginReservePct,
+  unlimitedSizingNote:'Each valid UNLIMITED add uses 100% of CURRENT executable remaining capacity. The multiplier control is a no-op while baseMarginPct is 100 (runtime cap).',
   advanced:{entryScore:c.entryScore,addScore:c.addScore,impulseAtr:c.impulseAtr,sweepAtr:c.sweepAtr,
     rejectionBars:c.rejectionBars,watchExpiryMinutes:c.watchExpiryMinutes,rejectionZoneAtr:c.rejectionZoneAtr,
     addSpacingAtr:c.addSpacingAtr,requireM3Confirm:c.requireM3Confirm,requireM5Context:c.requireM5Context,
-    cooldownMinutes:c.cooldownMinutes,learningEnabled:c.learningEnabled}
+    cooldownMinutes:c.cooldownMinutes,learningEnabled:c.learningEnabled,
+    learningNote:'OBSERVATION_ONLY. Apex does not adapt live. Adjustments are forced to zero.'}
 }}
 
 //======================= dashboard projection =========================
@@ -837,6 +1016,7 @@ async function buildMe(key){
   const desiredHash=configHash(cfg);
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
+    unlimitedEntitled:licenseAllowsUnlimited(lic),
     expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
   if(status!=='ACTIVE')
     return {license:base,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},
@@ -868,7 +1048,7 @@ async function buildMe(key){
     return true;
   });
 
-  const campaign=projectCampaign(events);
+  const campaign=decorateCampaign(projectCampaign(events),hb||{},lastSeen);
   const ack=projectAck(events);
 
   const desiredRevision=Number(lic.commandRevision||0);
@@ -937,7 +1117,14 @@ async function buildMe(key){
       configSource:remote?'XAUCLOUD_BRIDGE':'REMOTE/CACHED_LOCAL',
       appliedRevision:appliedRevision||null,appliedConfigHash:appliedHash||null,
       desiredRevision,desiredConfigHash:desiredHash,
-      asOf:lastSeen||lic.lastSeen||null
+      asOf:lastSeen||lic.lastSeen||null,
+      l1MarginPct:cfg.normalL1MarginPct,l2MarginPct:cfg.normalL2MarginPct,
+      l3PlusMarginPct:cfg.normalL3PlusMarginPct,takeProfitPct:cfg.normalTargetProfitPct,
+      fixedSLGoldMove:cfg.normalFixedSLGoldMove,beEnabled:cfg.masterBreakEvenEnabled,
+      beTriggerPct:cfg.masterBreakEvenTriggerPct,recoveryExitEnabled:cfg.recoveryExitEnabled,
+      recoveryArmPctOfSL:cfg.recoveryExitArmPctOfSL,ratchetEnabled:cfg.profitRatchetEnabled,
+      ratchetTriggerPct:cfg.ratchetTriggerPct,ratchetLockPct:cfg.ratchetLockPct,
+      ratchetStepPct:cfg.ratchetStepPct,ratchetLockStepPct:cfg.ratchetLockStepPct
     },
     settings:settingsView(cfg),
     bridge:{
@@ -1085,8 +1272,17 @@ const server=http.createServer(async(req,res)=>{
       const {expectedRevision,...patch}=b||{};
       const saved=await saveLicenseConfig(s.lic,patch,{bumpRevision:true,
         expectedRevision:expectedRevision===undefined?null:Number(expectedRevision)});
+      const licensesAfter=await readLicenses();
+      const applied=Number(licensesAfter[s.lic]?.appliedRevision||0);
+      const delivery=saved.delivery||classifyConfigDelivery(null,bridgeConfigured());
+      let ackStatus='EA_NOT_ACKNOWLEDGED';
+      if(delivery.status==='BRIDGE_DELIVERED' && applied===saved.revision) ackStatus='EA_APPLIED';
+      else if(delivery.status==='BRIDGE_DELIVERED') ackStatus='BRIDGE_DELIVERED';
+      else ackStatus=delivery.status;
       return json(res,200,{ok:true,config:saved.config,commandRevision:saved.revision,
-        configHash:saved.configHash,delivery:saved.delivery?.queued?'QUEUED_FOR_BRIDGE':'DELIVERED'});
+        configHash:saved.configHash,delivery:ackStatus,deliveryDetail:delivery,
+        desiredRevision:saved.revision,appliedRevision:applied||null,
+        inSync:applied>0?applied===saved.revision:false});
     }
 
     // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
@@ -1233,7 +1429,11 @@ const server=http.createServer(async(req,res)=>{
 await ensure();
 await NOTIFICATIONS.ensure().catch(e=>console.error('APEX_PUSH_STARTUP_DEFERRED',String(e?.message||e)));
 if(process.env.NODE_ENV!=='test'){
-  console.warn("APEX production secret startup check bypassed");
+  if(process.env.NODE_ENV==='production'){
+    assertProductionSecrets(process.env);
+  }else if(secretProblems(process.env).length){
+    console.warn('APEX secret check: not enforcing because NODE_ENV is not production. Set NODE_ENV=production to refuse default/short secrets.');
+  }
   // APEX-AUDIT-021: the local service comes up FIRST. Bridge reconciliation runs in the
   // background and its state is reported honestly through /health and the dashboard;
   // it never blocks startup or a dashboard request.
@@ -1243,5 +1443,6 @@ if(process.env.NODE_ENV!=='test'){
   setTimeout(()=>{reconcileNotificationBridgeEvents().catch(e=>console.error('APEX_PUSH_BRIDGE_RECONCILE_FAILED',String(e?.message||e)))},1500).unref?.();
   setInterval(()=>{reconcileNotificationBridgeEvents().catch(e=>console.error('APEX_PUSH_BRIDGE_RECONCILE_FAILED',String(e?.message||e)))},8000).unref?.();
   setInterval(()=>{drainOutbox().catch(e=>console.error('APEX_OUTBOX_DRAIN_FAILED',String(e?.message||e)))},15_000).unref?.();
+  setInterval(()=>{reconcileManagerLeases().catch(e=>console.error('APEX_MANAGER_LEASE_FAILED',String(e?.message||e)))},8000).unref?.();
 }
 export {server};

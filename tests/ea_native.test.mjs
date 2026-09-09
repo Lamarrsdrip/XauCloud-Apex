@@ -336,6 +336,45 @@ test('v3.8.4: swing liquidity refs a confirmed pivot; rolling takes the grind hi
   assert.ok(R.liq_swing_vs_rolling.swingPh < R.liq_swing_vs_rolling.rollingPh);
 });
 
+test('v3.8.5: WAF/HTML 401/403 is not an authenticated license denial',{skip},()=>{
+  const r=R.waf_vs_license_envelope;
+  assert.equal(r.htmlIsJson,false);
+  assert.equal(r.emptyIsJson,false);
+  assert.equal(r.jsonObj,true);
+  assert.equal(r.wafDenied,false);
+  assert.equal(r.licenseDenied,true);
+  assert.equal(r.expiredDenied,true);
+  assert.equal(r.activeDenied,false);
+});
+
+test('v3.8.5: TRADE_RETCODE_PLACED is pending, not a reject',{skip},()=>{
+  const r=R.placed_is_pending_not_reject;
+  assert.equal(r.filled,1);
+  assert.equal(r.placed,2);
+  assert.equal(r.placedButFilled,1,'a fill always wins even if retcode is PLACED');
+  assert.equal(r.nomoney,0);
+});
+
+test('v3.8.5: cross-terminal lease — only the confirmed manager opens new exposure',{skip},()=>{
+  const r=R.cross_terminal_lease;
+  assert.equal(r.noCloudAllows,true,'same-terminal GlobalVariable still applies when cloud does not echo a lease');
+  assert.equal(r.weHold,true);
+  assert.equal(r.otherHolds,false);
+  assert.equal(r.expiredBlocked,true);
+  assert.equal(r.partitionWithoutPriorBlocked,true,'network loss must not mint a second manager');
+  assert.equal(r.partitionWithPriorUntilOk,true,'the live manager keeps protecting until the lease actually expires');
+});
+
+test('v3.8.5: restart-while-confirmed restores; expired/reclaimed snapshots do not',{skip},()=>{
+  const r=R.restart_while_confirmed;
+  assert.equal(r.watchingOk,true);
+  assert.equal(r.confirmedOk,true);
+  assert.equal(r.expiredWatchBlocked,true);
+  assert.equal(r.confirmedUsesConfirmedAt,true,'confirmed expiry clock starts at confirmedAt, not the original sweep');
+  assert.equal(r.reclaimedBlocked,true);
+  assert.equal(r.idleBlocked,true);
+});
+
 test('APEX-AUDIT-001: stale-quote rejection is off by default and works when enabled',{skip},()=>{
   assert.equal(R.gate_stale_quote.ok,false);
   assert.equal(R.gate_stale_quote.quoteStale,true);

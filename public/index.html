@@ -416,7 +416,13 @@ function renderStatusPills(){
   var me = STATE.me || {};
   var wrap = document.getElementById('status-pills');
   var parts = [];
-  parts.push(pill(me.armed? 'Apex Armed':'Apex Disarmed', me.armed?'green':'gray'));
+  var desiredArmed = !!(me.control && me.control.desired && me.control.desired.armed);
+  var appliedRev = me.control && me.control.applied ? me.control.applied.revision : null;
+  var desiredRev = me.control && me.control.desired ? me.control.desired.revision : null;
+  var inSync = me.control && me.control.applied ? me.control.applied.inSync : null;
+  if (inSync===true) parts.push(pill(desiredArmed? 'Apex armed — EA applied r'+(appliedRev||'') : 'Apex disarmed — EA applied', desiredArmed?'green':'gray'));
+  else if (desiredArmed) parts.push(pill('Arm queued — waiting for EA r'+(desiredRev||''), 'amber'));
+  else parts.push(pill(me.armed? 'Disarm queued / desired disarmed':'Apex Disarmed', 'gray'));
   var mt5 = (me.mt5&&me.mt5.status) || 'DISCONNECTED';
   parts.push(pill('MT5 '+ (mt5==='CONNECTED'?'Connected':mt5==='STALE'?'Stale':'Disconnected'), mt5==='CONNECTED'?'green':mt5==='STALE'?'amber':'red'));
   var ls = (me.license&&me.license.status) || 'LICENSE_NOT_FOUND';
@@ -459,7 +465,7 @@ function pageDashboard(me){
     + statTile('Balance', fmtMoney(acc.balance, acc.currency))
     + statTile('Equity', fmtMoney(acc.equity, acc.currency))
     + statTile('Free Margin', fmtMoney(acc.freeMargin, acc.currency))
-    + statTile('Current P/L', camp? fmtMoney(camp.floatingPL, acc.currency): '—', camp? (camp.floatingPL>=0?'pos':'neg'):'')
+    + statTile('Current P/L', camp? fmtMoney(camp.floatingPL, acc.currency): '—', camp && camp.floatingPL!=null? (camp.floatingPL>=0?'pos':'neg'):'')
     + '</div>';
 
   if (camp){
@@ -493,27 +499,35 @@ function statTile(label, value, cls){
 }
 
 function campaignProgressCard(camp, cur){
-  var pct = Math.round(camp.progressPct||0);
+  var pct = (camp.progressPct===undefined||camp.progressPct===null||!isFinite(camp.progressPct)) ? null : Math.round(camp.progressPct);
   return '<div class="card"><h3>Target Progress</h3>'
     + '<div class="row"><span class="k">Starting Equity</span><span class="v">'+fmtMoney(camp.startEquity,cur)+'</span></div>'
     + '<div class="row"><span class="k">Current Equity</span><span class="v">'+fmtMoney(camp.currentEquity,cur)+'</span></div>'
     + '<div class="row"><span class="k">Target Equity</span><span class="v">'+fmtMoney(camp.targetEquity,cur)+'</span></div>'
     + '<div class="row"><span class="k">Campaign Profit</span><span class="v">'+fmtPct(camp.profitPct)+'</span></div>'
-    + '<div class="row"><span class="k">Target</span><span class="v">'+fmtPct(camp.targetPct,0)+'</span></div>'
-    + '<div class="progress-wrap"><div class="progress-big">'+pct+'%</div>'
-    + '<div class="progress-track"><div class="progress-fill" style="width:'+Math.min(100,Math.max(0,pct))+'%"></div></div></div>'
+    + '<div class="row"><span class="k">Target progress</span><span class="v">'+(pct===null?'—':pct+'%')+'</span></div>'
+    + '<div class="progress-wrap"><div class="progress-big">'+(pct===null?'—':pct+'%')+'</div>'
+    + '<div class="progress-track"><div class="progress-fill" style="width:'+(pct===null?0:Math.min(100,Math.max(0,pct)))+'%"></div></div></div>'
     + '</div>';
 }
 
 function campaignSummaryCard(camp, cur, showLayers){
-  var badge = camp.direction==='BUY'? '<span class="badge badge-buy">ACTIVE BUY CAMPAIGN</span>' : '<span class="badge badge-sell">ACTIVE SELL CAMPAIGN</span>';
+  var dirLabel = camp.direction==='BUY'?'ACTIVE BUY CAMPAIGN':camp.direction==='SELL'?'ACTIVE SELL CAMPAIGN':'ACTIVE CAMPAIGN';
+  var badgeCls = camp.direction==='BUY'?'badge-buy':camp.direction==='SELL'?'badge-sell':'badge-target';
+  var badge = '<span class="badge '+badgeCls+'">'+esc(dirLabel)+'</span>';
+  var vol = (camp.totalVolume===undefined||camp.totalVolume===null||!isFinite(camp.totalVolume)) ? '—' : Number(camp.totalVolume).toFixed(2);
   var html = '<div class="card"><h3>Active Campaign</h3>'
     + '<div style="margin-bottom:10px">'+badge+'</div>'
+    + '<div class="row"><span class="k">State</span><span class="v">'+esc(camp.campaignState||camp.state||'—')+'</span></div>'
+    + '<div class="row"><span class="k">Closing</span><span class="v">'+esc(camp.closingState||'—')+'</span></div>'
     + '<div class="row"><span class="k">Started</span><span class="v">'+esc(fmtDate(camp.startedAt))+'</span></div>'
-    + '<div class="row"><span class="k">Total Lots</span><span class="v">'+Number(camp.totalVolume||0).toFixed(2)+'</span></div>'
-    + '<div class="row"><span class="k">Layers</span><span class="v">'+esc(camp.layers)+'</span></div>'
+    + '<div class="row"><span class="k">First entry</span><span class="v">'+esc(camp.firstEntry==null?'—':Number(camp.firstEntry).toFixed(2))+'</span></div>'
+    + '<div class="row"><span class="k">Total Lots</span><span class="v">'+vol+'</span></div>'
+    + '<div class="row"><span class="k">Layers</span><span class="v">'+(camp.layers==null?'—':esc(camp.layers))+'</span></div>'
     + '<div class="row"><span class="k">Floating P/L</span><span class="v">'+fmtMoney(camp.floatingPL,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Campaign ID</span><span class="v" style="font-size:11px;color:var(--text-faint)">'+esc(camp.campaignId)+'</span></div>';
+    + '<div class="row"><span class="k">Profit floor</span><span class="v">'+(camp.profitFloor==null?'—':fmtPct(camp.profitFloor))+'</span></div>'
+    + '<div class="row"><span class="k">Last live update</span><span class="v">'+esc(fmtAgo(camp.lastLiveUpdate))+'</span></div>'
+    + '<div class="row"><span class="k">Campaign ID</span><span class="v" style="font-size:11px;color:var(--text-faint)">'+esc(camp.campaignId||'—')+'</span></div>';
   if (showLayers && camp.layerDetail && camp.layerDetail.length){
     html += '<div class="layer-list"><h3 style="margin-top:14px">Open Layers</h3>';
     camp.layerDetail.forEach(function(l){
@@ -527,9 +541,11 @@ function campaignSummaryCard(camp, cur, showLayers){
 
 function watchingCard(me){
   var recent = (me.recentHuman||[])[0];
-  var watching = recent && recent.type==='WATCH_ARMED' && (Date.now()-Date.parse(recent.ts))<20*60*1000;
-  return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>APEX IS WATCHING</h4>'
-    + '<p>'+(watching? 'A potential setup was recently detected — waiting for confirmation.' : 'Waiting for a high-quality setup.')+'</p></div>'
+  var recentTs = recent && (Date.parse(recent.ts));
+  var watching = recent && (recent.type==='WATCH_ARMED'||recent.type==='SETUP_LOCATED'||recent.type==='WATCH_EXTREME_UPDATED') && Number.isFinite(recentTs) && (Date.now()-recentTs)<20*60*1000;
+  var waitingRetest = recent && recent.type==='SETUP_LOCATED' && Number.isFinite(recentTs) && (Date.now()-recentTs)<20*60*1000;
+  return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>'+(waitingRetest?'WAITING FOR ORIGIN RETEST':'APEX IS WATCHING')+'</h4>'
+    + '<p>'+(waitingRetest? 'Setup confirmed — Apex will enter only if price returns to the displacement origin.' : watching? 'A potential setup was recently detected — waiting for confirmation.' : 'Waiting for a high-quality setup.')+'</p></div>'
     + '<div class="stepper">'
     + '<div class="step'+(!watching?' active':'')+'"><div class="dot"></div><div class="lbl">Scanning</div></div>'
     + '<div class="step-line'+(watching?' active':'')+'"></div>'
@@ -548,8 +564,17 @@ function recentFeedCard(items){
 }
 
 function armDisarmCard(me){
-  return '<div class="card"><div class="toggle-row"><div><div class="lbl">Apex Armed</div><div class="hint">When disarmed, Apex will not start new campaigns or add new layers. Active positions are still managed.</div></div>'
-    + '<label class="switch"><input type="checkbox" id="arm-toggle" '+(me.armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div></div>';
+  var ctrl = me.control||{};
+  var desired = ctrl.desired||{};
+  var applied = ctrl.applied||{};
+  var hint = 'When disarmed, Apex will not start new campaigns or add new layers. Active positions are still managed.';
+  if (applied.inSync===true) hint = 'EA applied revision '+(applied.revision||desired.revision||'—')+'. '+hint;
+  else if (desired.revision) hint = 'Desired revision '+(desired.revision)+' — EA applied '+(applied.revision||'nothing yet')+'. '+hint;
+  return '<div class="card"><div class="toggle-row"><div><div class="lbl">Apex Armed (desired)</div><div class="hint">'+esc(hint)+'</div></div>'
+    + '<label class="switch"><input type="checkbox" id="arm-toggle" '+(desired.armed||me.armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div>'
+    + '<div class="row"><span class="k">Desired revision</span><span class="v">'+(desired.revision==null?'—':desired.revision)+'</span></div>'
+    + '<div class="row"><span class="k">Applied revision</span><span class="v">'+(applied.revision==null?'—':applied.revision)+'</span></div>'
+    + '<div class="row"><span class="k">In sync</span><span class="v">'+(applied.inSync===true?'yes':applied.inSync===false?'no':'unknown')+'</span></div></div>';
 }
 function configSyncCard(me){
   var ec = me.effectiveConfig;
@@ -610,10 +635,14 @@ function wireDashboardControls(){
   if (t) t.addEventListener('change', function(){
     var val = t.checked;
     t.disabled = true;
-    api('/api/session/config', {method:'POST', body:{armed:val}}).then(function(){
-      toast(val? 'Apex armed' : 'Apex disarmed');
+    api('/api/session/config', {method:'POST', body:{armed:val}}).then(function(r){
+      var d = (r && r.delivery) || '';
+      if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved locally — bridge not configured; EA will not see this yet', true);
+      else if (d==='QUEUED_FOR_BRIDGE') toast(val? 'Arm queued — waiting for bridge/EA' : 'Disarm queued — waiting for bridge/EA');
+      else if (d==='EA_APPLIED' || r.inSync) toast(val? ('Apex armed — EA applied revision '+r.desiredRevision) : ('Apex disarmed — EA applied revision '+r.desiredRevision));
+      else toast(val? 'Arm queued — waiting for EA' : 'Disarm queued — waiting for EA');
       return api('/api/auth/me');
-    }).then(function(me){ STATE.me=me; renderStatusPills(); t.disabled=false; })
+    }).then(function(me){ STATE.me=me; renderStatusPills(); if (STATE.page==='dashboard'||STATE.page==='settings') renderPage(); t.disabled=false; })
     .catch(function(){ toast('Could not update — try again', true); t.checked=!val; t.disabled=false; });
   });
 }
@@ -713,8 +742,12 @@ function pageSettings(me){
   html += '<div class="card"><h3>Account</h3>'
     + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
     + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>NORMAL</option>'
-    + '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>UNLIMITED</option>'
-    + '</select><div class="hint">NORMAL accounts close the whole basket at a fixed target/ratchet and start fresh. UNLIMITED accounts use a multiplier-style target.</div></div>'
+    + (lic.unlimitedEntitled
+        ? '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>UNLIMITED</option>'
+        : '')
+    + '</select><div class="hint">'+(lic.unlimitedEntitled
+        ? 'NORMAL closes the whole basket at a fixed target/ratchet and starts fresh. UNLIMITED is an entitlement on this license: each valid add uses 100% of CURRENT executable remaining capacity.'
+        : 'This license is NORMAL. UNLIMITED is an admin entitlement, not a customer toggle.')+'</div></div>'
     + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). The Profit Ratchet below is the intended exit — a hard TP would close the basket before the ratchet can activate. Set above 0 to activate a hard target instead.</div></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save Settings</button></div>'
     + '</div>';
@@ -736,8 +769,8 @@ function pageSettings(me){
     + '<div class="field-grid">'
     + '<div class="field"><label>Fixed Master SL — Gold Move</label><input type="number" step="any" id="f-normalFixedSLGoldMove" value="'+esc(s.normalFixedSLGoldMove)+'" '+(disabled?'disabled':'')+'><div class="hint">XAU price distance from the first (master) entry, not pips or account money. 0 = no broker stop-loss on the master position.</div></div>'
     + '<div class="field"><label>Max Layers</label><input type="number" id="f-maxLayers" value="'+esc(s.maxLayers)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = broker/margin limited (no software cap)</div></div>'
-    + '<div class="field"><label>UNLIMITED Profile Multiplier</label><input type="number" id="f-layerMultiplier" value="'+esc(s.layerMultiplier)+'" '+(disabled?'disabled':'')+'><div class="hint">Only applies to the UNLIMITED account profile.</div></div>'
     + '</div>'
+    + '<div class="hint" style="margin-top:8px">UNLIMITED sizing: each valid add uses 100% of CURRENT executable remaining capacity. The old multiplier field is a no-op while baseMarginPct is capped at 100, so it is not shown.</div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-sl" '+(disabled?'disabled':'')+'>Save</button></div>'
     + '</div>';
 
@@ -841,8 +874,7 @@ function wireSettings(me){
   if (saveSl) saveSl.addEventListener('click', function(){
     var payload = {
       normalFixedSLGoldMove: Number(document.getElementById('f-normalFixedSLGoldMove').value),
-      maxLayers: Number(document.getElementById('f-maxLayers').value),
-      layerMultiplier: Number(document.getElementById('f-layerMultiplier').value)
+      maxLayers: Number(document.getElementById('f-maxLayers').value)
     };
     saveConfig(payload, 'save-sl', 'Save');
   });
@@ -898,8 +930,13 @@ function wireSettings(me){
 function saveConfig(payload, btnId, btnLabel){
   var btn = btnId ? document.getElementById(btnId) : null;
   if (btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
-  api('/api/session/config', {method:'POST', body:payload}).then(function(){
-    toast('Settings saved');
+  api('/api/session/config', {method:'POST', body:payload}).then(function(r){
+    var d = (r && r.delivery) || '';
+    if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved locally — bridge not configured; EA will not see this yet', true);
+    else if (d==='QUEUED_FOR_BRIDGE') toast('Saved — queued for bridge/EA (revision '+(r.desiredRevision||r.commandRevision||'')+')');
+    else if (d==='BRIDGE_FAILED') toast('Saved locally — bridge delivery failed', true);
+    else if (d==='EA_APPLIED' || r.inSync) toast('Saved — EA applied revision '+(r.appliedRevision||r.desiredRevision||''));
+    else toast('Saved — waiting for EA to apply revision '+(r.desiredRevision||r.commandRevision||''));
     return api('/api/auth/me');
   }).then(function(me){
     STATE.me=me;
@@ -907,7 +944,10 @@ function saveConfig(payload, btnId, btnLabel){
     if (STATE.page==='settings') renderPage();
   }).catch(function(e){
     if (btn){ btn.disabled=false; btn.textContent=btnLabel||'Save'; }
-    var msg = (e && e.data && e.data.error==='invalid_json') ? 'Could not save — try again' : 'Could not save settings';
+    var err = (e && e.data && e.data.error) || (e && e.message) || '';
+    var msg = 'Could not save settings';
+    if (err==='UNLIMITED_NOT_ENTITLED') msg = 'UNLIMITED is not enabled on this license';
+    else if (err==='invalid_json' || err==='invalid_config') msg = 'Could not save — try again';
     toast(msg, true);
   });
 }
@@ -928,7 +968,7 @@ function pageAccount(me){
     + '<li>Download XauCloud-Apex and add it to your MT5 Experts.</li>'
     + '<li>Attach it to a XAUUSD/XAUUSDm chart.</li>'
     + '<li>Enter your Apex License (shown above) in the EA\'s inputs.</li>'
-    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://apex.xaucloud.io</code>.</li>'
+    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://xaucloud.io</code> (not apex.xaucloud.io).</li>'
     + '<li>Enable Algo Trading (the button in the MT5 toolbar).</li>'
     + '<li>Arm Apex from the Dashboard or Settings page.</li>'
     + '</ol>'

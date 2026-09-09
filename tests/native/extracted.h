@@ -37,7 +37,7 @@ struct Setup
    SetupState state;
    string     id,sig,cancelReason;
    int        dir;
-   datetime   armedAt,sweepBarTime,confirmedAt,triggerBarTime;
+   datetime   armedAt,sweepBarTime,confirmedAt,triggerBarTime,waitingLocationSince;
    double     extreme,prior,atr,triggerPrice;
    string     bosKind;
    double     originHigh,originLow,originClose,originOpen;
@@ -74,6 +74,7 @@ datetime g_deadThesisSweep=0;
 datetime g_noRearmBeforeBar=0;
 int g_noRearmDir=0;
 CampState campState=CAMP_IDLE;
+int campDir=0;
 bool anchorsKnown=true;
 double campInvalidLevel=0,campOriginHigh=0,campOriginLow=0,campOriginClose=0;
 datetime campOriginBar=0;
@@ -567,7 +568,7 @@ void SetupReset(string reason)
       Emit("SETUP_CANCELLED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"cancelReason\":\"%s\",\"extreme\":%.5f,\"ageSec\":%d",
            S.id,S.dir,reason,S.extreme,(int)(TimeCurrent()-S.armedAt)));
    S.state=SETUP_NONE;S.id="";S.dir=0;S.sig="";S.cancelReason=reason;
-   S.armedAt=0;S.sweepBarTime=0;S.confirmedAt=0;S.triggerBarTime=0;
+   S.armedAt=0;S.sweepBarTime=0;S.confirmedAt=0;S.triggerBarTime=0;S.waitingLocationSince=0;
    S.extreme=0;S.prior=0;S.atr=0;S.triggerPrice=0;S.bosKind="";
    S.originHigh=0;S.originLow=0;S.originClose=0;S.originOpen=0;S.originBarTime=0;
    S.execHigh=0;S.execLow=0;
@@ -585,6 +586,7 @@ void ArmSetup(int dir,datetime sweepBar,double extreme,double prior,double atr,d
    S.confirmedAt=0;S.triggerBarTime=0;S.triggerPrice=0;S.bosKind="";S.cancelReason="";
    S.originHigh=0;S.originLow=0;S.originClose=0;S.originOpen=0;S.originBarTime=0;
    S.execHigh=0;S.execLow=0;
+   S.waitingLocationSince=0;
    S.dead=false;S.deadReason="";
    S.sig=dir<0?"SELL_UPSIDE_LIQUIDITY_EXHAUST":"BUY_DOWNSIDE_LIQUIDITY_EXHAUST";
    Emit("WATCH_ARMED",StringFormat(",\"setupId\":\"%s\",\"watchDir\":%d,\"impulseAtr\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"sweepBarTime\":%lld",
@@ -673,6 +675,10 @@ Snap Observe()
       canArm=false;
    if(canArm&&g_noRearmDir!=0&&m1[1].time>g_noRearmBeforeBar)
       g_noRearmDir=0;
+   // During an ACTIVE campaign, only same-direction setups may arm (reversal-add).
+   // Opposite watches are a new campaign thesis, not an add, and must not mutate S.
+   if(canArm&&campState==CAMP_ACTIVE&&campDir!=0&&(-imp)!=campDir)
+      canArm=false;
    if(canArm&&s.impulseMult>=C.impulseAtr&&directional>=5)
      {
       double ex=imp>0?m1[1].high:m1[1].low;
@@ -776,7 +782,7 @@ Snap Observe()
       s.reason=s.valid?"SETUP_CONFIRMED_ORIGIN_STORED":"WATCHING_FOR_REJECTION_AND_BOS";
       if(s.valid)
         {
-         S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();
+         S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.waitingLocationSince=TimeCurrent();
          S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=bosKind;
          S.originHigh=m1[1].high;S.originLow=m1[1].low;S.originClose=m1[1].close;S.originOpen=m1[1].open;
          S.originBarTime=m1[1].time;
@@ -897,6 +903,62 @@ bool IsSizeOnlyRejection(uint rc,int mt5err)
   {
    return rc==TRADE_RETCODE_NO_MONEY||rc==TRADE_RETCODE_INVALID_VOLUME||
           rc==TRADE_RETCODE_LIMIT_VOLUME||mt5err==134/*ERR_NOT_ENOUGH_MONEY*/;
+  }
+
+bool BodyLooksLikeJsonObject(const string resp)
+  {
+   int n=StringLen(resp),i=0;
+   while(i<n)
+     {
+      ushort c=StringGetCharacter(resp,i);
+      if(c==' '||c=='\t'||c=='\r'||c=='\n'){i++;continue;}
+      return c=='{';
+     }
+   return false;
+  }
+
+bool IsXauCloudDenialEnvelope(bool parsedOk,const string licenseStatus,const string error,const string reason,bool hasOk,bool okValue)
+  {
+   if(!parsedOk) return false;
+   if(licenseStatus=="ACTIVE") return false;
+   if(licenseStatus=="LICENSE_DENIED"||licenseStatus=="LICENSE_NOT_ACTIVE"||
+      licenseStatus=="LICENSE_DISABLED"||licenseStatus=="LICENSE_EXPIRED"||
+      licenseStatus=="LICENSE_NOT_FOUND"||licenseStatus=="ACCOUNT_MISMATCH"||
+      licenseStatus=="DISABLED"||licenseStatus=="EXPIRED")
+      return true;
+   if(error=="LICENSE_DENIED"||error=="LICENSE_NOT_ACTIVE"||error=="license_not_active"||
+      error=="LICENSE_DISABLED"||error=="LICENSE_EXPIRED"||error=="LICENSE_NOT_FOUND"||
+      error=="ACCOUNT_MISMATCH")
+      return true;
+   if(hasOk && !okValue && (licenseStatus!=""||reason!=""||error!="")) return true;
+   return false;
+  }
+
+int ClassifyBrokerSubmit(uint rc,bool hasFill)
+  {
+   if(hasFill) return 1;
+   if(rc==TRADE_RETCODE_PLACED) return 2;
+   return 0;
+  }
+
+bool ManagerAllowsNewExposure(const string myId,const string cloudManagerId,datetime leaseUntil,datetime now,bool cloudLeaseSupported,bool weWereConfirmedManager)
+  {
+   if(!cloudLeaseSupported) return true;          // xaucloud did not echo a lease; same-terminal GlobalVariable still applies
+   if(cloudManagerId=="" ) return weWereConfirmedManager && leaseUntil>=now;
+   if(cloudManagerId==myId && leaseUntil>=now) return true;
+   return false;
+  }
+
+bool SetupSnapshotValidToRestore(int state,int dir,datetime confirmedAt,datetime armedAt,datetime now,int watchExpiryMinutes,double extreme,bool marketReclaimed)
+  {
+   if(state!=SETUP_WATCHING && state!=SETUP_CONFIRMED) return false;
+   if(dir==0) return false;
+   if(extreme<=0) return false;
+   datetime ageFrom=(state==SETUP_CONFIRMED&&confirmedAt>0)?confirmedAt:armedAt;
+   if(ageFrom<=0) return false;
+   if(watchExpiryMinutes>0 && now-ageFrom>watchExpiryMinutes*60) return false;
+   if(marketReclaimed) return false;
+   return true;
   }
 
 // ------------------------- v3.7.1 originals -------------------------

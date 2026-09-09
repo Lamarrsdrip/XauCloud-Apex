@@ -1,34 +1,41 @@
-XauCloud Apex v3.7 connectivity rebuild validation
-==================================================
-Root cause found in current repo:
-- Canonical EA v3.6.0 uses https://api.apex.xaucloud.io.
-- Live MT5 receives HTTP 403 at the transport/edge layer, while Strategy Tester bypasses WebRequest.
-- Current backend config is global, so website arm/config is not cleanly scoped per license.
+XauCloud Apex v3.8.5 LivePlatform validation
+===========================================
+Canonical EA: ea/XauCloud-Apex.mq5
+Versioned EA: ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5 (must be byte-identical)
+#property version: 3.850
+Identity: XauCloud-Apex_v3.8.5-LivePlatform
+State schema: 5
+WebRequest origin: https://xaucloud.io
+EA routes (on xaucloud.io, NOT apex.xaucloud.io):
+- POST /api/cloud/monitor/heartbeat
+- GET  /api/cloud/apex/config
+- POST /api/cloud/apex/event
 
-Rebuild:
-- Same-origin MT5 API: https://apex.xaucloud.io
-- License in JSON body, no separate EA token and no X-Apex-License requirement for the canonical heartbeat.
-- POST /api/apex/heartbeat
-- POST /api/apex/event
-- POST /api/apex/command/ack
-- Per-license config/arm command revision and EA acknowledgement.
-- Last-known-valid MT5 config cached locally.
-- Transport failure does not disarm validated local trading.
-- Explicit DISABLED / EXPIRED / ACCOUNT_MISMATCH still blocks new campaigns.
-- Demo and live trade modes accepted; optional admin account binding remains enforceable.
-- Strategy/exit/pyramiding logic not redesigned by this connectivity rebuild.
+What this release repairs (live platform, not a new risk model):
+- Confirmation is not an entry. OnTimer enters only on a valid origin retest.
+- Adds use THEIR own location. Campaign origin is thesis invalidation, not the add box.
+- Schema-3 active campaigns fail closed for NEW exposure; existing baskets still manage.
+- Confirmed / watching setups persist across restart (schema 5). Invalid snapshots are not resurrected.
+- Dead-thesis identity persists. Same-run reincarnation is blocked by structure, not a cooldown.
+- TRADE_RETCODE_PLACED fences the campaign as SUBMITTING. No duplicate resend. Late fill attaches.
+- WAF/HTML 401/403 is transport. Only an authenticated XauCloud JSON envelope tombstones.
+- Cross-terminal manager lease via the XauCloud config envelope (plus same-terminal GlobalVariable).
+- Dashboard distinguishes DESIRED vs APPLIED. BRIDGE_NOT_CONFIGURED is never called DELIVERED.
+- UNLIMITED is a license entitlement. Customer Settings cannot self-escalate.
+- UNLIMITED multiplier UI is hidden: each valid add uses 100% of current remaining capacity.
+- Production (NODE_ENV=production) refuses default/short secrets.
+- systemd runs as User=xaucloud-apex, not root.
+
+Sizing: UNLIMITED 100%-then-remaining and NORMAL 15/50/100 are unchanged from v3.8.2.
 
 Automated validation:
-- node --check server.mjs: PASS
-- npm test: 9/9 PASS
-- MQL structural brace check: PASS
-- MQL structural parenthesis check: PASS
-- Old InpEaToken: REMOVED
-- Direct api.apex.xaucloud.io endpoint: REMOVED
-- New same-origin heartbeat: PRESENT
+- npm test (Node + native C++ extract harness)
+- Canonical vs versioned EA SHA-256 identity
+- MetaEditor compile is REQUIRED on a Windows/Mac MT5 host (not this Linux runtime)
 
-Still requires on the Mac:
-- Compile in MetaEditor (not installed in this runtime).
-- Allow WebRequest for https://apex.xaucloud.io.
-- Attach to demo/live XAU chart, enter license, enable Algo Trading.
-- Verify journal heartbeat and site command acknowledgement.
+Still requires on the Mac / VPS (operator, not this build):
+- Compile ea/XauCloud-Apex.mq5 in MetaEditor. Do not copy an old EX5.
+- Allow WebRequest for https://xaucloud.io only.
+- Do NOT attach the new EA, remove the existing EA, restart MT5, or toggle Algo Trading
+  from this environment. The owner attaches/switches.
+- Dashboard ARM → XauCloud → EA applied_revision == desired_revision → DISARM still manages open baskets.

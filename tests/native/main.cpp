@@ -29,7 +29,7 @@ static void resetBroker(){
   S=Setup();
   g_deadThesisActive=false; g_deadThesisDir=0; g_deadThesisExtreme=0; g_deadThesisPrior=0; g_deadThesisSweep=0;
   g_noRearmBeforeBar=0; g_noRearmDir=0;
-  campState=CAMP_IDLE; anchorsKnown=true;
+  campState=CAMP_IDLE; campDir=0; anchorsKnown=true;
   campInvalidLevel=0; campOriginHigh=0; campOriginLow=0; campOriginClose=0; campOriginBar=0;
   C.requireM3Confirm=false; C.requireM5Context=false; C.learningEnabled=false;
   C.impulseAtr=1.8; C.sweepAtr=0.05; C.rejectionBars=5; C.watchExpiryMinutes=12;
@@ -367,7 +367,7 @@ int main(){
   row(StringFormat("{\"test\":\"schema3_active_blocks\",\"blocked\":%s,\"anchorsKnown\":%s}",
                    b(blocked).c_str(),b(anchorsKnown).c_str()));
   resetBroker();
-  campState=CAMP_IDLE; anchorsKnown=true;
+  campState=CAMP_IDLE; campDir=0; anchorsKnown=true;
   bool idle=ApplyLegacySchemaGuard(3);
   row(StringFormat("{\"test\":\"schema3_idle_ok\",\"blocked\":%s,\"anchorsKnown\":%s}",
                    b(idle).c_str(),b(anchorsKnown).c_str()));
@@ -556,6 +556,66 @@ int main(){
     row(StringFormat("{\"test\":\"liq_swing_vs_rolling\",\"swingPh\":%.5f,\"rollingPh\":%.5f,"
                      "\"swingUsesPivotNotGrind\":%s,\"rollingTakesGrindHigh\":%s}",
                      swingPh,rollPh,b(swingPh<=4400.01 && swingPh>=4399.0).c_str(),b(rollPh>=4408.0).c_str()));
+  }
+
+  // v3.8.5: WAF HTML 403 is transport; authenticated XauCloud JSON envelope is denial
+  resetBroker();
+  {
+    bool html=BodyLooksLikeJsonObject("<html>cloudflare 403</html>");
+    bool empty=BodyLooksLikeJsonObject("   ");
+    bool json=BodyLooksLikeJsonObject(" {\"ok\":false}");
+    bool waf=IsXauCloudDenialEnvelope(true,"","","",false,true);
+    bool denied=IsXauCloudDenialEnvelope(true,"LICENSE_DENIED","","",true,false);
+    bool expired=IsXauCloudDenialEnvelope(true,"EXPIRED","","LICENSE_EXPIRED",true,false);
+    bool active=IsXauCloudDenialEnvelope(true,"ACTIVE","","",true,true);
+    row(StringFormat("{\"test\":\"waf_vs_license_envelope\",\"htmlIsJson\":%s,\"emptyIsJson\":%s,\"jsonObj\":%s,"
+                     "\"wafDenied\":%s,\"licenseDenied\":%s,\"expiredDenied\":%s,\"activeDenied\":%s}",
+                     b(html).c_str(),b(empty).c_str(),b(json).c_str(),
+                     b(waf).c_str(),b(denied).c_str(),b(expired).c_str(),b(active).c_str()));
+  }
+
+  // v3.8.5: PLACED is pending (2), fill is 1, other is reject (0)
+  resetBroker();
+  {
+    int filled=ClassifyBrokerSubmit(TRADE_RETCODE_DONE,true);
+    int placed=ClassifyBrokerSubmit(TRADE_RETCODE_PLACED,false);
+    int placedButFilled=ClassifyBrokerSubmit(TRADE_RETCODE_PLACED,true);
+    int nomoney=ClassifyBrokerSubmit(TRADE_RETCODE_NO_MONEY,false);
+    row(StringFormat("{\"test\":\"placed_is_pending_not_reject\",\"filled\":%d,\"placed\":%d,\"placedButFilled\":%d,\"nomoney\":%d}",
+                     filled,placed,placedButFilled,nomoney));
+  }
+
+  // v3.8.5: cross-terminal lease fencing. Network loss never opens a second manager.
+  resetBroker();
+  {
+    datetime now=1'700'000'000;
+    bool noCloud=ManagerAllowsNewExposure("A","",(datetime)0,now,false,false);
+    bool weHold=ManagerAllowsNewExposure("A","A",now+30,now,true,true);
+    bool otherHolds=ManagerAllowsNewExposure("B","A",now+30,now,true,false);
+    bool expiredWeWere=ManagerAllowsNewExposure("A","A",now-1,now,true,true);
+    bool partitionEmpty=ManagerAllowsNewExposure("A","",now+30,now,true,false);
+    bool partitionWeWere=ManagerAllowsNewExposure("A","",now+30,now,true,true);
+    row(StringFormat("{\"test\":\"cross_terminal_lease\",\"noCloudAllows\":%s,\"weHold\":%s,\"otherHolds\":%s,"
+                     "\"expiredBlocked\":%s,\"partitionWithoutPriorBlocked\":%s,\"partitionWithPriorUntilOk\":%s}",
+                     b(noCloud).c_str(),b(weHold).c_str(),b(otherHolds).c_str(),
+                     b(!expiredWeWere).c_str(),b(!partitionEmpty).c_str(),b(partitionWeWere).c_str()));
+  }
+
+  // v3.8.5: restart-while-confirmed snapshot restore; expired / reclaimed refused
+  resetBroker();
+  {
+    datetime now=1'700'000'000;
+    bool watching=SetupSnapshotValidToRestore(SETUP_WATCHING,-1,0,now-60,now,12,4410.0,false);
+    bool confirmed=SetupSnapshotValidToRestore(SETUP_CONFIRMED,-1,now-30,now-600,now,12,4410.0,false);
+    bool expiredWatch=SetupSnapshotValidToRestore(SETUP_WATCHING,-1,0,now-13*60,now,12,4410.0,false);
+    bool expiredFromArmedNotConfirm=SetupSnapshotValidToRestore(SETUP_CONFIRMED,-1,now-30,now-13*60,now,12,4410.0,false);
+    bool reclaimed=SetupSnapshotValidToRestore(SETUP_CONFIRMED,-1,now-30,now-60,now,12,4410.0,true);
+    bool idle=SetupSnapshotValidToRestore(SETUP_NONE,-1,now-30,now-60,now,12,4410.0,false);
+    row(StringFormat("{\"test\":\"restart_while_confirmed\",\"watchingOk\":%s,\"confirmedOk\":%s,"
+                     "\"expiredWatchBlocked\":%s,\"confirmedUsesConfirmedAt\":%s,\"reclaimedBlocked\":%s,\"idleBlocked\":%s}",
+                     b(watching).c_str(),b(confirmed).c_str(),
+                     b(!expiredWatch).c_str(),b(expiredFromArmedNotConfirm).c_str(),
+                     b(!reclaimed).c_str(),b(!idle).c_str()));
   }
 
   return 0;

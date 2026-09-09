@@ -249,6 +249,81 @@ test('v3.8.4 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocati
   );
 });
 
+test('v3.8.5: schema 5 persists setup, dead thesis, pending submit and cloud lease', () => {
+  assert.match(s, /#define APEX_STATE_SCHEMA\s+5/);
+  assert.match(s, /CAMP_SUBMITTING=3/);
+  const save = section('void SaveState()', 'bool ApplyLegacySchemaGuard');
+  assert.match(save, /\\"setup\\":\{\\"state\\":/);
+  assert.match(save, /waitingLocationSince/);
+  assert.match(save, /\\"deadThesis\\":\{\\"active\\":/);
+  assert.match(save, /\\"pending\\":\{\\"active\\":/);
+  assert.match(save, /\\"cloudLease\\":\{\\"supported\\":/);
+  const load = section('int LoadState()', '//====================== volume sizing');
+  assert.match(load, /\(int\)sch!=APEX_STATE_SCHEMA&&\(int\)sch!=4&&\(int\)sch!=3/);
+  assert.match(load, /SetupSnapshotValidToRestore/);
+  assert.match(load, /g_pending\.active=JBoolOr\("active"/);
+});
+
+test('v3.8.5: WAF/HTML 401/403 keeps last-good; only XauCloud JSON envelope tombstones', () => {
+  const den = section('bool IsAuthenticatedDenial(', 'bool CloudSync()');
+  assert.match(den, /BodyLooksLikeJsonObject/);
+  assert.match(den, /IsXauCloudDenialEnvelope/);
+  assert.match(den, /TRANSPORT_OR_WAF/);
+  assert.doesNotMatch(den, /if\(!JsonParseObject\(resp\)\) \{reason="LICENSE_DENIED";return true;\}/);
+});
+
+test('v3.8.5: PLACED fences the campaign; Start does not reset while pending', () => {
+  const open = section('bool OpenLayer(', '//====================== closing');
+  assert.match(open, /e\.cls==EXEC_PENDING \|\| ClassifyBrokerSubmit/);
+  assert.match(open, /ORDER_PENDING/);
+  assert.match(open, /will NOT resend/);
+  const start = section('void Start(Snap', '//====================== add candidates');
+  assert.match(start, /campState=CAMP_SUBMITTING/);
+  assert.match(start, /FIRST ENTRY PENDING/);
+  const pre = section('string ComputePreflight()', 'bool OpenLayer');
+  assert.match(pre, /ORDER_PENDING_BROKER_CONFIRMATION/);
+  assert.match(pre, /CROSS_TERMINAL_LEASE_NOT_MANAGER/);
+  assert.match(pre, /CAMPAIGN_SUBMITTING/);
+});
+
+test('v3.8.5: cloud tick is bounded and never runs before Manage', () => {
+  const onTimer = section('void OnTimer()', null);
+  const iManage = onTimer.indexOf('Manage();');
+  const iCloud = onTimer.indexOf('CloudSync()');
+  const iFlush = onTimer.indexOf('FlushEventQueue()');
+  assert.ok(iManage >= 0 && iCloud > iManage, 'CloudSync after Manage');
+  assert.ok(iFlush > iManage, 'event flush after Manage');
+  assert.match(onTimer, /if\(cloudDue\)\{CloudSync\(\);lastCfg=now;\}/);
+  assert.match(onTimer, /else FlushEventQueue\(\);/);
+  assert.match(s, /InpCloudTickBudgetMs=1200/);
+  assert.match(s, /HEARTBEAT_OK_CONFIG_DEFERRED/);
+});
+
+test('v3.8.5: Observe during ACTIVE campaign cannot arm the opposite thesis', () => {
+  const obs = section('Snap Observe()', 'double ScoreFloorGivenMandatory');
+  assert.match(obs, /only same-direction setups may arm \(reversal-add\)/);
+  assert.match(obs, /canArm&&campState==CAMP_ACTIVE&&campDir!=0&&\(-imp\)!=campDir/);
+});
+
+test('v3.8.5: customer-facing WebRequest origin is xaucloud.io everywhere in this repo', async () => {
+  const ui = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const validation = await fs.readFile(new URL('../VALIDATION.txt', import.meta.url), 'utf8');
+  assert.match(ui, /allow WebRequest for <code>https:\/\/xaucloud\.io<\/code>/);
+  assert.doesNotMatch(ui, /allow WebRequest for <code>https:\/\/apex\.xaucloud\.io<\/code>/);
+  assert.match(readme, /https:\/\/xaucloud\.io/);
+  assert.match(validation, /https:\/\/xaucloud\.io/);
+  assert.match(s, /InpCloudURL="https:\/\/xaucloud\.io"/);
+});
+
+test('v3.8.5: production systemd is not root and sets NODE_ENV=production', async () => {
+  const unit = await fs.readFile(new URL('../deploy/xaucloud-apex.service', import.meta.url), 'utf8');
+  assert.match(unit, /User=xaucloud-apex/);
+  assert.match(unit, /NODE_ENV=production/);
+  assert.match(unit, /DATA_DIR=\/var\/lib\/xaucloud-apex/);
+  assert.doesNotMatch(unit, /User=root/);
+});
+
 test('server config schema includes the same six basket profit-exit fields', async () => {
   const server = await fs.readFile(new URL('../server.mjs', import.meta.url), 'utf8');
   for (const f of configFields) {

@@ -1,17 +1,17 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.4",
-  "buildId": "3.8.4-entry-retest",
-  "eaVersion": "XauCloud-Apex_v3.8.4-EntryRetest",
+  "version": "3.8.5",
+  "buildId": "3.8.5-live-platform",
+  "eaVersion": "XauCloud-Apex_v3.8.5-LivePlatform",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.4-EntryRetest.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.5-LivePlatform.mq5",
   "configSchema": 2,
-  "stateSchema": 4,
+  "stateSchema": 5,
   "webRequestOrigin": "https://xaucloud.io",
   "eaRoutes": [
     "POST /api/cloud/monitor/heartbeat",
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.8.4 EntryRetest: confirmation stores a displacement-origin EXEC region (not the full dump candle). OnTimer enters only on a valid retest. Adds use their own location and the campaign invalidation. Schema-3 active campaigns fail closed. Same-run reincarnation is blocked by thesis identity. UNLIMITED/NORMAL sizing unchanged from v3.8.2."
+  "notes": "v3.8.5 LivePlatform: confirmation is not an entry; adds use their own location; schema-5 persists confirmed setups and dead-thesis identity; PLACED is pending not reject; WAF 401/403 is transport; cross-terminal manager lease; dashboard desired vs applied; UNLIMITED is an entitlement; production refuses default secrets. UNLIMITED/NORMAL sizing unchanged from v3.8.2."
 }

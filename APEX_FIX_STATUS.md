@@ -28,7 +28,7 @@ round-trip are still required on the operator's terminals.
 | LIVE-021 | FIXED | `TRADE_RETCODE_PLACED` → `CAMP_SUBMITTING` / pending fence; late fill attaches; no resend. |
 | LIVE-022 | ALREADY FIXED (v3.8.4) + schema 5 | Dead-thesis identity persisted, not a time cooldown. |
 | SITE-001 | FIXED | `BRIDGE_NOT_CONFIGURED` / `QUEUED_FOR_BRIDGE` / `BRIDGE_DELIVERED` / `EA_APPLIED`. Never DELIVERED on null. |
-| SITE-002 | FIXED | `assertProductionSecrets()` on `NODE_ENV=production`. systemd sets it. |
+| SITE-002 | FIXED IN SOURCE / BOOT MUST NOT TAKE SITE DOWN | Helper refuses default secrets. Live box already had `secretsAcceptableForProduction=false`, so listen() warns instead of exiting. Opt-in: `APEX_STRICT_SECRETS=1`. |
 | SITE-003 | FIXED | Account setup WebRequest is `https://xaucloud.io`. |
 | SITE-004 (live hung bridge) | BLOCKED | Production box not reachable from this sandbox. |
 | SITE-005 (multiplier no-op) | FIXED | Hidden; UNLIMITED = 100% of current remaining executable capacity. Sizing unchanged. |
@@ -38,7 +38,7 @@ round-trip are still required on the operator's terminals.
 | SITE-008 | FIXED | Revision is sync authority. Hashes are not compared for inSync. |
 | SITE-009 | FIXED | Customer cannot set UNLIMITED unless `licenseTier`/`unlimitedEntitled`. |
 | SITE-010 | FIXED | Tests assert 3.8.5 / 3.850. |
-| SITE-011 | FIXED | systemd `User=xaucloud-apex` + `NODE_ENV=production`. |
+| SITE-011 | FIXED IN SOURCE / NOT APPLIED TO LIVE UNIT | Dedicated user is documented. Live unit must keep running without `User=xaucloud-apex` until that user exists. |
 
 Sizing functions `ComputeVolume` and `LayerMarginPct` remain byte-identical to v3.8.2.
 

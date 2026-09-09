@@ -1429,10 +1429,16 @@ const server=http.createServer(async(req,res)=>{
 await ensure();
 await NOTIFICATIONS.ensure().catch(e=>console.error('APEX_PUSH_STARTUP_DEFERRED',String(e?.message||e)));
 if(process.env.NODE_ENV!=='test'){
-  if(process.env.NODE_ENV==='production'){
-    assertProductionSecrets(process.env);
-  }else if(secretProblems(process.env).length){
-    console.warn('APEX secret check: not enforcing because NODE_ENV is not production. Set NODE_ENV=production to refuse default/short secrets.');
+  const problems=secretProblems(process.env);
+  if(problems.length){
+    // Live 3.8.4 was already serving with secretsAcceptableForProduction=false.
+    // Taking the public site down is worse than a loud warning. Refuse-boot is
+    // opt-in after ADMIN_TOKEN/SESSION_SECRET are rotated.
+    console.error('APEX SECRET CHECK FAILED | '+problems.join(', ')+
+      ' | listening anyway so the dashboard stays up | rotate ADMIN_TOKEN (>=24) and SESSION_SECRET (>=32) | set APEX_STRICT_SECRETS=1 only after that');
+    if(process.env.APEX_STRICT_SECRETS==='1' && process.env.NODE_ENV==='production'){
+      assertProductionSecrets(process.env);
+    }
   }
   // APEX-AUDIT-021: the local service comes up FIRST. Bridge reconciliation runs in the
   // background and its state is reported honestly through /health and the dashboard;

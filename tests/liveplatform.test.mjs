@@ -55,7 +55,7 @@ test('SITE-009: UNLIMITED is a license entitlement, not a customer toggle',()=>{
   assert.equal(licenseAllowsUnlimited(null),false);
 });
 
-test('SITE-002: production refuses published/default/short secrets and never prints them',()=>{
+test('SITE-002: secret helper refuses published/default/short secrets and never prints them; boot still listens',()=>{
   assert.throws(()=>assertProductionSecrets({
     NODE_ENV:'production',ADMIN_TOKEN:'change-me-admin',SESSION_SECRET:'change-me-session-secret'
   }),/INSECURE_PRODUCTION_CONFIGURATION/);

@@ -316,12 +316,14 @@ test('v3.8.5: customer-facing WebRequest origin is xaucloud.io everywhere in thi
   assert.match(s, /InpCloudURL="https:\/\/xaucloud\.io"/);
 });
 
-test('v3.8.5: production systemd is not root and sets NODE_ENV=production', async () => {
+test('v3.8.5: systemd keeps DATA_DIR and does not require a user production may not have', async () => {
   const unit = await fs.readFile(new URL('../deploy/xaucloud-apex.service', import.meta.url), 'utf8');
-  assert.match(unit, /User=xaucloud-apex/);
-  assert.match(unit, /NODE_ENV=production/);
+  const server = await fs.readFile(new URL('../server.mjs', import.meta.url), 'utf8');
   assert.match(unit, /DATA_DIR=\/var\/lib\/xaucloud-apex/);
-  assert.doesNotMatch(unit, /User=root/);
+  assert.match(unit, /StateDirectory=xaucloud-apex/);
+  assert.doesNotMatch(unit, /^User=/m);
+  assert.match(server, /APEX_STRICT_SECRETS/);
+  assert.match(server, /listening anyway so the dashboard stays up/);
 });
 
 test('server config schema includes the same six basket profit-exit fields', async () => {

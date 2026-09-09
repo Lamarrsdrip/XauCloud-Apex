@@ -23,8 +23,8 @@ What this release repairs (live platform, not a new risk model):
 - Dashboard distinguishes DESIRED vs APPLIED. BRIDGE_NOT_CONFIGURED is never called DELIVERED.
 - UNLIMITED is a license entitlement. Customer Settings cannot self-escalate.
 - UNLIMITED multiplier UI is hidden: each valid add uses 100% of current remaining capacity.
-- Production (NODE_ENV=production) refuses default/short secrets.
-- systemd runs as User=xaucloud-apex, not root.
+- Production secret helper refuses default/short secrets. Boot still listens unless APEX_STRICT_SECRETS=1.
+- systemd keeps DATA_DIR=/var/lib/xaucloud-apex. Do not set User=xaucloud-apex until that user exists.
 
 Sizing: UNLIMITED 100%-then-remaining and NORMAL 15/50/100 are unchanged from v3.8.2.
 

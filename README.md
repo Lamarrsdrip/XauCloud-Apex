@@ -51,10 +51,10 @@ Do not deploy an older v3.8.4 / v3.8.3 / v3.8.2 EX5 after promoting this source.
 
 ## Production
 
-`deploy/xaucloud-apex.service` sets `NODE_ENV=production`, `User=xaucloud-apex`, and
-`DATA_DIR=/var/lib/xaucloud-apex`. Production **refuses to start** with the published
-default `ADMIN_TOKEN` / `SESSION_SECRET`, missing secrets, short secrets, or `http://`
-XauCloud. Create the service user before enabling the unit.
+`deploy/xaucloud-apex.service` sets `DATA_DIR=/var/lib/xaucloud-apex`. Do **not**
+enable `User=xaucloud-apex` or `APEX_STRICT_SECRETS=1` until that user exists and
+`ADMIN_TOKEN` / `SESSION_SECRET` are real. `/health.secretsAcceptableForProduction`
+reports the check. A failed check must not take the site down.
 
 ## Validation
 

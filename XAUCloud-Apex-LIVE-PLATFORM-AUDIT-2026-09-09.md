@@ -521,3 +521,44 @@ Do not skip. In order.
 I have **not** patched these in this audit. Say the word and I apply 1–4 in the EA/server and send a new `.mq5`.
 
 Until LIVE-001 is fixed, **do not run v3.8.3 UNLIMITED live**. It can take the first ticket and then refuse every add.
+
+---
+
+## Addendum 2 — extra confirmed EA trading bugs (deep live-path pass)
+
+### LIVE-017 — HTTP 401/403 from a WAF permanently disarms
+
+**Severity:** HIGH · CONFIRMED
+
+Any 401/403, including a Cloudflare/HTML body, is treated as `LICENSE_DENIED`. That writes a denial tombstone, `C.armed=false`, survives restart. A later 5xx would have been harmless. One edge 403 and **new campaigns stop** until a clean `licenseStatus=ACTIVE` 200. Open baskets still manage.
+
+### LIVE-018 — single-instance lock is per-terminal, not per-account
+
+**Severity:** HIGH · CONFIRMED
+
+`GlobalVariable` lease is local to that MT5 process. VPS + home PC, or two brokers’ terminals, both become managers and both can `OpenLayer`. Same-terminal second chart is observer. Cross-terminal is not.
+
+### LIVE-019 — confirmed setup expires from sweep time, not confirm time
+
+**Severity:** MEDIUM · CONFIRMED · v3.8.3 interaction
+
+`SETUP_CONFIRMED` uses `TimeCurrent()-S.armedAt > watchExpiryMinutes*60`. `armedAt` is the **sweep**. Sweep T=0, confirm T=10, retest T=13 → expired. The wait v3.8.3 added can be eaten by the old watch clock.
+
+### LIVE-020 — schema-3 upgrade skips reclaim on adds
+
+**Severity:** HIGH · CONFIRMED · v3.8.3
+
+Schema 3 files load with `campOrigin*=0`, `campInvalidLevel=0`. Gate: no origin ⇒ `inLocation=true`. Reclaim requires `invalidLevel>0`. Mid-campaign upgrade 3.8.2→3.8.3 lets the pyramid continue **with no thesis bound**. Spec said block new layers; code does the opposite.
+
+### LIVE-021 — `TRADE_RETCODE_PLACED` wipes the campaign then a late fill is unanchored
+
+**Severity:** MEDIUM · CONFIRMED path
+
+Unconfirmed submit → `OpenLayer` false → `Start` resets to `CAMP_IDLE`. Late fill: `CountPos()>0` → scan-only, `anchorsKnown=false`, `cycleStart` = current balance. Adds blocked; target math is wrong. Exness often returns DONE (hypothesis). ECN `PLACED` is the live case.
+
+### LIVE-022 — no-rearm of a dead CONFIRMED setup lasts one M1 bar
+
+**Severity:** MEDIUM · CONFIRMED
+
+Same-bar re-arm is blocked. Next closed M1 clears `g_noRearm*` and can arm a worse high on the same impulse. Also RAM-only (lost on restart).
+

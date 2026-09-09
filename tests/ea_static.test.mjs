@@ -168,8 +168,10 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
-test('v3.8.3: confirmation stores an origin box and OnTimer only starts in-location', () => {
-  assert.match(s, /CONFIRMED_WAITING_ORIGIN_RETEST/);
+test('v3.8.4: confirmation stores origin+exec region and OnTimer only starts in-location', () => {
+  assert.match(s, /WAITING_FOR_ENTRY_LOCATION/);
+  assert.match(s, /RETEST_EXECUTABLE/);
+  assert.match(s, /ComputeExecRegion/);
   assert.match(s, /S\.originHigh=m1\[1\]\.high/);
   assert.match(s, /if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.doesNotMatch(s, /if\(s\.valid\) Start\(s\)/);
@@ -182,7 +184,7 @@ test('v3.8.3: a newer M1 than the origin bar does not hard-block the gate', () =
   assert.doesNotMatch(gate, /return false;[\s\S]{0,80}TRIGGER_BAR_NO_LONGER_LATEST/);
 });
 
-test('v3.8.3: Start copies origin onto the campaign before SetupReset, and adds reclaim all families', () => {
+test('v3.8.4: Start copies origin onto the campaign; adds use THEIR location and reclaim campaign invalidation', () => {
   const start = section('void Start(Snap', '//====================== add candidates');
   const iCopy = start.indexOf('campOriginHigh=S.originHigh');
   const iReset = start.indexOf('SetupReset("CONSUMED_BY_CAMPAIGN")');
@@ -190,7 +192,61 @@ test('v3.8.3: Start copies origin onto the campaign before SetupReset, and adds 
 
   const manage = section('void Manage()', '//====================== restart reconciliation');
   assert.match(manage, /bool enforceReclaim=true;/);
+  assert.match(manage, /double addOH=a\.execHigh;/);
+  assert.doesNotMatch(manage, /addOH=\(campOriginHigh>0\?campOriginHigh:S\.originHigh\)/);
   assert.doesNotMatch(manage, /enforceReclaim=\(a\.family=="REVERSAL"\)/);
+});
+
+test('v3.8.4: schema-3 active campaigns fail closed for new exposure', () => {
+  assert.match(s, /LEGACY_CAMPAIGN_ORIGIN_UNKNOWN_NEW_EXPOSURE_BLOCKED/);
+  assert.match(s, /ApplyLegacySchemaGuard\(\(int\)sch\)/);
+});
+
+test('v3.8.4: dead thesis cannot reincarnate on the same run', () => {
+  assert.match(s, /DeadThesisBlocks/);
+  assert.match(s, /RememberDeadThesis/);
+  assert.doesNotMatch(s, /lastEnd>0&&now-lastEnd<C\.cooldownMinutes\*60[\s\S]{0,40}ArmSetup/);
+});
+
+test('v3.8.4: reversal add requires the NEW setup in-location; continuation uses the trigger bar', () => {
+  const add = section('AddCandidate BuildAddCandidate()', '//====================== basket management');
+  assert.match(add, /rev\.valid&&rev\.dir==campDir&&S\.state==SETUP_CONFIRMED&&rev\.inLocation/);
+  assert.match(add, /a\.execHigh=S\.execHigh;a\.execLow=S\.execLow/);
+  assert.match(add, /a\.execHigh=MathMax\(m1\[1\]\.high,m1\[1\]\.low\)/);
+  assert.match(add, /a\.family=cont\?"CONTINUATION":"FAILED_PULLBACK"/);
+});
+
+test('v3.8.4: same trigger cannot add twice; GATE_SHADOW stays the default', () => {
+  const manage = section('void Manage()', '//====================== restart reconciliation');
+  assert.match(manage, /TRIGGER_ALREADY_CONSUMED/);
+  assert.match(manage, /InpMaxAddsPerTrigger/);
+  assert.match(s, /input ApexGateMode InpEntryExtensionMode=GATE_SHADOW/);
+});
+
+test('v3.8.4: schema 4 LoadState restores campaign origin anchors', () => {
+  const load = section('int LoadState()', 'int ti=JIdx("consumedTriggers")');
+  assert.match(load, /campInvalidLevel\s*=\s*JNumOr\("campInvalidLevel"/);
+  assert.match(load, /campOriginHigh\s*=\s*JNumOr\("campOriginHigh"/);
+  assert.match(load, /campOriginLow\s*=\s*JNumOr\("campOriginLow"/);
+  assert.match(load, /ApplyLegacySchemaGuard\(\(int\)sch\)/);
+});
+
+test('v3.8.4 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocation', async () => {
+  const cur = s;
+  const v382 = await fs.readFile(new URL('../ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5', import.meta.url), 'utf8');
+  const slice = (src, start, end) => {
+    const a = src.indexOf(start);
+    const b = src.indexOf(end, a + start.length);
+    return src.slice(a, b);
+  };
+  assert.equal(
+    slice(cur, 'SizingDecision ComputeVolume', 'string SizingJson'),
+    slice(v382, 'SizingDecision ComputeVolume', 'string SizingJson')
+  );
+  assert.equal(
+    slice(cur, 'double LayerMarginPct()', '// A rejection that is purely about SIZE'),
+    slice(v382, 'double LayerMarginPct()', '// A rejection that is purely about SIZE')
+  );
 });
 
 test('server config schema includes the same six basket profit-exit fields', async () => {

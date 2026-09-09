@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.3",
-  "buildId": "3.8.3-entry-location",
-  "eaVersion": "XauCloud-Apex_v3.8.3-EntryLocation",
+  "version": "3.8.4",
+  "buildId": "3.8.4-entry-retest",
+  "eaVersion": "XauCloud-Apex_v3.8.4-EntryRetest",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.3-EntryLocation.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.4-EntryRetest.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.8.3 EntryLocation: confirmed setups store the displacement/engulfing origin box. Waiting for the retest is legal. Submit only while live price is inside the origin and the swept extreme is not reclaimed. Watching setups update their extreme instead of cloning a worse sell. Continuation adds reclaim the campaign origin. UNLIMITED sizing (100% then double, no max layers) is unchanged from v3.8.2 CapacityTruth."
+  "notes": "v3.8.4 EntryRetest: confirmation stores a displacement-origin EXEC region (not the full dump candle). OnTimer enters only on a valid retest. Adds use their own location and the campaign invalidation. Schema-3 active campaigns fail closed. Same-run reincarnation is blocked by thesis identity. UNLIMITED/NORMAL sizing unchanged from v3.8.2."
 }

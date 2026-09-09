@@ -84,7 +84,8 @@ struct MockBroker {
   int    execMode=SYMBOL_TRADE_EXECUTION_MARKET;
   datetime now=1000000;
   datetime lastClosedM1=1000000;
-  std::vector<MqlRates> m1;
+  double atr=2.0;
+  std::vector<MqlRates> m1, m3, m5;
   // execution log
   std::vector<double> submitted;
   std::vector<uint>   retcodes;
@@ -173,14 +174,35 @@ template<typename... A> inline std::string StringFormat(const char *fmt, A... a)
 inline std::string StringFormat(const char *fmt){ return std::string(fmt); }
 inline std::string BoolJson(bool v){ return v?"true":"false"; }
 inline double clamp(double x,double a,double b){ return MathMax(a,MathMin(b,x)); }
+inline int StringLen(const string& s){ return (int)s.size(); }
+inline ushort StringGetCharacter(const string& s,int i){ return i>=0&&i<(int)s.size()?(ushort)(unsigned char)s[i]:0; }
+inline string IntegerToString(int v){ return std::to_string(v); }
+inline string IntegerToString(long v){ return std::to_string((long long)v); }
+inline uint GetTickCount(){ return (uint)BRK.now; }
+inline void Emit(const string&, const string& extra=""){}
+inline double ATR(){ return BRK.atr>0?BRK.atr:2.0; }
+template<class T> inline int ArraySize(const std::vector<T>& v){ return (int)v.size(); }
+inline bool Rates(ENUM_TIMEFRAMES tf,int n,std::vector<MqlRates> &r){
+  if(tf==PERIOD_M1) r=BRK.m1;
+  else if(tf==PERIOD_M3) r=BRK.m3;
+  else r=BRK.m5;
+  return (int)r.size()>=n-2;
+}
+
+enum SetupState { SETUP_NONE=0, SETUP_WATCHING=1, SETUP_CONFIRMED=2, SETUP_INVALIDATED=3, SETUP_EXPIRED=4, SETUP_CONSUMED=5 };
+enum CampState { CAMP_IDLE=0, CAMP_ACTIVE=1, CAMP_CLOSING=2 };
+enum ApexBosMode { BOS_V371_CLOSE_OR_WICK=0, BOS_CLOSE_BREAK_ONLY=1 };
 
 // ---- Apex globals the extracted functions reference ---------------------
 struct ApexConfig { std::string accountProfile="NORMAL";
                     double marginReservePct=0, maxBasketLots=0, minMarginLevelPct=0,
                            normalL1MarginPct=15, normalL2MarginPct=50, normalL3PlusMarginPct=100,
                            baseMarginPct=100, layerMultiplier=2;
-                    // v3.8.2: 0 = AUTO (only legal while the broker margin model is trusted)
-                    long normalReferenceLeverage=0; };
+                    long normalReferenceLeverage=0;
+                    double entryScore=76, addScore=70, impulseAtr=1.8, sweepAtr=0.05,
+                           addSpacingAtr=0.22, rejectionZoneAtr=0.12, learnEntryAdj=0, learnAddAdj=0;
+                    int rejectionBars=5, watchExpiryMinutes=12;
+                    bool requireM3Confirm=false, requireM5Context=false, learningEnabled=false; };
 extern ApexConfig C;
 extern long InpMagic;
 extern int   InpMaxQuoteAgeMs;
@@ -189,6 +211,8 @@ extern bool  InpRejectReclaimedExtreme;
 extern double InpMaxEntryExtensionAtr;
 enum ApexGateMode { GATE_SHADOW=0, GATE_ENFORCE=1 };
 extern ApexGateMode InpEntryExtensionMode;
+extern ApexBosMode InpBosMode;
+extern bool InpRequireFreshM3;
 inline double BasketVolume(){ return BRK.basketVolume; }
 
 // Market-closed backoff state used verbatim by NoteMarketClosed/MarketClosedBackoffActive.

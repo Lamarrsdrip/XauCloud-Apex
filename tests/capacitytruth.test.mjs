@@ -18,11 +18,10 @@ test('the canonical and versioned EA files are byte-identical',()=>{
 });
 
 test('version.json, the EA banner and #property version all agree',()=>{
-  assert.equal(version.version,'3.8.2');
+  assert.equal(version.version,'3.8.4');
   assert.ok(ea.includes(version.eaVersion),'EA must define the version.json eaVersion string');
   const prop=ea.match(/#property version\s+"([\d.]+)"/)?.[1];
-  // MQL5 spells 3.8.2 as "3.820".
-  assert.equal(prop,'3.820');
+  assert.equal(prop,'3.840');
 });
 function floorStep(v,step=0.01){return Math.floor((v+1e-12)/step)*step;}
 function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0.01}){
@@ -33,9 +32,11 @@ function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0
   return Math.min(byCapacity,byMoney);
 }
 
-test('canonical EA is v3.8.2 CapacityTruth',()=>{
-  assert.match(ea,/#property version\s+"3\.820"/);
-  assert.match(ea,/XauCloud-Apex_v3\.8\.2-CapacityTruth/);
+test('canonical EA is v3.8.4 EntryRetest with v3.8.2 CapacityTruth sizing intact',()=>{
+  assert.match(ea,/#property version\s+"3\.840"/);
+  assert.match(ea,/XauCloud-Apex_v3\.8\.4-EntryRetest/);
+  assert.match(ea,/TrustedMarginPerLot/);
+  assert.match(ea,/NORMAL_REFERENCE_LEVERAGE/);
 });
 
 test('NORMAL 15/50/100 is monetary margin semantics, not SYMBOL_VOLUME_MAX percentages',()=>{

@@ -36,6 +36,13 @@ export function findSdk(){
   return null;
 }
 
+function portMqlArrays(src){
+  return src
+    .replace(/MqlRates m1\[\],m3\[\],m5\[\];/g,'std::vector<MqlRates> m1,m3,m5;')
+    .replace(/void LiquidityRefs\(MqlRates &m1\[\],int n/g,'void LiquidityRefs(MqlRates *m1,int n')
+    .replace(/LiquidityRefs\(m1,ArraySize\(m1\)/g,'LiquidityRefs(m1.data(),(int)m1.size()');
+}
+
 export function generateExtractedHeader(){
   // Must be the CANONICAL EA that will actually be promoted/compiled -- never a pinned
   // historical file.  A stale harness certifying a newer release is how the v3.8.0
@@ -43,9 +50,13 @@ export function generateExtractedHeader(){
   const cur=readSource(path.join(repo,'ea','XauCloud-Apex.mq5'));
   const old=readSource(path.join(repo,'ea','archive','XauCloud-Apex-v3.7.1.mq5'));
 
-  const currentParts=[
+  const structs=[
     extract(cur,'SizingDecision',{kind:'struct'}),
     extract(cur,'Gate',{kind:'struct'}),
+    extract(cur,'Setup',{kind:'struct'}),
+    extract(cur,'Snap',{kind:'struct'})
+  ].join('\n\n');
+  const fns=[
     extract(cur,'VolStep'),
     extract(cur,'VolDigits'),
     extract(cur,'FloorToStep'),
@@ -65,9 +76,41 @@ export function generateExtractedHeader(){
     extract(cur,'LargestVolumeWithinMargin'),
     extract(cur,'LargestVolumePassingCheck'),
     extract(cur,'ComputeVolume'),
+    extract(cur,'ComputeExecRegion'),
+    extract(cur,'PriceInExecRegion'),
+    extract(cur,'LiquidityRefs'),
+    extract(cur,'RememberDeadThesis'),
+    extract(cur,'MaybeClearDeadThesis'),
+    extract(cur,'DeadThesisBlocks'),
+    extract(cur,'Fnv1a'),
+    extract(cur,'NewSetupId'),
+    extract(cur,'SetupReset'),
+    extract(cur,'ArmSetup'),
+    extract(cur,'Observe'),
+    extract(cur,'ApplyLegacySchemaGuard'),
     extract(cur,'FinalEntryGate'),
     extract(cur,'IsSizeOnlyRejection')
   ].join('\n\n');
+  const currentParts=structs+`
+
+#define APEX_SCORE_BASE 25.0
+Setup S;
+string g_instanceId="native";
+bool g_deadThesisActive=false;
+int g_deadThesisDir=0;
+double g_deadThesisExtreme=0;
+double g_deadThesisPrior=0;
+datetime g_deadThesisSweep=0;
+datetime g_noRearmBeforeBar=0;
+int g_noRearmDir=0;
+CampState campState=CAMP_IDLE;
+bool anchorsKnown=true;
+double campInvalidLevel=0,campOriginHigh=0,campOriginLow=0,campOriginClose=0;
+datetime campOriginBar=0;
+ApexBosMode InpBosMode=BOS_V371_CLOSE_OR_WICK;
+bool InpRequireFreshM3=false;
+
+`+fns;
 
   // v3.7.1 originals, renamed only so both generations can coexist in one binary.
   let legacy=[extract(old,'VolDigits'),extract(old,'NormVol'),extract(old,'VolumeForMargin')].join('\n\n');
@@ -83,7 +126,7 @@ export function generateExtractedHeader(){
 //   ea/archive/XauCloud-Apex-v3.7.1.mq5 (audited HEAD, renamed v371_*)
 // Only %I64d/%I64u -> %lld/%llu was rewritten, for the host printf.
 
-${portFormatSpecifiers(currentParts)}
+${portFormatSpecifiers(portMqlArrays(currentParts))}
 
 // ------------------------- v3.7.1 originals -------------------------
 ${portFormatSpecifiers(legacy)}

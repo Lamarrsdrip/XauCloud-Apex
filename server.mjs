@@ -797,6 +797,100 @@ function sortEvents(events){
     return ta===tb?String(a.eventId||'').localeCompare(String(b.eventId||'')):ta-tb;
   });
 }
+// SETUP-TELEMETRY-002: derive one authoritative setup lifecycle from canonical EA events.
+// Use the EA's original emittedAt when available so a delayed durable-outbox replay cannot
+// resurrect an older setup merely because XauCloud received it later.
+export function projectSetupStatus(events,now=Date.now()){
+  const ordered=[...events].sort((a,b)=>{
+    const ea=(a.emittedAt??a.emittedAtRaw??a.ts),eb=(b.emittedAt??b.emittedAtRaw??b.ts);
+    const ta=Date.parse(canonicalizeTimestamp(ea,0))||0;
+    const tb=Date.parse(canonicalizeTimestamp(eb,0))||0;
+    return ta===tb?String(a.eventId||'').localeCompare(String(b.eventId||'')):ta-tb;
+  });
+  let s=null;
+  for(const e of ordered){
+    const eventTs=canonicalizeTimestamp(e.emittedAt??e.emittedAtRaw??e.ts);
+    const id=String(e.setupId||'');
+    const dir=Number(e.setupDir??e.watchDir??e.direction??0);
+    const side=dir>0?'BUY':dir<0?'SELL':null;
+
+    if(e.type==='WATCH_ARMED'){
+      s={
+        setupId:id||null,direction:side,state:'WATCHING',active:true,
+        armedAt:eventTs,updatedAt:eventTs,endedAt:null,reason:null,
+        score:null,requiredScore:null,waitReason:'REJECTION',
+        impulseAtr:numOrNull(e.impulseAtr),extreme:numOrNull(e.extreme),priorLevel:numOrNull(e.priorLevel)
+      };
+      continue;
+    }
+
+    if(e.type==='SETUP_SCORE'){
+      if(!s || (id && s.setupId!==id)){
+        s={setupId:id||null,direction:side,state:String(e.setupState||'WATCHING'),
+           active:true,armedAt:eventTs,updatedAt:eventTs,endedAt:null,reason:null};
+      }
+      if(id && s.setupId && id!==s.setupId)continue;
+      const state=String(e.setupState||s.state||'WATCHING').toUpperCase();
+      s={
+        ...s,setupId:id||s.setupId,direction:side||s.direction,state,
+        active:!['EXPIRED','INVALIDATED','CANCELLED','CONSUMED'].includes(state),
+        updatedAt:eventTs,
+        score:numOrNull(e.score),requiredScore:numOrNull(e.requiredScore),
+        basePoints:numOrNull(e.basePoints),impulsePoints:numOrNull(e.impulsePoints),
+        rejectionPoints:numOrNull(e.rejectionPoints),bosPoints:numOrNull(e.bosPoints),
+        m3Points:numOrNull(e.m3Points),m5Points:numOrNull(e.m5Points),wickPoints:numOrNull(e.wickPoints),
+        rejected:e.rejected===true,microBreak:e.microBreak===true,
+        m3Color:e.m3Color===true,m3Fresh:e.m3Fresh===true,m5Color:e.m5Color===true,
+        m3Available:e.m3Available!==false,m5Available:e.m5Available!==false,
+        m3Gate:e.m3Gate===true,m5Gate:e.m5Gate===true,
+        requireM3:e.requireM3===true,requireM5:e.requireM5===true,
+        waitReason:String(e.waitReason||''),bosKind:String(e.bosKind||'NONE'),
+        impulseAtr:numOrNull(e.impulseAtr),wickRatio:numOrNull(e.wickRatio),
+        extreme:numOrNull(e.extreme),priorLevel:numOrNull(e.priorLevel)
+      };
+      continue;
+    }
+
+    if(e.type==='SETUP_CONFIRMED'){
+      if(!s || !id || !s.setupId || s.setupId===id){
+        s={...s,setupId:id||s?.setupId||null,direction:side||s?.direction||null,
+           state:'CONFIRMED',active:true,updatedAt:eventTs,
+           score:numOrNull(e.score)??s?.score??null,
+           requiredScore:numOrNull(e.requiredScore)??s?.requiredScore??null,
+           waitReason:'READY',bosKind:String(e.bosKind||s?.bosKind||'NONE')};
+      }
+      continue;
+    }
+
+    if(['SETUP_EXPIRED','SETUP_INVALIDATED','SETUP_CANCELLED','SETUP_CONSUMED'].includes(e.type)){
+      if(!s || !id || !s.setupId || s.setupId===id){
+        const state={
+          SETUP_EXPIRED:'EXPIRED',
+          SETUP_INVALIDATED:'INVALIDATED',
+          SETUP_CANCELLED:'CANCELLED',
+          SETUP_CONSUMED:'CONSUMED'
+        }[e.type];
+        s={...s,setupId:id||s?.setupId||null,direction:side||s?.direction||null,
+           state,active:false,reason:String(e.cancelReason||e.reason||state),
+           endedAt:eventTs,updatedAt:eventTs};
+      }
+      continue;
+    }
+
+    if(e.type==='CAMPAIGN_START' && s && (!e.setupId || e.setupId===s.setupId)){
+      s={...s,state:'CONSUMED',active:false,reason:'CAMPAIGN_STARTED',endedAt:eventTs,updatedAt:eventTs};
+    }
+  }
+  if(!s)return null;
+  const updatedMs=Date.parse(String(s.updatedAt||s.endedAt||s.armedAt||''));
+  const armedMs=Date.parse(String(s.armedAt||''));
+  return {
+    ...s,
+    eventAgeSec:Number.isFinite(updatedMs)?Math.max(0,Math.floor((now-updatedMs)/1000)):null,
+    setupAgeSec:Number.isFinite(armedMs)?Math.max(0,Math.floor((now-armedMs)/1000)):null
+  };
+}
+
 // Projects the CURRENT campaign from the reconciled event stream.
 export function projectCampaign(events){
   let c=null;
@@ -951,10 +1045,16 @@ function newerIso(a,b){
 }
 function humanEvent(e){
   const d=e.direction>0?'BUY':e.direction<0?'SELL':'';
+  const sd=e.setupDir>0?'BUY':e.setupDir<0?'SELL':e.watchDir>0?'BUY':e.watchDir<0?'SELL':'';
   switch(e.type){
     case 'WATCH_ARMED':return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
+    case 'SETUP_SCORE':return null;
+    case 'SETUP_CONFIRMED':return `${sd||'Setup'} confirmed at ${Number(e.score||0).toFixed(0)}/${Number(e.requiredScore||0).toFixed(0)} — submitting`;
+    case 'SETUP_EXPIRED':return `${sd||'Setup'} expired — watch timeout reached; scanning resumed`;
+    case 'SETUP_INVALIDATED':return `${sd||'Setup'} invalidated — price made a new extreme; scanning resumed`;
+    case 'SETUP_CONSUMED':return `${sd||'Setup'} setup consumed by campaign`;
     case 'SETUP_CANCELLED':return `Setup cancelled — ${e.cancelReason||'no longer valid'}`;
-    case 'SETUP_LOCATED':return `Setup confirmed — waiting for origin retest`;
+    case 'SETUP_LOCATED':return `Legacy retest build event — setup location stored`;
     case 'WATCH_EXTREME_UPDATED':return `Watched extreme updated`;
     case 'ORDER_PENDING':return `Broker accepted the order as pending — waiting for fill`;
     case 'ORDER_FILLED_LATE':return `Late fill attached to the campaign`;
@@ -976,6 +1076,20 @@ function humanEvent(e){
     case 'MASTER_SL_MOVE_FAIL':return 'Master stop change was REFUSED by the broker';
     default:return null;
   }
+}
+
+function recentHumanEvents(events,limit=30){
+  const out=[],seen=new Set();
+  for(const e of sortEvents(events).slice(-240).reverse()){
+    const text=humanEvent(e);
+    if(!text)continue;
+    const key=[e.type,e.setupId||'',e.campaignId||'',e.layer??'',text].join('|');
+    if(seen.has(key))continue;
+    seen.add(key);
+    out.push({ts:e.ts,type:e.type,text});
+    if(out.length>=limit)break;
+  }
+  return out;
 }
 function learningShape(events){
   const ends=events.filter(e=>e.type==='CAMPAIGN_END');
@@ -1049,6 +1163,7 @@ async function buildMe(key){
   });
 
   const campaign=decorateCampaign(projectCampaign(events),hb||{},lastSeen);
+  const setupStatus=projectSetupStatus(events);
   const ack=projectAck(events);
 
   const desiredRevision=Number(lic.commandRevision||0);
@@ -1108,8 +1223,8 @@ async function buildMe(key){
       asOf:lastSeen||null,
       tradeMode:known3(lic.tradeMode)
     },
-    campaign,history:buildHistory(events),learning:learningShape(events),
-    recentHuman:sortEvents(events).slice(-120).reverse().map(e=>({ts:e.ts,type:e.type,text:humanEvent(e)})).filter(x=>x.text).slice(0,30),
+    campaign,setupStatus,history:buildHistory(events),learning:learningShape(events),
+    recentHuman:recentHumanEvents(events,30),
     effectiveConfig:{
       eaVersion:hb?.ea_version||lic.eaVersion||null,
       buildId:hb?.build_id||lic.buildId||null,

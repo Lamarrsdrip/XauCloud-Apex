@@ -2173,9 +2173,27 @@ bool Rates(ENUM_TIMEFRAMES tf,int n,MqlRates &r[])
 //====================== setup lifecycle (APEX-AUDIT-003) ==============
 void SetupReset(string reason)
   {
-   if(S.state==SETUP_WATCHING||S.state==SETUP_CONFIRMED)
-      Emit("SETUP_CANCELLED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"cancelReason\":\"%s\",\"extreme\":%.5f,\"ageSec\":%d",
-           S.id,S.dir,reason,S.extreme,(int)(TimeCurrent()-S.armedAt)));
+   // SETUP-TELEMETRY-001: terminal setup transitions must be observable BEFORE
+   // the setup slot is cleared. v3.8.6 previously changed the state to EXPIRED /
+   // INVALIDATED and then called SetupReset(), whose old WATCHING/CONFIRMED-only
+   // logger silently dropped the reason.
+   if(S.id!="")
+     {
+      string eventType="SETUP_CANCELLED";
+      string terminalState="CANCELLED";
+      if(S.state==SETUP_EXPIRED||reason=="EXPIRED")
+        {eventType="SETUP_EXPIRED";terminalState="EXPIRED";}
+      else if(S.state==SETUP_INVALIDATED||reason=="NEW_EXTREME_BEYOND_SWEPT_LEVEL")
+        {eventType="SETUP_INVALIDATED";terminalState="INVALIDATED";}
+      else if(S.state==SETUP_CONSUMED||StringFind(reason,"CONSUMED_BY_CAMPAIGN")==0)
+        {eventType="SETUP_CONSUMED";terminalState="CONSUMED";}
+      int ageSec=S.armedAt>0?(int)MathMax(0,(double)(TimeCurrent()-S.armedAt)):0;
+      Emit(eventType,StringFormat(
+           ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"%s\",\"cancelReason\":\"%s\",\"extreme\":%.5f,\"ageSec\":%d",
+           S.id,S.dir,terminalState,reason,S.extreme,ageSec));
+      Print("APEX SETUP TERMINAL | id=",S.id," | dir=",S.dir>0?"BUY":"SELL",
+            " | state=",terminalState," | reason=",reason," | ageSec=",ageSec);
+     }
    S.state=SETUP_NONE;S.id="";S.dir=0;S.sig="";S.cancelReason=reason;
    S.armedAt=0;S.sweepBarTime=0;S.confirmedAt=0;S.triggerBarTime=0;
    S.extreme=0;S.prior=0;S.atr=0;S.triggerPrice=0;S.bosKind="";
@@ -2197,6 +2215,82 @@ void ArmSetup(int dir,datetime sweepBar,double extreme,double prior,double atr,d
    S.sig=dir<0?"SELL_UPSIDE_LIQUIDITY_EXHAUST":"BUY_DOWNSIDE_LIQUIDITY_EXHAUST";
    Emit("WATCH_ARMED",StringFormat(",\"setupId\":\"%s\",\"watchDir\":%d,\"impulseAtr\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"sweepBarTime\":%I64d",
         S.id,dir,impulseMult,extreme,prior,(long)sweepBar));
+  }
+
+string SetupStateText()
+  {
+   if(S.state==SETUP_WATCHING) return "WATCHING";
+   if(S.state==SETUP_CONFIRMED) return "CONFIRMED";
+   if(S.state==SETUP_INVALIDATED) return "INVALIDATED";
+   if(S.state==SETUP_EXPIRED) return "EXPIRED";
+   if(S.state==SETUP_CONSUMED) return "CONSUMED";
+   return "NONE";
+  }
+
+string SetupWaitReason(const Snap &s,bool m3Available,bool m5Available,
+                       bool m3Gate,bool m5Gate,double threshold)
+  {
+   if(C.requireM3Confirm&&!m3Available) return "M3_HISTORY_UNAVAILABLE";
+   if(C.requireM5Context&&!m5Available) return "M5_HISTORY_UNAVAILABLE";
+   if(!s.rejected) return "REJECTION";
+   if(!s.microBreak) return "MICRO_BOS";
+   if(!m3Gate) return "M3_CONFIRM";
+   if(!m5Gate) return "M5_CONTEXT";
+   if(s.score<threshold) return "SCORE";
+   return "READY";
+  }
+
+void EmitSetupTelemetry(const Snap &s,bool m3Available,bool m5Available,
+                        bool m3Gate,bool m5Gate,double threshold)
+  {
+   if(S.id=="") return;
+
+   // TELEMETRY ONLY: exact existing score terms, recomputed for display.
+   // They never feed back into s.score or any entry condition.
+   double impulsePoints=clamp(s.impulseMult/C.impulseAtr*15,0,18);
+   double rejectionPoints=s.rejected?24.0:0.0;
+   double bosPoints=s.microBreak?22.0:0.0;
+   double m3Points=s.m3Color?8.0:0.0;
+   double m5Points=s.m5Color?3.0:0.0;
+   double wickPoints=clamp(s.wickRatio*2,0,5);
+   string waitReason=SetupWaitReason(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
+   datetime closedBar=iTime(_Symbol,PERIOD_M1,1);
+
+   // Scanner can run every 250 ms. Emit only on meaningful state/bar changes.
+   string fingerprint=StringFormat(
+      "%s|%I64d|%s|%.2f|%s|%s|%s|%s|%s|%s",
+      S.id,(long)closedBar,SetupStateText(),s.score,
+      BoolJson(s.rejected),BoolJson(s.microBreak),BoolJson(m3Gate),BoolJson(m5Gate),
+      BoolJson(m3Available),BoolJson(m5Available));
+   static string lastFingerprint="";
+   if(fingerprint==lastFingerprint) return;
+   lastFingerprint=fingerprint;
+
+   Emit("SETUP_SCORE",StringFormat(
+      ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"%s\","
+      "\"score\":%.2f,\"requiredScore\":%.2f,\"basePoints\":%.2f,\"impulsePoints\":%.2f,"
+      "\"rejectionPoints\":%.2f,\"bosPoints\":%.2f,\"m3Points\":%.2f,\"m5Points\":%.2f,\"wickPoints\":%.2f,"
+      "\"rejected\":%s,\"microBreak\":%s,\"m3Color\":%s,\"m3Fresh\":%s,\"m5Color\":%s,"
+      "\"m3Available\":%s,\"m5Available\":%s,\"m3Gate\":%s,\"m5Gate\":%s,"
+      "\"requireM3\":%s,\"requireM5\":%s,\"waitReason\":\"%s\",\"bosKind\":\"%s\","
+      "\"impulseAtr\":%.3f,\"wickRatio\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"ageSec\":%d",
+      S.id,S.dir,SetupStateText(),s.score,threshold,APEX_SCORE_BASE,impulsePoints,
+      rejectionPoints,bosPoints,m3Points,m5Points,wickPoints,
+      BoolJson(s.rejected),BoolJson(s.microBreak),BoolJson(s.m3Color),BoolJson(s.m3Fresh),BoolJson(s.m5Color),
+      BoolJson(m3Available),BoolJson(m5Available),BoolJson(m3Gate),BoolJson(m5Gate),
+      BoolJson(C.requireM3Confirm),BoolJson(C.requireM5Context),waitReason,s.bosKind,
+      s.impulseMult,s.wickRatio,S.extreme,S.prior,
+      S.armedAt>0?(int)MathMax(0,(double)(TimeCurrent()-S.armedAt)):0));
+
+   Print("APEX SETUP | ",S.dir>0?"BUY":"SELL",
+         " | id=",S.id,
+         " | state=",SetupStateText(),
+         " | score=",DoubleToString(s.score,1),"/",DoubleToString(threshold,1),
+         " | rejection=",s.rejected?"PASS":"WAIT",
+         " | bos=",s.microBreak?"PASS":"WAIT",
+         " | m3=",C.requireM3Confirm?(m3Gate?"PASS":"WAIT"):"OPTIONAL",
+         " | m5=",C.requireM5Context?(m5Gate?"PASS":"WAIT"):"OPTIONAL",
+         " | waiting=",waitReason);
   }
 
 //====================== observation ===================================
@@ -2321,16 +2415,42 @@ Snap Observe()
 
    bool m3Gate=(!C.requireM3Confirm)||(s.m3Color&&(!InpRequireFreshM3||s.m3Fresh));
    bool m5Gate=(!C.requireM5Context)||s.m5Color;
-   if(C.requireM3Confirm&&!m3Available){s.reason="M3_HISTORY_UNAVAILABLE_BUT_REQUIRED";return s;}
-   if(C.requireM5Context&&!m5Available){s.reason="M5_HISTORY_UNAVAILABLE_BUT_REQUIRED";return s;}
-
    double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
+
+   // Missing required history remains the same hard gate. We only expose it.
+   if(C.requireM3Confirm&&!m3Available)
+     {
+      s.reason="M3_HISTORY_UNAVAILABLE_BUT_REQUIRED";
+      EmitSetupTelemetry(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
+      return s;
+     }
+   if(C.requireM5Context&&!m5Available)
+     {
+      s.reason="M5_HISTORY_UNAVAILABLE_BUT_REQUIRED";
+      EmitSetupTelemetry(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
+      return s;
+     }
+
    s.valid=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold;
    s.reason=s.valid?"CONFIRMED_EXHAUSTION_REVERSAL":"WATCHING_FOR_REJECTION_AND_BOS";
-   if(s.valid&&S.state==SETUP_WATCHING)
+   bool newlyConfirmed=s.valid&&S.state==SETUP_WATCHING;
+   if(newlyConfirmed)
      {
       S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();
       S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=bosKind;
+     }
+
+   EmitSetupTelemetry(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
+   if(newlyConfirmed)
+     {
+      Emit("SETUP_CONFIRMED",StringFormat(
+         ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"score\":%.2f,"
+         "\"requiredScore\":%.2f,\"bosKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"ageSec\":%d",
+         S.id,S.dir,s.score,threshold,S.bosKind,S.triggerPrice,(long)S.triggerBarTime,
+         S.armedAt>0?(int)MathMax(0,(double)(TimeCurrent()-S.armedAt)):0));
+      Print("APEX SETUP CONFIRMED | ",S.dir>0?"BUY":"SELL"," | id=",S.id,
+            " | score=",DoubleToString(s.score,1),"/",DoubleToString(threshold,1),
+            " | bos=",S.bosKind," | submitting on existing v3.8.2 rule");
      }
    return s;
   }

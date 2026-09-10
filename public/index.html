@@ -550,18 +550,90 @@ function campaignSummaryCard(camp, cur, showLayers){
   return html;
 }
 
+function setupGatePill(ok, required, available){
+  if (available===false && required) return pill('UNAVAILABLE','red');
+  if (!required) return pill(ok?'PASS':'OPTIONAL',ok?'green':'gray');
+  return pill(ok?'PASS':'WAIT',ok?'green':'amber');
+}
+
 function watchingCard(me){
-  var recent = (me.recentHuman||[])[0];
-  var recentTs = recent && (Date.parse(recent.ts));
-  var watching = recent && (recent.type==='WATCH_ARMED'||recent.type==='SETUP_LOCATED'||recent.type==='WATCH_EXTREME_UPDATED') && Number.isFinite(recentTs) && (Date.now()-recentTs)<20*60*1000;
-  var waitingRetest = recent && recent.type==='SETUP_LOCATED' && Number.isFinite(recentTs) && (Date.now()-recentTs)<20*60*1000;
-  return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>'+(waitingRetest?'WAITING FOR ORIGIN RETEST':'APEX IS WATCHING')+'</h4>'
-    + '<p>'+(waitingRetest? 'Setup confirmed — Apex will enter only if price returns to the displacement origin.' : watching? 'A potential setup was recently detected — waiting for confirmation.' : 'Waiting for a high-quality setup.')+'</p></div>'
-    + '<div class="stepper">'
-    + '<div class="step'+(!watching?' active':'')+'"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-    + '<div class="step-line'+(watching?' active':'')+'"></div>'
-    + '<div class="step'+(watching?' active':'')+'"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
+  var s = me.setupStatus || null;
+  var active = !!(s && s.active && (s.state==='WATCHING'||s.state==='CONFIRMED'));
+  var recentTerminal = !!(s && !s.active && Number.isFinite(Number(s.eventAgeSec)) && Number(s.eventAgeSec)<20*60);
+
+  if (!active && !recentTerminal){
+    return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>APEX IS SCANNING</h4>'
+      + '<p>Waiting for a high-quality setup. When one is armed, this card will show its live score and every confirmation gate.</p></div>'
+      + '<div class="stepper">'
+      + '<div class="step active"><div class="dot"></div><div class="lbl">Scanning</div></div>'
+      + '<div class="step-line"></div>'
+      + '<div class="step"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
+      + '</div></div>';
+  }
+
+  if (recentTerminal){
+    var terminalText = s.state==='EXPIRED'
+      ? 'The setup did not complete before the configured watch timeout. Apex discarded it and resumed scanning.'
+      : s.state==='INVALIDATED'
+      ? 'Price printed a new extreme beyond the swept level, invalidating the rejection thesis. Apex resumed scanning.'
+      : s.state==='CONSUMED'
+      ? 'This setup was consumed by a campaign. Apex will scan again whenever it is idle.'
+      : 'Apex cancelled this setup and resumed scanning.';
+    return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>SETUP '+esc(s.state)+' — SCANNING AGAIN</h4>'
+      + '<p>'+esc(terminalText)+'</p></div>'
+      + '<div class="row"><span class="k">Direction</span><span class="v">'+esc(s.direction||'—')+'</span></div>'
+      + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>'
+      + '<div class="row"><span class="k">Reason</span><span class="v">'+esc(s.reason||s.state||'—')+'</span></div>'
+      + (s.score==null?'':'<div class="row"><span class="k">Last score</span><span class="v">'+Number(s.score).toFixed(0)+' / '+(s.requiredScore==null?'—':Number(s.requiredScore).toFixed(0))+'</span></div>')
+      + '<div class="stepper">'
+      + '<div class="step active"><div class="dot"></div><div class="lbl">Scanning</div></div>'
+      + '<div class="step-line"></div>'
+      + '<div class="step"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
+      + '</div></div>';
+  }
+
+  var score = s.score==null ? null : Number(s.score);
+  var required = s.requiredScore==null ? null : Number(s.requiredScore);
+  var scorePct = score!=null && required>0 ? Math.min(100,Math.max(0,(score/required)*100)) : 0;
+  var scoreReady = score!=null && required!=null && score>=required;
+  var title = s.state==='CONFIRMED' ? 'SETUP CONFIRMED — SUBMITTING' : 'CONFIRMING '+esc(s.direction||'')+' SETUP';
+
+  var html = '<div class="card"><div class="empty-state" style="padding-bottom:18px"><div class="ic">&#128269;</div><h4>'+title+'</h4>'
+    + '<p>Authoritative EA setup '+esc(s.setupId||'—')+'. This is live strategy telemetry, not a dashboard guess.</p></div>';
+
+  if (score!=null){
+    html += '<div class="progress-wrap"><div class="progress-big">'+score.toFixed(0)+' <span style="font-size:14px;color:var(--text-dim)">/ '+(required==null?'—':required.toFixed(0))+' required</span></div>'
+      + '<div class="progress-track"><div class="progress-fill" style="width:'+scorePct+'%"></div></div></div>';
+  }
+
+  html += '<div class="row"><span class="k">Entry score</span><span class="v">'+(score==null?'—':score.toFixed(0))+' '+(required==null?'':setupGatePill(scoreReady,true,true))+'</span></div>'
+    + '<div class="row"><span class="k">Rejection</span><span class="v">'+setupGatePill(!!s.rejected,true,true)+'</span></div>'
+    + '<div class="row"><span class="k">Micro BOS</span><span class="v">'+setupGatePill(!!s.microBreak,true,true)+'</span></div>'
+    + '<div class="row"><span class="k">M3 confirmation</span><span class="v">'+setupGatePill(!!s.m3Gate,!!s.requireM3,s.m3Available!==false)+'</span></div>'
+    + '<div class="row"><span class="k">M5 context</span><span class="v">'+setupGatePill(!!s.m5Gate,!!s.requireM5,s.m5Available!==false)+'</span></div>'
+    + '<div class="row"><span class="k">Waiting for</span><span class="v">'+esc((s.waitReason||'—').replace(/_/g,' '))+'</span></div>'
+    + '<div class="row"><span class="k">BOS type</span><span class="v">'+esc(s.bosKind||'NONE')+'</span></div>'
+    + '<div class="row"><span class="k">Setup age</span><span class="v">'+(s.setupAgeSec==null?'—':Math.max(0,Math.round(Number(s.setupAgeSec)))+'s')+'</span></div>'
+    + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>';
+
+  if (score!=null){
+    html += '<div style="margin-top:14px"><h3>Score components</h3>'
+      + '<div class="row"><span class="k">Base</span><span class="v">+'+Number(s.basePoints||0).toFixed(1)+'</span></div>'
+      + '<div class="row"><span class="k">Impulse</span><span class="v">+'+Number(s.impulsePoints||0).toFixed(1)+'</span></div>'
+      + '<div class="row"><span class="k">Rejection</span><span class="v">+'+Number(s.rejectionPoints||0).toFixed(1)+'</span></div>'
+      + '<div class="row"><span class="k">Micro BOS</span><span class="v">+'+Number(s.bosPoints||0).toFixed(1)+'</span></div>'
+      + '<div class="row"><span class="k">M3</span><span class="v">+'+Number(s.m3Points||0).toFixed(1)+'</span></div>'
+      + '<div class="row"><span class="k">M5</span><span class="v">+'+Number(s.m5Points||0).toFixed(1)+'</span></div>'
+      + '<div class="row"><span class="k">Wick quality</span><span class="v">+'+Number(s.wickPoints||0).toFixed(1)+'</span></div>'
+      + '</div>';
+  }
+
+  html += '<div class="stepper">'
+    + '<div class="step"><div class="dot"></div><div class="lbl">Scanning</div></div>'
+    + '<div class="step-line active"></div>'
+    + '<div class="step active"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
     + '</div></div>';
+  return html;
 }
 
 function recentFeedCard(items){

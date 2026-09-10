@@ -64,6 +64,17 @@ button{cursor:pointer}
 .topbar-inner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;max-width:1200px;margin:0 auto}
 .topbar-brand{display:flex;align-items:center;gap:8px;margin-right:auto}
 .topbar-brand .brand-mark{width:26px;height:26px;font-size:12px;border-radius:7px}
+.topbar-brand .brand-mark-apex{
+  background:linear-gradient(145deg,#16181f,#08090d);
+  border:1px solid #3a3d46;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 1px 3px rgba(0,0,0,.45);
+  color:#e8b84b;
+  font-family:Georgia,"Times New Roman",serif;
+  font-size:22px;
+  font-weight:900;
+  line-height:1;
+  text-shadow:0 1px 1px rgba(0,0,0,.65);
+}
 .topbar-brand span{font-weight:800;letter-spacing:.03em;font-size:14px}
 .pills{display:flex;gap:6px;flex-wrap:wrap}
 .pill{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:99px;font-size:11.5px;font-weight:700;letter-spacing:.02em;white-space:nowrap;border:1px solid transparent}
@@ -217,7 +228,7 @@ button{cursor:pointer}
 <div id="app-shell">
   <div class="topbar">
     <div class="topbar-inner">
-      <div class="topbar-brand"><div class="brand-mark">X</div><span>XAUCLOUD APEX</span></div>
+      <div class="topbar-brand"><div class="brand-mark brand-mark-apex" aria-label="Apex">A</div><span>XauCloud Apex</span></div>
       <div class="pills" id="status-pills"></div>
     </div>
   </div>

@@ -58,6 +58,7 @@ Setup S;
 string g_instanceId="native";
 CampState campState=CAMP_IDLE;
 int campDir=0;
+int layers=0;                 // v3.8.7: LayerMarginPct() reads the live layer count
 bool anchorsKnown=true;
 ApexBosMode InpBosMode=BOS_V371_CLOSE_OR_WICK;
 bool InpRequireFreshM3=false;
@@ -250,6 +251,14 @@ double LargestVolumePassingCheck(int dir,double price,double sl,double hi)
         }
      }
    return FloorToStep(lo);
+  }
+
+double LayerMarginPct()
+  {
+   // APEX-AUDIT-012: these come from C.* (dashboard), seeded from the Inputs.
+   if(layers<=0) return MathMax(0.1,MathMin(100.0,C.normalL1MarginPct));
+   if(layers==1) return MathMax(0.1,MathMin(100.0,C.normalL2MarginPct));
+   return MathMax(0.1,MathMin(100.0,C.normalL3PlusMarginPct));
   }
 
 SizingDecision ComputeVolume(int dir,double pct,double price,double sl)

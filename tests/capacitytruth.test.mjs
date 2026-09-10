@@ -13,16 +13,16 @@ test('the canonical and versioned EA files are byte-identical',()=>{
   const canonical=fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5',import.meta.url));
   const versioned=fs.readFileSync(new URL('../'+version.versionedEaFile,import.meta.url));
   assert.equal(version.eaFile,'ea/XauCloud-Apex.mq5');
-  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5');
+  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.8.7-UnifiedMarginLadder.mq5');
   assert.equal(sha(canonical),sha(versioned),
     `${version.eaFile} and ${version.versionedEaFile} must be identical`);
 });
 
 test('version.json, the EA banner and #property version all agree',()=>{
-  assert.equal(version.version,'3.8.6');
+  assert.equal(version.version,'3.8.7');
   assert.ok(ea.includes(version.eaVersion),'EA must define the version.json eaVersion string');
   const prop=ea.match(/#property version\s+"([\d.]+)"/)?.[1];
-  assert.equal(prop,'3.860');
+  assert.equal(prop,'3.870');
 });
 function floorStep(v,step=0.01){return Math.floor((v+1e-12)/step)*step;}
 function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0.01}){
@@ -33,9 +33,9 @@ function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0
   return Math.min(byCapacity,byMoney);
 }
 
-test('canonical EA is v3.8.6 HardenedCapacity with v3.8.2 CapacityTruth trading intact',()=>{
-  assert.match(ea,/#property version\s+"3\.860"/);
-  assert.match(ea,/XauCloud-Apex_v3\.8\.6-HardenedCapacity/);
+test('canonical EA is v3.8.7 UnifiedMarginLadder with v3.8.2 CapacityTruth trading intact',()=>{
+  assert.match(ea,/#property version\s+"3\.870"/);
+  assert.match(ea,/XauCloud-Apex_v3\.8\.7-UnifiedMarginLadder/);
   assert.match(ea,/if\(s\.valid\) Start\(s\);/);
   assert.doesNotMatch(ea,/if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.match(ea,/TrustedMarginPerLot/);
@@ -93,9 +93,17 @@ test('normalReferenceLeverage is remotely configurable end to end (no EA recompi
 });
 
 test('UNLIMITED aggressive capacity path remains present',()=>{
+  // UNLIMITED must still establish capacity from the broker/server itself: no reference
+  // leverage, no invented lot cap, no NORMAL margin economics.
   assert.match(ea,/UNLIMITED_BROKER_CAPACITY/);
+  assert.match(ea,/UNLIMITED_SERVER_CAPACITY/);
   assert.match(ea,/LargestVolumePassingCheck/);
-  assert.match(ea,/APEX SIZING STEP-DOWN/);
+  assert.doesNotMatch(ea,/normalReferenceLeverage[^;]*UNLIMITED/,
+    'UNLIMITED must never be given a reference leverage');
+  // v3.8.7: the retry is a capacity re-derivation, not a blind halving. "APEX SIZING
+  // STEP-DOWN" was the halving path and is deliberately gone.
+  assert.doesNotMatch(ea,/APEX SIZING STEP-DOWN/);
+  assert.match(ea,/APEX CAPACITY RE-DERIVED/);
 });
 
 test('event telemetry is durable across terminal restart',()=>{

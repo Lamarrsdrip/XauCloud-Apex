@@ -221,7 +221,7 @@ test('v3.8.6: same trigger cannot add twice; GATE_SHADOW stays the default', () 
   assert.match(s, /input ApexGateMode InpEntryExtensionMode=GATE_SHADOW/);
 });
 
-test('v3.8.6 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocation', async () => {
+test('v3.8.7 did not rewrite ComputeVolume: the capacity ENGINE is untouched', async () => {
   const cur = s;
   const v382 = await fs.readFile(new URL('../ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5', import.meta.url), 'utf8');
   const slice = (src, start, end) => {
@@ -229,14 +229,53 @@ test('v3.8.6 did not rewrite ComputeVolume / LayerMarginPct / UNLIMITED allocati
     const b = src.indexOf(end, a + start.length);
     return src.slice(a, b);
   };
+  // v3.8.7 changes WHICH percentage each layer asks for. It must not change HOW
+  // capacity is established -- that is what keeps UNLIMITED genuinely UNLIMITED and
+  // NORMAL genuinely NORMAL. ComputeVolume must stay byte-identical to v3.8.2.
   assert.equal(
     slice(cur, 'SizingDecision ComputeVolume', 'string SizingJson'),
     slice(v382, 'SizingDecision ComputeVolume', 'string SizingJson')
   );
-  assert.equal(
-    slice(cur, 'double LayerMarginPct()', '// A rejection that is purely about SIZE'),
-    slice(v382, 'double LayerMarginPct()', '// A rejection that is purely about SIZE')
-  );
+});
+
+test('v3.8.7: LayerMarginPct is ONE 15/50/100 ladder for BOTH profiles', () => {
+  const ladder = section('double LayerMarginPct()', '// A rejection that is purely about SIZE');
+  // The profile no longer selects a different ladder.
+  assert.doesNotMatch(ladder, /ExecutionProfile\(\)\s*==\s*"NORMAL"/,
+    'LayerMarginPct must not branch on profile any more');
+  // The geometric UNLIMITED form is the root cause of L1=100% and must be gone.
+  assert.doesNotMatch(ladder, /baseMarginPct\s*\*\s*MathPow/,
+    'the baseMarginPct*layerMultiplier^layers form must not size a layer');
+  assert.match(ladder, /layers<=0\)\s*return[^;]*normalL1MarginPct/);
+  assert.match(ladder, /layers==1\)\s*return[^;]*normalL2MarginPct/);
+  assert.match(ladder, /return[^;]*normalL3PlusMarginPct/);
+});
+
+test('v3.8.7: the requested percentage survives capacity rediscovery on BOTH profiles', () => {
+  const open = section('bool OpenLayer(', 'string execExtra=StringFormat(');
+  // The UNLIMITED halving path is the defect: 15% of a believed capacity became
+  // "halve until something fills", which is not 15% of anything.
+  assert.doesNotMatch(open, /FloorToStep\(vol\*0\.5\)/,
+    'the halve-until-it-fills retry must be gone');
+  assert.doesNotMatch(open, /SIZING_STEP_DOWN/,
+    'the step-down event belonged to the halving path');
+  // Re-derive then re-apply the SAME pct, for both profiles (no profile branch).
+  assert.match(open, /ServerCapacityCeiling\(\)/,
+    'rediscovery must be bounded by server-proven evidence');
+  assert.match(open, /trueCap\*clamp\(pct/,
+    'the SAME percentage must be re-applied to the re-derived capacity');
+  assert.match(open, /SIZING_CAPACITY_REDERIVED/);
+});
+
+test('v3.8.7: server-proven capacity evidence survives a restart', () => {
+  const save = section('void SaveState()', 'void ClearState()');
+  const load = section('int LoadState()', 'void OnDeinit');
+  for (const k of ['srvRejectedVol', 'srvFilledVol', 'srvEvidenceFreeMargin']) {
+    assert.match(save, new RegExp(k), `SaveState must persist ${k}`);
+    assert.match(load, new RegExp(k), `LoadState must restore ${k}`);
+  }
+  // Never invent capacity that was never proven.
+  assert.match(load, /JNumOr\("srvRejectedVol",0\)/);
 });
 
 test('v3.8.6: schema 4 persists setup, pending submit and cloud lease', () => {

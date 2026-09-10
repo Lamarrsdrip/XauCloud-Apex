@@ -72,6 +72,43 @@ static void emitSizing(const std::string &name,int dir,double pct,double price,d
     b(d.brokerMarginModelTrusted).c_str(),d.moneyCapacity,d.trustedMarginPerLot));
 }
 
+// v3.8.7: mirrors the CURRENT OpenLayer retry -- re-derive the capacity the server's
+// rejection proves, then re-apply the SAME percentage. tests/ea_static.test.mjs asserts
+// the real OpenLayer contains this shape (and no longer contains vol*0.5).
+struct RederiveResult { double filled; int attempts; std::vector<double> tried; bool gaveUp; };
+static RederiveResult rederive(int dir,double start,double pct,double sl,int maxAttempts){
+  RederiveResult r; r.filled=0; r.attempts=0; r.gaveUp=false;
+  double vol=start, step=VolStep();
+  for(int i=0;i<maxAttempts;i++){
+    r.tried.push_back(vol); r.attempts++;
+    if(BRK.serverMargin(vol)<=BRK.freeMargin+1e-9){ r.filled=vol; return r; }
+    uint rc=TRADE_RETCODE_NO_MONEY;
+    if(!IsSizeOnlyRejection(rc,0)) break;
+    NoteServerRejectedVolume(vol);
+    if(i>=maxAttempts-1) break;
+    double capHi=FloorToStep(vol-step);
+    double learned=ServerCapacityCeiling();
+    if(learned>0&&learned<capHi) capHi=FloorToStep(learned);
+    if(capHi<=0) break;
+    double trueCap=LargestVolumePassingCheck(dir,BRK.ask,sl,capHi);
+    if(trueCap<=0) trueCap=capHi;
+    double next=FloorToStep(trueCap*(pct<0.1?0.1:(pct>100?100:pct))/100.0);
+    if(next<BRK.volMin||next<=0||next>=vol){ r.gaveUp=true; return r; }
+    vol=next;
+  }
+  r.gaveUp=true; return r;
+}
+
+// The ladder itself, read from the REAL extracted LayerMarginPct().
+static void emitLadder(const std::string &name,const char *profile){
+  C.accountProfile=profile;
+  double p[4];
+  for(int i=0;i<4;i++){ layers=i; p[i]=LayerMarginPct(); }
+  layers=0;
+  row(StringFormat("{\"test\":\"%s\",\"profile\":\"%s\",\"L1\":%.4f,\"L2\":%.4f,\"L3\":%.4f,\"L4\":%.4f}",
+                   name.c_str(),profile,p[0],p[1],p[2],p[3]));
+}
+
 static void emitGate(const std::string &name,int dir,double invalidLevel,double refPrice,
                      double atr,datetime triggerBar){
   Gate g;
@@ -337,6 +374,93 @@ int main(){
                      b(watching).c_str(),b(confirmed).c_str(),
                      b(!expiredWatch).c_str(),b(expiredFromArmedNotConfirm).c_str(),
                      b(!reclaimed).c_str(),b(!idle).c_str()));
+  }
+
+  // ---------- v3.8.7 UnifiedMarginLadder ------------------------------------
+  // (1) One ladder for BOTH profiles, read from the real LayerMarginPct().
+  resetBroker(); emitLadder("ladder_normal","NORMAL");
+  resetBroker(); emitLadder("ladder_unlimited","UNLIMITED");
+
+  // (2) The percentage is of CURRENT capacity, re-derived per layer. A sane broker with
+  // 100.00/lot and 2500 free margin is exactly 25.00 lots of capacity.
+  // L1 15% of 25.00 = 3.75. Then capacity genuinely shrinks and L2/L3 must use the NEW
+  // number, never the original 25.
+  for(const char *prof : {"NORMAL","UNLIMITED"}){
+    resetBroker();
+    C.accountProfile=prof; C.normalReferenceLeverage=0;
+    BRK.marginPerLot=100.0; BRK.volMax=200.0; BRK.freeMargin=2500.0;
+    emitSizing(std::string("ladder_capacity_L1_")+prof,1,15.0,BRK.ask,0);
+    BRK.freeMargin=2125.0;   // 21.25 lots remain
+    emitSizing(std::string("ladder_capacity_L2_")+prof,1,50.0,BRK.ask,0);
+    BRK.freeMargin=1063.0;   // 10.63 lots remain
+    emitSizing(std::string("ladder_capacity_L3_")+prof,1,100.0,BRK.ask,0);
+    BRK.freeMargin=4000.0;   // floating profit created NEW capacity: 40.00 lots
+    emitSizing(std::string("ladder_capacity_L4_")+prof,1,100.0,BRK.ask,0);
+  }
+
+  // (3) Broker volume steps must never round exposure UP past the percentage budget.
+  for(double st : {0.01,0.1,0.25}){
+    resetBroker();
+    C.accountProfile="UNLIMITED";
+    BRK.marginPerLot=100.0; BRK.volMax=200.0; BRK.freeMargin=2500.0; BRK.volStep=st;
+    BRK.volMin=st;
+    emitSizing(StringFormat("ladder_step_%.2f",st),1,15.0,BRK.ask,0);
+  }
+
+  // (4) SIZE-REJECTION REGRESSION. The client model says gold is margin-free, so both
+  // OrderCalcMargin and OrderCheck approve SYMBOL_VOLUME_MAX (200). The SERVER charges
+  // 100/lot against 2500 free margin, so genuine capacity is 25.00 lots.
+  // Pre-3.8.7 UNLIMITED: 15% of a believed 200 = 30 -> rejected -> halve -> 15 -> fills.
+  // 15 lots is 60% of the true capacity, not 15%. That must be dead.
+  {
+    resetBroker();
+    C.accountProfile="UNLIMITED";
+    BRK.marginPerLot=0.0; BRK.serverMarginPerLot=100.0;
+    BRK.volMax=200.0; BRK.freeMargin=2500.0;
+    SizingDecision d=ComputeVolume(1,15.0,BRK.ask,0);
+    double requested=d.finalVolume;
+    DescentResult oldWay=descend(1,requested);
+    g_serverRejectedVolume=0; g_serverFilledVolume=0; g_serverEvidenceFreeMargin=0;
+    RederiveResult newWay=rederive(1,requested,15.0,0,6);
+    std::string tried;
+    for(size_t i=0;i<newWay.tried.size();i++) tried+=(i?",":"")+StringFormat("%.5f",newWay.tried[i]);
+    row(StringFormat("{\"test\":\"unlimited_size_rejection_preserves_pct\",\"requested\":%.5f,"
+                     "\"trueCapacity\":%.5f,\"oldHalvedFill\":%.5f,\"newFill\":%.5f,"
+                     "\"newTried\":[%s],\"newAttempts\":%d,\"learnedCeiling\":%.5f}",
+                     requested,BRK.freeMargin/BRK.serverMarginPerLot,oldWay.filled,newWay.filled,
+                     tried.c_str(),newWay.attempts,ServerCapacityCeiling()));
+  }
+  // (5) Same shape at L2 = 50%.
+  {
+    resetBroker();
+    C.accountProfile="UNLIMITED";
+    BRK.marginPerLot=0.0; BRK.serverMarginPerLot=100.0;
+    BRK.volMax=200.0; BRK.freeMargin=2500.0;
+    SizingDecision d=ComputeVolume(1,50.0,BRK.ask,0);
+    DescentResult oldWay=descend(1,d.finalVolume);
+    g_serverRejectedVolume=0; g_serverFilledVolume=0; g_serverEvidenceFreeMargin=0;
+    RederiveResult newWay=rederive(1,d.finalVolume,50.0,0,6);
+    row(StringFormat("{\"test\":\"unlimited_size_rejection_preserves_pct_L2\",\"requested\":%.5f,"
+                     "\"trueCapacity\":%.5f,\"oldHalvedFill\":%.5f,\"newFill\":%.5f}",
+                     d.finalVolume,BRK.freeMargin/BRK.serverMarginPerLot,oldWay.filled,newWay.filled));
+  }
+  // (6) Server evidence tightens the FIRST request of the next campaign -- this is the
+  // value of persisting it across a restart.
+  {
+    resetBroker();
+    C.accountProfile="UNLIMITED";
+    BRK.marginPerLot=0.0; BRK.serverMarginPerLot=100.0;
+    BRK.volMax=200.0; BRK.freeMargin=2500.0;
+    SizingDecision cold=ComputeVolume(1,15.0,BRK.ask,0);
+    // restart WITHOUT persistence: evidence is zero again -> same oversized request
+    g_serverRejectedVolume=0; g_serverFilledVolume=0; g_serverEvidenceFreeMargin=0;
+    SizingDecision amnesiac=ComputeVolume(1,15.0,BRK.ask,0);
+    // restart WITH persistence: the proven ceiling is restored from state
+    g_serverRejectedVolume=30.0; g_serverEvidenceFreeMargin=2500.0; g_serverFilledVolume=0;
+    SizingDecision warm=ComputeVolume(1,15.0,BRK.ask,0);
+    row(StringFormat("{\"test\":\"capacity_evidence_restart\",\"cold\":%.5f,\"amnesiac\":%.5f,"
+                     "\"warm\":%.5f,\"ceiling\":%.5f}",
+                     cold.finalVolume,amnesiac.finalVolume,warm.finalVolume,ServerCapacityCeiling()));
   }
 
   return 0;

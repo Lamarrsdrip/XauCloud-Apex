@@ -75,6 +75,7 @@ export function generateExtractedHeader(){
     extract(cur,'BrokerAcceptsVolume'),
     extract(cur,'LargestVolumeWithinMargin'),
     extract(cur,'LargestVolumePassingCheck'),
+    extract(cur,'LayerMarginPct'),
     extract(cur,'ComputeVolume'),
     extract(cur,'FinalEntryGate'),
     extract(cur,'IsSizeOnlyRejection'),
@@ -91,6 +92,7 @@ Setup S;
 string g_instanceId="native";
 CampState campState=CAMP_IDLE;
 int campDir=0;
+int layers=0;                 // v3.8.7: LayerMarginPct() reads the live layer count
 bool anchorsKnown=true;
 ApexBosMode InpBosMode=BOS_V371_CLOSE_OR_WICK;
 bool InpRequireFreshM3=false;

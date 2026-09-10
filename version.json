@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.6",
-  "buildId": "3.8.6-hardened-capacity",
-  "eaVersion": "XauCloud-Apex_v3.8.6-HardenedCapacity",
+  "version": "3.8.7",
+  "buildId": "3.8.7-unified-margin-ladder",
+  "eaVersion": "XauCloud-Apex_v3.8.7-UnifiedMarginLadder",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.7-UnifiedMarginLadder.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.6-HardenedCapacity). Versioned copy is ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5. Trading is v3.8.2 CapacityTruth (if(s.valid) Start(s)) plus 24 non-strategy hardenings only. Compile ea/XauCloud-Apex.mq5. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 sources."
+  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.7-UnifiedMarginLadder). Versioned copy is ea/XauCloud-Apex-v3.8.7-UnifiedMarginLadder.mq5. Trading logic is unchanged from v3.8.6; v3.8.7 changes sizing only: BOTH profiles now use one 15/50/100 layer ladder of CURRENT executable capacity, the requested percentage survives server capacity rediscovery on both profiles (no more halving), and server-proven capacity evidence persists across restart. Compile ea/XauCloud-Apex.mq5. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 sources."
 }

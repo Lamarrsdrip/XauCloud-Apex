@@ -1116,7 +1116,7 @@ function settingsView(c){return {
   masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,
   recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
   maxBasketLots:c.maxBasketLots,minMarginLevelPct:c.minMarginLevelPct,marginReservePct:c.marginReservePct,
-  unlimitedSizingNote:'Each valid UNLIMITED add uses 100% of CURRENT executable remaining capacity. The multiplier control is a no-op while baseMarginPct is 100 (runtime cap).',
+  unlimitedSizingNote:'v3.8.7: BOTH profiles use the same layer ladder -- L1 '+c.normalL1MarginPct+'%, L2 '+c.normalL2MarginPct+'%, L3+ '+c.normalL3PlusMarginPct+'% of CURRENT executable capacity, re-derived before every layer. UNLIMITED still establishes that capacity from its own broker/server-proven capacity (no reference leverage, no lot cap). baseMarginPct and layerMultiplier no longer size a layer and are retained for config compatibility only.',
   advanced:{entryScore:c.entryScore,addScore:c.addScore,impulseAtr:c.impulseAtr,sweepAtr:c.sweepAtr,
     rejectionBars:c.rejectionBars,watchExpiryMinutes:c.watchExpiryMinutes,rejectionZoneAtr:c.rejectionZoneAtr,
     addSpacingAtr:c.addSpacingAtr,requireM3Confirm:c.requireM3Confirm,requireM5Context:c.requireM5Context,

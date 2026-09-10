@@ -93,6 +93,10 @@ static RederiveResult rederive(int dir,double start,double pct,double sl,int max
     double trueCap=LargestVolumePassingCheck(dir,BRK.ask,sl,capHi);
     if(trueCap<=0) trueCap=capHi;
     double next=FloorToStep(trueCap*(pct<0.1?0.1:(pct>100?100:pct))/100.0);
+    if(next>vol*0.9){
+      double bisected=FloorToStep(trueCap*0.5);
+      next=FloorToStep(bisected*(pct<0.1?0.1:(pct>100?100:pct))/100.0);
+    }
     if(next<BRK.volMin||next<=0||next>=vol){ r.gaveUp=true; return r; }
     vol=next;
   }
@@ -430,6 +434,25 @@ int main(){
                      requested,BRK.freeMargin/BRK.serverMarginPerLot,oldWay.filled,newWay.filled,
                      tried.c_str(),newWay.attempts,ServerCapacityCeiling()));
   }
+  // (4b) pct=100 must still CONVERGE. At 100% the request equals the capacity bound,
+  // so a refusal only shaves one volume step; without the progress guard the descent
+  // stalls at 200 -> 199.99 -> 199.98 and never reaches an executable size.
+  {
+    resetBroker();
+    C.accountProfile="UNLIMITED";
+    BRK.marginPerLot=0.0; BRK.serverMarginPerLot=100.0;
+    BRK.volMax=200.0; BRK.freeMargin=2500.0;
+    SizingDecision d=ComputeVolume(1,100.0,BRK.ask,0);
+    RederiveResult r=rederive(1,d.finalVolume,100.0,0,10);
+    std::string tried;
+    for(size_t i=0;i<r.tried.size();i++) tried+=(i?",":"")+StringFormat("%.5f",r.tried[i]);
+    row(StringFormat("{\"test\":\"unlimited_pct100_converges\",\"requested\":%.5f,"
+                     "\"trueCapacity\":%.5f,\"fill\":%.5f,\"attempts\":%d,\"tried\":[%s],"
+                     "\"gaveUp\":%s}",
+                     d.finalVolume,BRK.freeMargin/BRK.serverMarginPerLot,r.filled,r.attempts,
+                     tried.c_str(),b(r.gaveUp).c_str()));
+  }
+
   // (5) Same shape at L2 = 50%.
   {
     resetBroker();

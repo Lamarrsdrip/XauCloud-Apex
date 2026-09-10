@@ -2866,6 +2866,17 @@ bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPri
       double trueCap=LargestVolumePassingCheck(dir,g.price,sl,capHi);
       if(trueCap<=0) trueCap=capHi;   // preflight is degenerate; the bound is still true
       double reSized=FloorToStep(trueCap*clamp(pct,.1,100)/100.0);
+      // At pct=100 the request IS the capacity bound, so a refusal only shaves one
+      // volume step and the descent stalls (200 -> 199.99 -> 199.98 ...). When the
+      // re-derived request does not make real progress, BISECT the capacity bound and
+      // re-apply the SAME percentage to that. The percentage is still what is asked
+      // for -- only the capacity ESTIMATE contracts geometrically, which is the one
+      // thing a lying preflight leaves us free to do.
+      if(reSized>vol*0.9)
+        {
+         double bisected=FloorToStep(trueCap*0.5);
+         reSized=FloorToStep(bisected*clamp(pct,.1,100)/100.0);
+        }
       if(reSized<d.volMin||reSized<=0||reSized>=vol)
         {
          PrintFormat("APEX SIZING ABORTED | profile=%s | %.2f%% of re-derived capacity %.4f is not executable",

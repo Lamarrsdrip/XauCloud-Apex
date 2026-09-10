@@ -352,3 +352,16 @@ test('SIZE-REJECTION: server capacity evidence is what makes the next request ho
   assert.equal(r.warm,4.49,'restored evidence tightens the very first request instead');
   assert.ok(r.warm<r.amnesiac,'persistence must strictly improve the first request');
 });
+
+test('SIZE-REJECTION: pct=100 still CONVERGES (the request equals the capacity bound)',{skip},()=>{
+  const r=R.unlimited_pct100_converges;
+  // Without a progress guard the re-derive shaves one volume step per attempt and the
+  // descent stalls at 200 -> 199.99 -> 199.98, never reaching an executable size.
+  assert.equal(r.gaveUp,false,'a 100% layer must still find an executable size');
+  assert.ok(r.attempts<=5,`expected geometric convergence, took ${r.attempts} attempts`);
+  assert.deepEqual(r.tried,[200,99.99,49.99,24.99],'capacity bound must contract geometrically');
+  assert.ok(r.fill>0,'it must actually fill');
+  // L3+ asks for 100% of current capacity, so landing at ~the true capacity is correct.
+  assert.ok(Math.abs(r.fill-r.trueCapacity)<=0.05,
+    `100% layer should land at ~the true ${r.trueCapacity}-lot capacity, got ${r.fill}`);
+});

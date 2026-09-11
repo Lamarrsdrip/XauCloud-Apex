@@ -143,7 +143,7 @@ test('NORMAL is the default profile and its L1/L2/L3 ladder comes from runtime C
   const defaults = section('void Defaults()', 'string ConfigCanonical');
   assert.match(defaults, /C\.accountProfile="NORMAL"/);
 
-  const layer = section('double LayerMarginPct()', '// A rejection that is purely about SIZE');
+  const layer = section('double LayerMarginPctFor(', '// v3.8.8 UNLIMITED state machine');
   assert.match(layer, /C\.normalL1MarginPct/);
   assert.match(layer, /C\.normalL2MarginPct/);
   assert.match(layer, /C\.normalL3PlusMarginPct/);
@@ -221,50 +221,44 @@ test('v3.8.6: same trigger cannot add twice; GATE_SHADOW stays the default', () 
   assert.match(s, /input ApexGateMode InpEntryExtensionMode=GATE_SHADOW/);
 });
 
-test('v3.8.7 did not rewrite ComputeVolume: the capacity ENGINE is untouched', async () => {
-  const cur = s;
+test('v3.8.8 did not touch the NORMAL capacity engine: its branch is byte-identical to v3.8.2', async () => {
   const v382 = await fs.readFile(new URL('../ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5', import.meta.url), 'utf8');
-  const slice = (src, start, end) => {
-    const a = src.indexOf(start);
-    const b = src.indexOf(end, a + start.length);
+  const branch = (src) => {
+    const a = src.indexOf('   if(ExecutionProfile()=="NORMAL")\n     {\n      double calcM=0');
+    const b = src.indexOf("   // UNLIMITED: preserve the owner's aggressive semantics.", a);
+    assert.ok(a > 0 && b > a, 'NORMAL branch of ComputeVolume not found');
     return src.slice(a, b);
   };
-  // v3.8.7 changes WHICH percentage each layer asks for. It must not change HOW
-  // capacity is established -- that is what keeps UNLIMITED genuinely UNLIMITED and
-  // NORMAL genuinely NORMAL. ComputeVolume must stay byte-identical to v3.8.2.
-  assert.equal(
-    slice(cur, 'SizingDecision ComputeVolume', 'string SizingJson'),
-    slice(v382, 'SizingDecision ComputeVolume', 'string SizingJson')
-  );
+  assert.equal(branch(s), branch(v382));
 });
 
-test('v3.8.7: LayerMarginPct is ONE 15/50/100 ladder for BOTH profiles', () => {
-  const ladder = section('double LayerMarginPct()', '// A rejection that is purely about SIZE');
-  // The profile no longer selects a different ladder.
-  assert.doesNotMatch(ladder, /ExecutionProfile\(\)\s*==\s*"NORMAL"/,
-    'LayerMarginPct must not branch on profile any more');
-  // The geometric UNLIMITED form is the root cause of L1=100% and must be gone.
+test('v3.8.8: NORMAL keeps the C.normal* ladder; UNLIMITED takes the fixed 1:200-first state machine', () => {
+  const ladder = section('double LayerMarginPctFor(', '// v3.8.8 UNLIMITED state machine');
   assert.doesNotMatch(ladder, /baseMarginPct\s*\*\s*MathPow/,
     'the baseMarginPct*layerMultiplier^layers form must not size a layer');
-  assert.match(ladder, /layers<=0\)\s*return[^;]*normalL1MarginPct/);
-  assert.match(ladder, /layers==1\)\s*return[^;]*normalL2MarginPct/);
+  assert.match(ladder, /filledLayers<=0\)\s*return[^;]*normalL1MarginPct/);
+  assert.match(ladder, /filledLayers==1\)\s*return[^;]*normalL2MarginPct/);
   assert.match(ladder, /return[^;]*normalL3PlusMarginPct/);
+  assert.match(s, /double LayerMarginPct\(\)\{return LayerMarginPctFor\(layers\);\}/);
+  const plan = section('LayerSizingPlan PlanLayerSizing(', '// The ONLY entry point that sizes a layer.');
+  assert.match(plan, /if\(profile=="NORMAL"\)\s*\{p\.mode="NORMAL";p\.pct=LayerMarginPctFor\(p\.filledLayers\)/);
+  assert.doesNotMatch(plan, /normalL1MarginPct|normalL2MarginPct/,
+    'UNLIMITED percentages must not be read from NORMAL dashboard fields');
 });
 
-test('v3.8.7: the requested percentage survives capacity rediscovery on BOTH profiles', () => {
+test('v3.8.8: the requested percentage AND engine survive capacity rediscovery', () => {
   const open = section('bool OpenLayer(', 'string execExtra=StringFormat(');
-  // The UNLIMITED halving path is the defect: 15% of a believed capacity became
-  // "halve until something fills", which is not 15% of anything.
   assert.doesNotMatch(open, /FloorToStep\(vol\*0\.5\)/,
     'the halve-until-it-fills retry must be gone');
   assert.doesNotMatch(open, /SIZING_STEP_DOWN/,
     'the step-down event belonged to the halving path');
-  // Re-derive then re-apply the SAME pct, for both profiles (no profile branch).
-  assert.match(open, /ServerCapacityCeiling\(\)/,
-    'rediscovery must be bounded by server-proven evidence');
-  assert.match(open, /trueCap\*clamp\(pct/,
-    'the SAME percentage must be re-applied to the re-derived capacity');
+  assert.match(open, /RederiveAfterSizeRejection\(plan,/);
   assert.match(open, /SIZING_CAPACITY_REDERIVED/);
+  const re = section('double RederiveAfterSizeRejection(', '// A blocked UNLIMITED layer WAITS');
+  assert.match(re, /ServerCapacityCeiling\(\)/,
+    'rediscovery must be bounded by server-proven evidence');
+  assert.match(re, /trueCap\*pct\/100\.0/,
+    'the SAME percentage must be re-applied to the re-derived capacity');
 });
 
 test('v3.8.7: server-proven capacity evidence survives a restart', () => {

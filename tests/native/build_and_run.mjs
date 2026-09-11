@@ -52,6 +52,7 @@ export function generateExtractedHeader(){
 
   const structs=[
     extract(cur,'SizingDecision',{kind:'struct'}),
+    extract(cur,'LayerSizingPlan',{kind:'struct'}),
     extract(cur,'Gate',{kind:'struct'}),
     extract(cur,'Setup',{kind:'struct'}),
     extract(cur,'Snap',{kind:'struct'})
@@ -75,8 +76,18 @@ export function generateExtractedHeader(){
     extract(cur,'BrokerAcceptsVolume'),
     extract(cur,'LargestVolumeWithinMargin'),
     extract(cur,'LargestVolumePassingCheck'),
+    extract(cur,'InitSizingV388'),
+    extract(cur,'VolumeLimitRoom'),
+    extract(cur,'LayerMarginPctFor'),
     extract(cur,'LayerMarginPct'),
     extract(cur,'ComputeVolume'),
+    extract(cur,'SimNotionalPerLot'),
+    extract(cur,'SimMarginPerLot'),
+    extract(cur,'SimUsedMarginAtLeverage'),
+    extract(cur,'ComputeSimulated1200Volume'),
+    extract(cur,'PlanLayerSizing'),
+    extract(cur,'ComputeLayerVolume'),
+    extract(cur,'RederiveAfterSizeRejection'),
     extract(cur,'FinalEntryGate'),
     extract(cur,'IsSizeOnlyRejection'),
     extract(cur,'BodyLooksLikeJsonObject'),
@@ -85,7 +96,11 @@ export function generateExtractedHeader(){
     extract(cur,'ManagerAllowsNewExposure'),
     extract(cur,'SetupSnapshotValidToRestore')
   ].join('\n\n');
-  const currentParts=structs+`
+  // v3.8.8: the UNLIMITED state-machine constants, copied verbatim from the EA source.
+  const defines=(cur.match(/^#define APEX_(?:SIM|UNL)_\w+\s+\S+.*$/gm)||[]).join('\n');
+  if(!/APEX_SIM_LEVERAGE/.test(defines)||!/APEX_UNL_L1_SIM200_PCT/.test(defines))
+    throw new Error('cannot locate the v3.8.8 UNLIMITED sizing #defines');
+  const currentParts=defines+'\n\n'+structs+`
 
 #define APEX_SCORE_BASE 25.0
 Setup S;
@@ -125,7 +140,10 @@ export function buildAndRun(){
   const cxx=findCxx();
   if(!cxx)return {skipped:'NO_CXX_TOOLCHAIN',rows:[]};
   const out=fs.mkdtempSync(path.join(os.tmpdir(),'apex-native-'));
-  fs.writeFileSync(path.join(here,'extracted.h'),generateExtractedHeader());
+  // Atomic replace: several test files build concurrently under `node --test`.
+  const hdr=path.join(here,'extracted.h'), tmpHdr=hdr+'.'+process.pid+'.tmp';
+  fs.writeFileSync(tmpHdr,generateExtractedHeader());
+  fs.renameSync(tmpHdr,hdr);
   const bin=path.join(out,'apex_native');
   const args=['-std=c++17','-O0','-Wno-format','-Wno-format-security','-Wno-writable-strings',
     '-o',bin,path.join(here,'main.cpp'),'-I',here];

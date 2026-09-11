@@ -93,7 +93,7 @@ test('SETUP-TELEMETRY: delayed outbox replay cannot resurrect an older setup',()
 test('SETUP-TELEMETRY: canonical and versioned EA remain byte-identical and trading trigger stays unchanged',async()=>{
   const root=new URL('../',import.meta.url);
   const canonical=await fs.readFile(new URL('ea/XauCloud-Apex.mq5',root),'utf8');
-  const versioned=await fs.readFile(new URL('ea/XauCloud-Apex-v3.8.7-UnifiedMarginLadder.mq5',root),'utf8');
+  const versioned=await fs.readFile(new URL('ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5',root),'utf8');
   assert.equal(canonical,versioned);
   assert.match(canonical,/Emit\("SETUP_SCORE"/);
   assert.match(canonical,/eventType="SETUP_EXPIRED"/);

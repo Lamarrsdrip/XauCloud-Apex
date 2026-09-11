@@ -4,6 +4,11 @@
 //   ea/archive/XauCloud-Apex-v3.7.1.mq5 (audited HEAD, renamed v371_*)
 // Only %I64d/%I64u -> %lld/%llu was rewritten, for the host printf.
 
+#define APEX_SIM_LEVERAGE        200
+#define APEX_UNL_L1_SIM200_PCT   15.0
+#define APEX_UNL_L2_SIM200_PCT   50.0
+#define APEX_UNL_L3PLUS_PCT      100.0
+
 struct SizingDecision
   {
    double pct,freeMargin,budget;
@@ -20,6 +25,22 @@ struct SizingDecision
    uint   checkRetcode;
    bool   marginBinding,usedMarginFallback;
    string blockReason,sizingModel;
+   // v3.8.8 UNLIMITED layer state machine (see PlanLayerSizing). Zero outside the
+   // SIMULATED_1_200 engine, except sizingMode / targetVolume / volumeLimitRoom.
+   string sizingMode;
+   long   simulatedLeverage;
+   double simFreeMargin,simUsedMargin,simMarginPerLot,simFormulaMarginPerLot,simBrokerMarginPerLot;
+   double simMarginRate,simMoneyCapacity,targetVolume,volumeLimitRoom;
+  };
+
+struct LayerSizingPlan
+  {
+   string profile;           // normalised ExecutionProfile()
+   int    filledLayers;      // layers already filled in this campaign
+   int    layerIndex;        // the layer being prepared (filledLayers+1)
+   string mode;              // NORMAL | SIMULATED_1_200 | UNLIMITED | UNLIMITED_PROFIT_FED
+   double pct;               // percentage of that mode's capacity
+   long   simulatedLeverage; // 200 in SIMULATED_1_200, otherwise 0
   };
 
 struct Gate
@@ -253,13 +274,47 @@ double LargestVolumePassingCheck(int dir,double price,double sl,double hi)
    return FloorToStep(lo);
   }
 
-double LayerMarginPct()
+void InitSizingV388(SizingDecision &d)
+  {
+   d.sizingMode="";d.simulatedLeverage=0;
+   d.simFreeMargin=0;d.simUsedMargin=0;d.simMarginPerLot=0;d.simFormulaMarginPerLot=0;
+   d.simBrokerMarginPerLot=0;d.simMarginRate=0;d.simMoneyCapacity=0;d.targetVolume=0;
+   d.volumeLimitRoom=-1;
+  }
+
+double VolumeLimitRoom(int dir)
+  {
+   double lim=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_LIMIT);
+   if(lim<=0) return -1;
+   double used=0;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong t=PositionGetTicket(i);
+      if(t==0||PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
+      bool buy=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+      if(buy==(dir>0)) used+=PositionGetDouble(POSITION_VOLUME);
+     }
+   for(int i=OrdersTotal()-1;i>=0;i--)
+     {
+      ulong t=OrderGetTicket(i);
+      if(t==0||OrderGetString(ORDER_SYMBOL)!=_Symbol) continue;
+      long ot=OrderGetInteger(ORDER_TYPE);
+      bool buy=(ot==ORDER_TYPE_BUY||ot==ORDER_TYPE_BUY_LIMIT||ot==ORDER_TYPE_BUY_STOP||ot==ORDER_TYPE_BUY_STOP_LIMIT);
+      bool sell=(ot==ORDER_TYPE_SELL||ot==ORDER_TYPE_SELL_LIMIT||ot==ORDER_TYPE_SELL_STOP||ot==ORDER_TYPE_SELL_STOP_LIMIT);
+      if((dir>0&&buy)||(dir<0&&sell)) used+=OrderGetDouble(ORDER_VOLUME_CURRENT);
+     }
+   return MathMax(0.0,lim-used);
+  }
+
+double LayerMarginPctFor(int filledLayers)
   {
    // APEX-AUDIT-012: these come from C.* (dashboard), seeded from the Inputs.
-   if(layers<=0) return MathMax(0.1,MathMin(100.0,C.normalL1MarginPct));
-   if(layers==1) return MathMax(0.1,MathMin(100.0,C.normalL2MarginPct));
+   if(filledLayers<=0) return MathMax(0.1,MathMin(100.0,C.normalL1MarginPct));
+   if(filledLayers==1) return MathMax(0.1,MathMin(100.0,C.normalL2MarginPct));
    return MathMax(0.1,MathMin(100.0,C.normalL3PlusMarginPct));
   }
+
+double LayerMarginPct(){return LayerMarginPctFor(layers);}
 
 SizingDecision ComputeVolume(int dir,double pct,double price,double sl)
   {
@@ -273,6 +328,7 @@ SizingDecision ComputeVolume(int dir,double pct,double price,double sl)
    d.configuredNormalReferenceLeverage=C.normalReferenceLeverage;
    d.effectiveSizingLeverage=0;d.brokerMarginModelTrusted=false;
    d.moneyCapacity=0;d.capacitySource="";
+   InitSizingV388(d);
    d.volMin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
    d.volMax=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
    d.volStep=VolStep();
@@ -404,6 +460,14 @@ SizingDecision ComputeVolume(int dir,double pct,double price,double sl)
    d.sizingModel="UNLIMITED_BROKER_CAPACITY";
    d.capacitySource="UNLIMITED_SERVER_CAPACITY";
    d.effectiveSizingLeverage=AccountInfoInteger(ACCOUNT_LEVERAGE);
+   // v3.8.8: SYMBOL_VOLUME_LIMIT is a broker execution rule (aggregate one-direction
+   // exposure). It bounds what is executable; it is not a percentage denominator.
+   d.volumeLimitRoom=VolumeLimitRoom(dir);
+   if(d.volumeLimitRoom>=0)
+     {
+      if(d.volumeLimitRoom<=0){d.blockReason="SYMBOL_VOLUME_LIMIT_REACHED";return d;}
+      hi=MathMin(hi,d.volumeLimitRoom);
+     }
    // v3.8.2: on a broker whose client margin model reports ~0 for gold, both
    // OrderCalcMargin and OrderCheck happily approve SYMBOL_VOLUME_MAX while the trade
    // server answers NO_MONEY. That is the "Apex believed 200 lots was executable" bug.
@@ -460,6 +524,252 @@ SizingDecision ComputeVolume(int dir,double pct,double price,double sl)
      }
    d.finalVolume=v;
    return d;
+  }
+
+double SimNotionalPerLot(double price)
+  {
+   double n=NotionalPerLot(price);
+   if(n>0) return n;
+   double tv=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(price<=0||tv<=0||ts<=0||!MathIsValidNumber(tv)||!MathIsValidNumber(ts)) return 0;
+   return price*tv/ts;
+  }
+
+double SimMarginPerLot(int dir,double price,long lev,double &formulaM,double &brokerM,double &rate)
+  {
+   formulaM=0;brokerM=0;rate=1.0;
+   if(lev<=0||price<=0) return 0;
+   double notional=SimNotionalPerLot(price);
+   if(notional<=0) return 0;
+   ENUM_ORDER_TYPE t=dir>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+   ENUM_SYMBOL_CALC_MODE cm=(ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_CALC_MODE);
+   if(cm==SYMBOL_CALC_MODE_FOREX||cm==SYMBOL_CALC_MODE_CFDLEVERAGE)
+     {
+      double init=0,maint=0;
+      if(SymbolInfoMarginRate(_Symbol,t,init,maint)&&MathIsValidNumber(init)&&init>0) rate=init;
+     }
+   formulaM=notional*rate/(double)lev;
+   double m=0;
+   if(OrderCalcMargin(t,_Symbol,1.0,price,m)&&MathIsValidNumber(m)&&m>0) brokerM=m;
+   return MathMax(formulaM,brokerM);
+  }
+
+double SimUsedMarginAtLeverage(long lev)
+  {
+   double symActual=0,symSim=0;
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK),bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong t=PositionGetTicket(i);
+      if(t==0||PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
+      double v=PositionGetDouble(POSITION_VOLUME);
+      if(v<=0) continue;
+      int pdir=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?1:-1;
+      double px=pdir>0?ask:bid;
+      double fm=0,bm=0,rt=0;
+      double per=SimMarginPerLot(pdir,px,lev,fm,bm,rt);
+      if(per<=0) return -1;
+      symSim+=v*per;
+      double a=0;
+      if(OrderCalcMargin(pdir>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL,_Symbol,v,px,a)&&MathIsValidNumber(a)&&a>0) symActual+=a;
+     }
+   double other=MathMax(0.0,AccountInfoDouble(ACCOUNT_MARGIN)-symActual);
+   return other+symSim;
+  }
+
+SizingDecision ComputeSimulated1200Volume(int dir,double pct,double price,double sl,double execCeiling)
+  {
+   SizingDecision d;
+   d.pct=pct;d.blockReason="";d.checkRetcode=0;d.marginBinding=false;d.usedMarginFallback=false;
+   d.capacityByMargin=0;d.capacityByBroker=0;d.capacity=0;
+   d.byCapacityPct=0;d.byMarginBudget=0;d.requested=0;d.finalVolume=0;d.budget=0;
+   d.marginAtVolMax=0;d.marginAtOneLot=0;d.marginAtFinal=0;
+   d.trustedMarginPerLot=0;d.leverageMarginPerLot=0;d.initialMarginPerLot=0;
+   d.brokerReportedLeverage=AccountInfoInteger(ACCOUNT_LEVERAGE);
+   d.configuredNormalReferenceLeverage=0;     // NORMAL's reference leverage is never consulted
+   d.brokerMarginModelTrusted=false;d.moneyCapacity=0;
+   InitSizingV388(d);
+   d.sizingModel="UNLIMITED_SIMULATED_1_200";
+   d.capacitySource="SIMULATED_1_200_MARGIN";
+   d.sizingMode="SIMULATED_1_200";
+   d.simulatedLeverage=APEX_SIM_LEVERAGE;
+   d.effectiveSizingLeverage=APEX_SIM_LEVERAGE;
+   d.volMin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   d.volMax=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
+   d.volStep=VolStep();
+   d.freeMargin=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(d.freeMargin<=0){d.blockReason="NO_FREE_MARGIN";return d;}
+   if(price<=0){d.blockReason="NO_QUOTE";return d;}
+   ENUM_ORDER_TYPE t=dir>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+   if(!OrderCalcMargin(t,_Symbol,d.volMax,price,d.marginAtVolMax)) d.marginAtVolMax=-1;
+   if(!OrderCalcMargin(t,_Symbol,1.0,price,d.marginAtOneLot)) d.marginAtOneLot=-1;
+
+   // 1. what ONE lot costs at 1:200 on this account
+   d.simMarginPerLot=SimMarginPerLot(dir,price,APEX_SIM_LEVERAGE,
+                                     d.simFormulaMarginPerLot,d.simBrokerMarginPerLot,d.simMarginRate);
+   if(d.simMarginPerLot<=0||!MathIsValidNumber(d.simMarginPerLot))
+     {d.blockReason="SIMULATED_1_200_MARGIN_UNAVAILABLE";return d;}
+   d.trustedMarginPerLot=d.simMarginPerLot;
+   d.leverageMarginPerLot=d.simFormulaMarginPerLot;
+
+   // 2. the account's existing exposure re-priced at 1:200
+   d.simUsedMargin=SimUsedMarginAtLeverage(APEX_SIM_LEVERAGE);
+   if(d.simUsedMargin<0){d.blockReason="SIMULATED_1_200_EXPOSURE_UNPRICEABLE";return d;}
+   d.simFreeMargin=MathMin(d.freeMargin,AccountInfoDouble(ACCOUNT_EQUITY)-d.simUsedMargin);
+   if(d.simFreeMargin<=0)
+     {d.blockReason=StringFormat("SIMULATED_1_200_NO_FREE_MARGIN_%.2f",d.simFreeMargin);return d;}
+   double reservePct=(C.marginReservePct>0)?clamp(C.marginReservePct,0,100):0.0;
+   double spendable=MathMax(0.0,d.simFreeMargin*(1.0-reservePct/100.0));
+   double realSpendable=MathMax(0.0,d.freeMargin*(1.0-reservePct/100.0));
+   d.budget=spendable*clamp(pct,.1,100)/100.0;
+   if(d.budget<=0){d.blockReason="ZERO_BUDGET";return d;}
+
+   // 3. technical / execution ceilings -- they clamp, they are never the denominator
+   double hi=d.volMax;
+   if(C.maxBasketLots>0)
+     {
+      double room=C.maxBasketLots-BasketVolume();
+      if(room<=0){d.blockReason="BASKET_LOT_CAP_REACHED";return d;}
+      hi=MathMin(hi,room);
+     }
+   d.volumeLimitRoom=VolumeLimitRoom(dir);
+   if(d.volumeLimitRoom>=0)
+     {
+      if(d.volumeLimitRoom<=0){d.blockReason="SYMBOL_VOLUME_LIMIT_REACHED";return d;}
+      hi=MathMin(hi,d.volumeLimitRoom);
+     }
+   double learnedCeiling=ServerCapacityCeiling();
+   if(learnedCeiling>0) hi=MathMin(hi,learnedCeiling);
+   if(execCeiling>0) hi=MathMin(hi,execCeiling);
+
+   // 4. 1:200 capacity, then proven executable on the REAL account
+   d.simMoneyCapacity=spendable/d.simMarginPerLot;
+   d.moneyCapacity=d.simMoneyCapacity;
+   double bound=FloorToStep(MathMin(hi,d.simMoneyCapacity));
+   d.capacityByMargin=LargestVolumeWithinMargin(dir,price,realSpendable,bound);
+   d.capacityByBroker=LargestVolumePassingCheck(dir,price,sl,d.capacityByMargin);
+   if(MarketClosedBackoffActive()){d.blockReason="MARKET_CLOSED_BACKOFF";return d;}
+   d.capacity=d.capacityByBroker;
+   if(d.capacity<=0){d.blockReason="SIMULATED_1_200_CAPACITY_ZERO";return d;}
+
+   // 5. the layer's percentage of THAT capacity (volume and money forms, as NORMAL)
+   d.targetVolume=d.capacity*clamp(pct,.1,100)/100.0;
+   d.byCapacityPct=FloorToStep(d.targetVolume);
+   d.byMarginBudget=FloorToStep(MathMin(hi,d.budget/d.simMarginPerLot));
+   d.requested=MathMin(d.byCapacityPct,d.byMarginBudget);
+   d.marginBinding=(d.byMarginBudget<=d.byCapacityPct+1e-9);
+
+   double v=FloorToStep(d.requested);
+   if(v<d.volMin)
+     {
+      // APEX-AUDIT-009: never rounded UP to the broker minimum unless the minimum lot
+      // independently fits the 1:200 budget and is itself executable.
+      double simMin=d.simMarginPerLot*d.volMin;
+      if(simMin>d.budget+1e-8)
+        {d.blockReason=StringFormat("MIN_LOT_SIMULATED_1_200_MARGIN_%.2f_EXCEEDS_BUDGET_%.2f",simMin,d.budget);return d;}
+      if(d.volMin>d.capacity+1e-9){d.blockReason="MIN_LOT_EXCEEDS_SIMULATED_1_200_CAPACITY";return d;}
+      v=NormalizeDouble(d.volMin,VolDigits());
+     }
+   if(v>hi) v=FloorToStep(hi);
+   if(v<=0){d.blockReason="VOLUME_ROUNDS_TO_ZERO";return d;}
+
+   // 6. real-margin validation and a final broker preflight on the EXACT volume
+   if(!OrderCalcMargin(t,_Symbol,v,price,d.marginAtFinal)) d.marginAtFinal=-1;
+   if(d.marginAtFinal>realSpendable+1e-8)
+     {d.blockReason=StringFormat("REAL_MARGIN_%.2f_EXCEEDS_FREE_%.2f",d.marginAtFinal,realSpendable);return d;}
+   if(!BrokerAcceptsVolume(dir,v,price,sl,d.checkRetcode))
+     {
+      if(d.checkRetcode==TRADE_RETCODE_MARKET_CLOSED){NoteMarketClosed("ORDERCHECK",d.checkRetcode);d.blockReason="MARKET_CLOSED_BACKOFF";return d;}
+      d.blockReason=StringFormat("SIMULATED_1_200_ORDERCHECK_%d_REJECTED",d.checkRetcode);
+      return d;
+     }
+   if(C.minMarginLevelPct>0&&d.marginAtFinal>0)
+     {
+      double eq=AccountInfoDouble(ACCOUNT_EQUITY);
+      double used=AccountInfoDouble(ACCOUNT_MARGIN)+d.marginAtFinal;
+      double lvl=used>0?(eq/used)*100.0:0;
+      if(used>0&&lvl<C.minMarginLevelPct)
+        {d.blockReason=StringFormat("MARGIN_LEVEL_%.1f_BELOW_%.1f",lvl,C.minMarginLevelPct);return d;}
+     }
+   d.finalVolume=v;
+   return d;
+  }
+
+LayerSizingPlan PlanLayerSizing(const string profile,int filledLayers)
+  {
+   LayerSizingPlan p;
+   p.profile=profile;
+   p.filledLayers=(filledLayers<0?0:filledLayers);
+   p.layerIndex=p.filledLayers+1;
+   p.simulatedLeverage=0;
+   if(profile=="NORMAL")
+     {p.mode="NORMAL";p.pct=LayerMarginPctFor(p.filledLayers);return p;}
+   if(p.filledLayers==0)
+     {p.mode="SIMULATED_1_200";p.pct=APEX_UNL_L1_SIM200_PCT;p.simulatedLeverage=APEX_SIM_LEVERAGE;return p;}
+   if(p.filledLayers==1)
+     {p.mode="SIMULATED_1_200";p.pct=APEX_UNL_L2_SIM200_PCT;p.simulatedLeverage=APEX_SIM_LEVERAGE;return p;}
+   p.mode=(p.filledLayers==2)?"UNLIMITED":"UNLIMITED_PROFIT_FED";
+   p.pct=APEX_UNL_L3PLUS_PCT;
+   return p;
+  }
+
+SizingDecision ComputeLayerVolume(const LayerSizingPlan &plan,int dir,double price,double sl)
+  {
+   if(plan.mode=="SIMULATED_1_200")
+     {
+      SizingDecision s=ComputeSimulated1200Volume(dir,plan.pct,price,sl,0);
+      s.sizingMode=plan.mode;
+      return s;
+     }
+   SizingDecision u=ComputeVolume(dir,plan.pct,price,sl);
+   u.sizingMode=plan.mode;
+   u.targetVolume=u.capacity*clamp(plan.pct,.1,100)/100.0;
+   return u;
+  }
+
+double RederiveAfterSizeRejection(const LayerSizingPlan &plan,int dir,double price,double sl,
+                                  double rejectedVol,double &trueCap)
+  {
+   trueCap=0;
+   double capHi=FloorToStep(rejectedVol-VolStep());
+   double learnedCap=ServerCapacityCeiling();
+   if(learnedCap>0&&learnedCap<capHi) capHi=FloorToStep(learnedCap);
+   if(capHi<=0) return 0;
+   double pct=clamp(plan.pct,.1,100);
+   double reSized=0;
+   if(plan.mode=="SIMULATED_1_200")
+     {
+      // Fresh 1:200 capacity from live equity/exposure, bounded by the refusal.
+      SizingDecision f=ComputeSimulated1200Volume(dir,plan.pct,price,sl,capHi);
+      trueCap=f.capacity;
+      reSized=f.finalVolume;
+      if(reSized>rejectedVol*0.9)
+        {
+         SizingDecision h=ComputeSimulated1200Volume(dir,plan.pct,price,sl,FloorToStep(capHi*0.5));
+         trueCap=h.capacity;
+         reSized=h.finalVolume;
+        }
+     }
+   else
+     {
+      trueCap=LargestVolumePassingCheck(dir,price,sl,capHi);
+      if(trueCap<=0) trueCap=capHi;   // preflight is degenerate; the bound is still true
+      reSized=FloorToStep(trueCap*pct/100.0);
+      // At pct=100 the request IS the capacity bound, so a refusal only shaves one
+      // volume step and the descent stalls (200 -> 199.99 -> 199.98 ...). When the
+      // re-derived request does not make real progress, BISECT the capacity bound and
+      // re-apply the SAME percentage to that. The percentage is still what is asked
+      // for -- only the capacity ESTIMATE contracts geometrically, which is the one
+      // thing a lying preflight leaves us free to do.
+      if(reSized>rejectedVol*0.9)
+        {
+         double bisected=FloorToStep(trueCap*0.5);
+         reSized=FloorToStep(bisected*pct/100.0);
+        }
+     }
+   if(reSized<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)||reSized<=0||reSized>=rejectedVol) return 0;
+   return reSized;
   }
 
 bool FinalEntryGate(int dir,double invalidLevel,double refPrice,double atr,

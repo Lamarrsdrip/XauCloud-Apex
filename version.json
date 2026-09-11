@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.7",
-  "buildId": "3.8.7-unified-margin-ladder",
-  "eaVersion": "XauCloud-Apex_v3.8.7-UnifiedMarginLadder",
+  "version": "3.8.8",
+  "buildId": "3.8.8-unlimited-from-l3",
+  "eaVersion": "XauCloud-Apex_v3.8.8-UnlimitedFromL3",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.7-UnifiedMarginLadder.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.7-UnifiedMarginLadder). Versioned copy is ea/XauCloud-Apex-v3.8.7-UnifiedMarginLadder.mq5. Trading logic is unchanged from v3.8.6; v3.8.7 changes sizing only: BOTH profiles now use one 15/50/100 layer ladder of CURRENT executable capacity, the requested percentage survives server capacity rediscovery on both profiles (no more halving), and server-proven capacity evidence persists across restart. Compile ea/XauCloud-Apex.mq5. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 sources."
+  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.8-UnlimitedFromL3). Versioned copy is ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5. Trading logic is unchanged from v3.8.7; v3.8.8 changes UNLIMITED sizing only: L1 = 15% and L2 = 50% of the account's SIMULATED 1:200 capacity (re-derived per layer, existing exposure re-priced at 1:200), L3 and every later layer = 100% of the actual UNLIMITED executable capacity. A server size rejection keeps the layer's engine and percentage. NORMAL sizing is unchanged. Compile ea/XauCloud-Apex.mq5. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 / v3.8.7 sources."
 }

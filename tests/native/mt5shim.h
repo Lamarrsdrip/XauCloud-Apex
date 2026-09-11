@@ -19,13 +19,27 @@ typedef long           datetime;       // MQL5 datetime is a 64-bit integer
 typedef std::string    string;
 
 // ---- enums -------------------------------------------------------------
-enum ENUM_ORDER_TYPE { ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1 };
+enum ENUM_ORDER_TYPE { ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1, ORDER_TYPE_BUY_LIMIT=2, ORDER_TYPE_SELL_LIMIT=3,
+                       ORDER_TYPE_BUY_STOP=4, ORDER_TYPE_SELL_STOP=5, ORDER_TYPE_BUY_STOP_LIMIT=6,
+                       ORDER_TYPE_SELL_STOP_LIMIT=7 };
+enum ENUM_SYMBOL_CALC_MODE { SYMBOL_CALC_MODE_FOREX=0, SYMBOL_CALC_MODE_FUTURES=1, SYMBOL_CALC_MODE_CFD=2,
+                             SYMBOL_CALC_MODE_CFDINDEX=3, SYMBOL_CALC_MODE_CFDLEVERAGE=4,
+                             SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE=5 };
+enum ENUM_POSITION_TYPE { POSITION_TYPE_BUY=0, POSITION_TYPE_SELL=1 };
+enum ENUM_POSITION_PROPERTY_STRING { POSITION_SYMBOL };
+enum ENUM_POSITION_PROPERTY_DOUBLE { POSITION_VOLUME };
+enum ENUM_POSITION_PROPERTY_INTEGER { POSITION_TYPE, POSITION_MAGIC };
+enum ENUM_ORDER_PROPERTY_STRING { ORDER_SYMBOL };
+enum ENUM_ORDER_PROPERTY_DOUBLE { ORDER_VOLUME_CURRENT };
+enum ENUM_ORDER_PROPERTY_INTEGER { ORDER_TYPE };
 enum ENUM_TRADE_REQUEST_ACTIONS { TRADE_ACTION_DEAL=1 };
 enum ENUM_ORDER_TYPE_FILLING { ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1, ORDER_FILLING_RETURN=2 };
 enum ENUM_SYMBOL_INFO_DOUBLE { SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_MAX, SYMBOL_VOLUME_STEP,
                                SYMBOL_POINT, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_ASK, SYMBOL_BID,
-                               SYMBOL_MARGIN_INITIAL };
-enum ENUM_SYMBOL_INFO_INTEGER { SYMBOL_DIGITS, SYMBOL_TRADE_MODE, SYMBOL_FILLING_MODE, SYMBOL_TRADE_EXEMODE };
+                               SYMBOL_MARGIN_INITIAL, SYMBOL_VOLUME_LIMIT, SYMBOL_TRADE_TICK_VALUE,
+                               SYMBOL_TRADE_TICK_SIZE };
+enum ENUM_SYMBOL_INFO_INTEGER { SYMBOL_DIGITS, SYMBOL_TRADE_MODE, SYMBOL_FILLING_MODE, SYMBOL_TRADE_EXEMODE,
+                                SYMBOL_TRADE_CALC_MODE };
 enum ENUM_SYMBOL_INFO_STRING { SYMBOL_CURRENCY_PROFIT, SYMBOL_CURRENCY_MARGIN, SYMBOL_CURRENCY_BASE };
 enum ENUM_ACCOUNT_INFO_STRING { ACCOUNT_CURRENCY, ACCOUNT_COMPANY, ACCOUNT_SERVER };
 enum ENUM_SYMBOL_TRADE_EXECUTION { SYMBOL_TRADE_EXECUTION_REQUEST=0, SYMBOL_TRADE_EXECUTION_INSTANT=1,
@@ -61,6 +75,8 @@ inline void ZeroMemory(MqlTradeRequest &r){ r.action=0;r.magic=0;r.symbol.clear(
 inline void ZeroMemory(MqlTradeCheckResult &r){ r.retcode=0;r.balance=r.equity=r.profit=r.margin=r.margin_free=r.margin_level=0;r.comment.clear(); }
 
 // ---- scripted mock broker ---------------------------------------------
+struct MockPos   { std::string symbol; long magic; int type; double volume; double open; };
+struct MockOrder { std::string symbol; int type; double volume; };
 struct MockBroker {
   double volMin=0.01, volMax=200.0, volStep=0.01;
   int    digits=3;
@@ -77,6 +93,15 @@ struct MockBroker {
   // OrderCheck fidelity: does the client-side check see the tiered requirement?
   bool   orderCheckSeesServerTruth=false;
   double basketVolume=0.0;
+  // v3.8.8 simulated-1:200 inputs: contract specification + open exposure.
+  double contract=100.0;
+  double tickSize=0.001, tickValue=0.1;     // 0.001 * 100oz = $0.10 per tick per lot
+  int    calcMode=SYMBOL_CALC_MODE_CFDLEVERAGE;
+  double marginRateInit=1.0; bool marginRateOk=true;
+  double volLimit=0.0;                      // SYMBOL_VOLUME_LIMIT, 0 = none
+  std::vector<MockPos>   positions;         // every open position on the account
+  std::vector<MockOrder> orders;            // every pending order on the account
+  int    selPos=-1, selOrd=-1;
   // v3.8.2 CapacityTruth inputs: the independent margin cross-checks.
   double marginInitial=0.0;                 // SYMBOL_MARGIN_INITIAL (0 = broker publishes none)
   std::string accountCurrency="USD", profitCurrency="USD", marginCurrency="USD";
@@ -105,7 +130,10 @@ extern MockBroker BRK;
 inline double SymbolInfoDouble(const std::string&, ENUM_SYMBOL_INFO_DOUBLE p){
   switch(p){ case SYMBOL_VOLUME_MIN: return BRK.volMin; case SYMBOL_VOLUME_MAX: return BRK.volMax;
              case SYMBOL_VOLUME_STEP: return BRK.volStep; case SYMBOL_POINT: return BRK.point;
-             case SYMBOL_TRADE_CONTRACT_SIZE: return 100.0;
+             case SYMBOL_TRADE_CONTRACT_SIZE: return BRK.contract;
+             case SYMBOL_VOLUME_LIMIT: return BRK.volLimit;
+             case SYMBOL_TRADE_TICK_VALUE: return BRK.tickValue;
+             case SYMBOL_TRADE_TICK_SIZE: return BRK.tickSize;
              case SYMBOL_MARGIN_INITIAL: return BRK.marginInitial;
              case SYMBOL_ASK: return BRK.ask; case SYMBOL_BID: return BRK.bid; }
   return 0;
@@ -114,6 +142,7 @@ inline long SymbolInfoInteger(const std::string&, ENUM_SYMBOL_INFO_INTEGER p){
   if(p==SYMBOL_DIGITS) return BRK.digits;
   if(p==SYMBOL_FILLING_MODE) return BRK.fillingMode;
   if(p==SYMBOL_TRADE_EXEMODE) return BRK.execMode;
+  if(p==SYMBOL_TRADE_CALC_MODE) return BRK.calcMode;
   return 0;
 }
 inline std::string SymbolInfoString(const std::string&, ENUM_SYMBOL_INFO_STRING p){
@@ -145,15 +174,40 @@ inline bool OrderCalcMargin(ENUM_ORDER_TYPE, const std::string&, double vol, dou
   m = BRK.clientMargin(vol);
   return true;
 }
+inline double MockDirectionalExposure(int type){
+  double v=0;
+  for(auto &p:BRK.positions) if(p.symbol=="XAUUSDm"&&p.type==type) v+=p.volume;
+  for(auto &o:BRK.orders) if(o.symbol=="XAUUSDm"&&(o.type%2)==type) v+=o.volume;
+  return v;
+}
 inline bool OrderCheck(const MqlTradeRequest &rq, MqlTradeCheckResult &cr){
   ZeroMemory(cr);
   if(rq.volume < BRK.volMin - 1e-9 || rq.volume > BRK.volMax + 1e-9){ cr.retcode=TRADE_RETCODE_INVALID_VOLUME; return false; }
+  if(BRK.volLimit>0 && MockDirectionalExposure(rq.type)+rq.volume > BRK.volLimit + 1e-9){ cr.retcode=TRADE_RETCODE_LIMIT_VOLUME; return false; }
   double need = BRK.orderCheckSeesServerTruth ? BRK.serverMargin(rq.volume) : BRK.clientMargin(rq.volume);
   cr.margin=need; cr.margin_free=BRK.freeMargin-need;
   if(need > BRK.freeMargin + 1e-9){ cr.retcode=TRADE_RETCODE_NO_MONEY; return false; }
   cr.retcode=TRADE_RETCODE_DONE;
   return true;
 }
+inline bool SymbolInfoMarginRate(const std::string&, ENUM_ORDER_TYPE, double &init, double &maint){
+  init=BRK.marginRateInit; maint=BRK.marginRateInit;
+  return BRK.marginRateOk;
+}
+// Positions / orders: the selection model mirrors MQL5 (GetTicket selects).
+inline int   PositionsTotal(){ return (int)BRK.positions.size(); }
+inline ulong PositionGetTicket(int i){ if(i<0||i>=(int)BRK.positions.size()) return 0; BRK.selPos=i; return (ulong)(i+1); }
+inline std::string PositionGetString(ENUM_POSITION_PROPERTY_STRING){ return BRK.selPos>=0?BRK.positions[BRK.selPos].symbol:std::string(); }
+inline double PositionGetDouble(ENUM_POSITION_PROPERTY_DOUBLE){ return BRK.selPos>=0?BRK.positions[BRK.selPos].volume:0; }
+inline long  PositionGetInteger(ENUM_POSITION_PROPERTY_INTEGER p){
+  if(BRK.selPos<0) return 0;
+  return p==POSITION_TYPE?(long)BRK.positions[BRK.selPos].type:BRK.positions[BRK.selPos].magic;
+}
+inline int   OrdersTotal(){ return (int)BRK.orders.size(); }
+inline ulong OrderGetTicket(int i){ if(i<0||i>=(int)BRK.orders.size()) return 0; BRK.selOrd=i; return (ulong)(1000+i); }
+inline std::string OrderGetString(ENUM_ORDER_PROPERTY_STRING){ return BRK.selOrd>=0?BRK.orders[BRK.selOrd].symbol:std::string(); }
+inline double OrderGetDouble(ENUM_ORDER_PROPERTY_DOUBLE){ return BRK.selOrd>=0?BRK.orders[BRK.selOrd].volume:0; }
+inline long  OrderGetInteger(ENUM_ORDER_PROPERTY_INTEGER){ return BRK.selOrd>=0?(long)BRK.orders[BRK.selOrd].type:0; }
 inline datetime TimeCurrent(){ return BRK.now; }
 inline ulong GetTickCount64(){ return (ulong)BRK.now*1000; }
 inline datetime iTime(const std::string&, ENUM_TIMEFRAMES, int shift){ return shift==1?BRK.lastClosedM1:BRK.lastClosedM1-60; }

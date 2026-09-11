@@ -278,90 +278,17 @@ test('native harness availability is reported honestly',()=>{
   assert.ok(has||findCxx()===null,'harness must only skip when no C++ toolchain exists');
 });
 
-//=============== v3.8.7 UnifiedMarginLadder ===============================
-// These run the REAL extracted LayerMarginPct()/ComputeVolume() from ea/XauCloud-Apex.mq5.
+//=============== v3.8.7 UnifiedMarginLadder -> v3.8.8 UnlimitedFromL3 ============
+// The v3.8.7 UNLIMITED assertions (L1 15% / L2 50% of CURRENT UNLIMITED capacity,
+// "30 -> 4.49" re-derivation of an UNLIMITED 15% layer) encoded the very design v3.8.8
+// replaces: on the Exness client model that capacity is SYMBOL_VOLUME_MAX, so L1 was
+// 15% x 200 = 30 lots. The UNLIMITED state machine is now covered end to end by
+// tests/unlimited_from_l3.test.mjs; the NORMAL ladder stays covered here.
 
-test('LADDER: NORMAL and UNLIMITED use the SAME 15/50/100 ladder',{skip},()=>{
-  const n=R.ladder_normal,u=R.ladder_unlimited;
-  for(const r of [n,u]){
-    assert.equal(r.L1,15,'L1 must be 15%');
-    assert.equal(r.L2,50,'L2 must be 50%');
-    assert.equal(r.L3,100,'L3 must be 100%');
-    assert.equal(r.L4,100,'L4+ must stay 100%');
-  }
-  assert.deepEqual([n.L1,n.L2,n.L3,n.L4],[u.L1,u.L2,u.L3,u.L4],
-    'the ladder must be identical for both profiles');
-});
-
-test('LADDER: UNLIMITED takes the percentage of CURRENT capacity, re-derived per layer',{skip},()=>{
-  const l1=R.ladder_capacity_L1_UNLIMITED,l2=R.ladder_capacity_L2_UNLIMITED,
-        l3=R.ladder_capacity_L3_UNLIMITED,l4=R.ladder_capacity_L4_UNLIMITED;
-  // 100.00/lot against 2500 free margin == exactly 25.00 lots of capacity.
-  assert.equal(l1.capacityByBroker,25,'L1 capacity must be the real 25.00 lots');
-  assert.equal(l1.byCapacityPct,3.75,'15% of 25.00 == 3.75');
-  // Capacity genuinely shrank. L2 must be 50% of the NEW number, never of the original 25.
-  assert.equal(l2.capacityByBroker,21.24);
-  assert.equal(l2.byCapacityPct,10.62,'50% of 21.24, not 50% of 25');
-  assert.notEqual(l2.byCapacityPct,12.5,'50% of the ORIGINAL capacity must never come back');
-  assert.equal(l3.capacityByBroker,10.62);
-  assert.equal(l3.byCapacityPct,10.62,'L3 is 100% of current capacity');
-  // Floating profit created NEW capacity: L4 uses whatever is genuinely available now.
-  assert.equal(l4.capacityByBroker,39.99);
-  assert.equal(l4.byCapacityPct,39.99,'L4+ is 100% of the NEW capacity (profit-fed pyramid)');
-});
-
-test('LADDER: NORMAL keeps its own capacity economics and is unchanged',{skip},()=>{
-  const n1=R.ladder_capacity_L1_NORMAL,u1=R.ladder_capacity_L1_UNLIMITED;
-  // Same ladder percentage...
-  assert.equal(n1.pct,u1.pct);
-  // ...but NORMAL still prices capacity through trusted broker margin, UNLIMITED does not.
-  assert.equal(n1.capacitySource,'BROKER_MARGIN');
-  assert.equal(u1.capacitySource,'UNLIMITED_SERVER_CAPACITY');
-  assert.equal(u1.trustedMarginPerLot,0,'UNLIMITED must not acquire a trusted margin model');
-  assert.equal(u1.configuredNormalReferenceLeverage,0,'UNLIMITED must not gain a reference leverage');
-});
-
-test('LADDER: the broker volume step never rounds exposure UP past the budget',{skip},()=>{
-  const budgetLots=3.75;                      // 15% of 25.00
-  for(const [name,step] of [['ladder_step_0.01',0.01],['ladder_step_0.10',0.1],['ladder_step_0.25',0.25]]){
-    const r=R[name];
-    assert.equal(r.volStep,step);
-    assert.ok(r.v380Volume<=budgetLots+1e-9,
-      `${name}: ${r.v380Volume} must not exceed the ${budgetLots}-lot percentage budget`);
-    assert.ok(Math.abs(r.v380Volume/step-Math.round(r.v380Volume/step))<1e-6,
-      `${name}: result must sit on the broker volume grid`);
-  }
-});
-
-test('SIZE-REJECTION: the percentage survives capacity rediscovery -- no more halving',{skip},()=>{
-  const r=R.unlimited_size_rejection_preserves_pct;
-  assert.equal(r.requested,30,'15% of the believed 200-lot capacity');
-  assert.equal(r.trueCapacity,25,'the server can actually afford 25.00 lots');
-  // The defect: halve until something fills. 15 lots is 60% of real capacity, not 15%.
-  assert.equal(r.oldHalvedFill,15,'pre-3.8.7 halving must be reproduced by the harness');
-  assert.notEqual(r.newFill,15,'v3.8.7 must NOT settle on the halved 15 lots');
-  assert.ok(r.newFill<r.oldHalvedFill,'the re-derived size must be far below the halved one');
-  assert.deepEqual(r.newTried,[30,4.49],'one rejection, then a re-derived percentage');
-  assert.ok(r.learnedCeiling>0,'the rejection must be recorded as capacity evidence');
-});
-
-test('SIZE-REJECTION: server capacity evidence is what makes the next request honest',{skip},()=>{
-  const r=R.capacity_evidence_restart;
-  assert.equal(r.cold,30,'with no evidence the client model believes 200 lots');
-  assert.equal(r.amnesiac,30,'losing the evidence on restart repeats the same oversized request');
-  assert.equal(r.warm,4.49,'restored evidence tightens the very first request instead');
-  assert.ok(r.warm<r.amnesiac,'persistence must strictly improve the first request');
-});
-
-test('SIZE-REJECTION: pct=100 still CONVERGES (the request equals the capacity bound)',{skip},()=>{
-  const r=R.unlimited_pct100_converges;
-  // Without a progress guard the re-derive shaves one volume step per attempt and the
-  // descent stalls at 200 -> 199.99 -> 199.98, never reaching an executable size.
-  assert.equal(r.gaveUp,false,'a 100% layer must still find an executable size');
-  assert.ok(r.attempts<=5,`expected geometric convergence, took ${r.attempts} attempts`);
-  assert.deepEqual(r.tried,[200,99.99,49.99,24.99],'capacity bound must contract geometrically');
-  assert.ok(r.fill>0,'it must actually fill');
-  // L3+ asks for 100% of current capacity, so landing at ~the true capacity is correct.
-  assert.ok(Math.abs(r.fill-r.trueCapacity)<=0.05,
-    `100% layer should land at ~the true ${r.trueCapacity}-lot capacity, got ${r.fill}`);
+test('LADDER: the NORMAL 15/50/100 ladder is unchanged (real LayerMarginPct())',{skip},()=>{
+  const n=R.ladder_normal;
+  assert.equal(n.L1,15,'L1 must be 15%');
+  assert.equal(n.L2,50,'L2 must be 50%');
+  assert.equal(n.L3,100,'L3 must be 100%');
+  assert.equal(n.L4,100,'L4+ must stay 100%');
 });

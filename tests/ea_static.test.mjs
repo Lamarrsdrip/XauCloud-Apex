@@ -32,12 +32,13 @@ test('Strategy Tester stays independent from the remote arm', () => {
   assert.match(s, /if\(IsTester\(\)\)\{C\.armed=true;return true;\}/);
 });
 
-test('active campaign management executes before the armed gate', () => {
+test('active campaign management stays first; new-exposure gating lives in the local scan service', () => {
   const onTimer = section('void OnTimer()', null);
-  const iManage = onTimer.indexOf('Manage();');
-  const iArmed = onTimer.indexOf('if(!C.armed) return;');
-  assert.ok(iManage >= 0 && iArmed >= 0 && iManage < iArmed,
-    'Manage() must run before the new-exposure armed gate');
+  const scan = section('void ServiceEntryScan()', 'void OnTick()');
+  assert.ok(onTimer.indexOf('Manage();') >= 0);
+  assert.ok(onTimer.indexOf('ServiceEntryScan();') > onTimer.indexOf('Manage();'),
+    'Manage() must run before a new signal can submit');
+  assert.match(scan, /if\(g_observerOnly\|\|campState!=CAMP_IDLE\|\|!C\.armed\)return;/);
 });
 
 const configFields = [
@@ -168,16 +169,11 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
-test('v3.8.6 keeps v3.8.2 confirmation-is-entry: if(s.valid) Start(s), no origin box', () => {
+test('v3.9 starts L1 directly from a confirmed breakout/trend ignition', () => {
   assert.match(s, /if\(s\.valid\) Start\(s\);/);
-  assert.doesNotMatch(s, /if\(s\.valid&&s\.inLocation\) Start\(s\)/);
-  assert.doesNotMatch(s, /WAITING_FOR_ENTRY_LOCATION/);
-  assert.doesNotMatch(s, /RETEST_EXECUTABLE/);
-  assert.doesNotMatch(s, /ComputeExecRegion/);
-  assert.doesNotMatch(s, /PRICE_LEFT_ORIGIN_BOX/);
-  assert.doesNotMatch(s, /DeadThesisBlocks/);
-  assert.doesNotMatch(s, /ApplyLegacySchemaGuard/);
-  assert.match(s, /entry=confirm-then-start v3\.8\.2/);
+  assert.match(s, /strategy=BREAKOUT_TREND \| entry=live-ignition-v3\.9/);
+  assert.match(s, /BREAKOUT_TREND_SIGNAL_CONFIRMED/);
+  assert.doesNotMatch(s, /CONFIRMED_EXHAUSTION_REVERSAL|LIQUIDITY_EXHAUST/);
 });
 
 test('v3.8.2 FinalEntryGate still treats a newer M1 as TRIGGER_BAR_NO_LONGER_LATEST', () => {
@@ -188,14 +184,13 @@ test('v3.8.2 FinalEntryGate still treats a newer M1 as TRIGGER_BAR_NO_LONGER_LAT
   assert.doesNotMatch(gate, /triggerStale is measured for telemetry and NEVER blocks/);
 });
 
-test('v3.8.6 Start is the v3.8.2 probe-on-confirm path; adds keep 3.8.2 reclaim rule', () => {
+test('v3.9 preserves hardened first-submit fencing; continuation adds do not reuse reversal reclaim semantics', () => {
   const start = section('void Start(Snap', '//====================== add candidates');
   assert.match(start, /campState=CAMP_SUBMITTING/);
   assert.match(start, /FIRST ENTRY PENDING/);
-  assert.doesNotMatch(start, /campOriginHigh=S\.originHigh/);
+  assert.match(start, /s\.setupFamily\+"_L1_IGNITION"/);
   const manage = section('void Manage()', '//====================== restart reconciliation');
-  assert.match(manage, /enforceReclaim=\(a\.family=="REVERSAL"\)/);
-  assert.doesNotMatch(manage, /a\.execHigh/);
+  assert.match(manage, /bool enforceReclaim=false;/);
 });
 
 test('v3.8.6: uncertain recovered identity blocks new exposure, existing basket still managed', () => {
@@ -207,11 +202,14 @@ test('v3.8.6: uncertain recovered identity blocks new exposure, existing basket 
   assert.match(pre, /CAMPAIGN_CLOSING/);
 });
 
-test('v3.8.2 reversal add is a new confirmed setup; continuation uses M1 break/fail', () => {
+test('v3.9 L2/L3 adds require fresh same-direction confirmation evidence', () => {
   const add = section('AddCandidate BuildAddCandidate()', '//====================== basket management');
-  assert.match(add, /a\.family=cont\?"CONTINUATION":"FAILED_PULLBACK"/);
-  assert.doesNotMatch(add, /rev\.inLocation/);
-  assert.doesNotMatch(add, /a\.execHigh=S\.execHigh/);
+  assert.match(add, /bar<=campStart/);
+  assert.match(add, /L2_CONFIRMATION/);
+  assert.match(add, /L3_EXPANSION/);
+  assert.match(add, /pressure<pressureMin/);
+  assert.match(add, /CONFIRM\|%s\|%I64d/);
+  assert.doesNotMatch(add, /REVERSAL/);
 });
 
 test('v3.8.6: same trigger cannot add twice; GATE_SHADOW stays the default', () => {
@@ -309,13 +307,14 @@ test('v3.8.6: PLACED fences the campaign; Start does not reset while pending', (
   assert.match(pre, /CAMPAIGN_SUBMITTING/);
 });
 
-test('v3.8.6: cloud tick is bounded and never runs before Manage', () => {
+test('v3.9: cloud tick is bounded and never runs before Manage or the local signal scan', () => {
   const onTimer = section('void OnTimer()', null);
   const iManage = onTimer.indexOf('Manage();');
+  const iScan = onTimer.indexOf('ServiceEntryScan();');
   const iCloud = onTimer.indexOf('CloudSync()');
   const iFlush = onTimer.indexOf('FlushEventQueue()');
-  assert.ok(iManage >= 0 && iCloud > iManage, 'CloudSync after Manage');
-  assert.ok(iFlush > iManage, 'event flush after Manage');
+  assert.ok(iManage >= 0 && iScan > iManage && iCloud > iScan, 'Manage -> local scan -> CloudSync');
+  assert.ok(iFlush > iScan, 'event flush after local scan');
   assert.match(onTimer, /if\(cloudDue\)\{CloudSync\(\);lastCfg=now;\}/);
   assert.match(onTimer, /else FlushEventQueue\(\);/);
   assert.match(s, /InpCloudTickBudgetMs=1200/);

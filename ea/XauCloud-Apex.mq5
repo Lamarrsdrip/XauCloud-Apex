@@ -1,13 +1,12 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.8.8 "UnlimitedFromL3"                           |
+//|  XauCloud Apex v3.9.0 "BreakoutTrend"                              |
 //|                                                                   |
-//|  TRADING BASE = v3.8.2 CapacityTruth + v3.8.6 live-platform       |
-//|  hardening. Strategy/entries/exits are unchanged: impulse ->      |
-//|  sweep -> rejection -> micro BOS -> first probe on confirmation   |
-//|  (if(s.valid) Start(s)) -> profit-side pyramiding -> basket exit  |
-//|  on target / ratchet / master SL / recovery-to-entry.             |
+//|  EXECUTION BASE = v3.8.8. Basket handling, sizing, cloud link,     |
+//|  recovery, ratchet, SL/BE, broker preflight and restart hardening  |
+//|  are preserved. v3.9.0 replaces ONLY the opportunity engine with  |
+//|  BREAKOUT + TREND CONTINUATION analysis and early ignition entry.  |
 //|                                                                   |
-//|  v3.8.8 changes UNLIMITED sizing ONLY:                            |
+//|  Existing v3.8.8 sizing remains unchanged:                         |
 //|    L1  = 15% of SIMULATED 1:200 capacity                          |
 //|    L2  = 50% of SIMULATED 1:200 capacity (re-derived fresh)       |
 //|    L3  = 100% of actual UNLIMITED executable capacity             |
@@ -15,15 +14,15 @@
 //|  NORMAL sizing is byte-for-byte the v3.8.2 engine and ladder.     |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
-#property version   "3.880"
+#property version   "3.900"
 #property strict
-#property description "XauCloud Apex v3.8.8 UnlimitedFromL3"
+#property description "XauCloud Apex v3.9.0 BreakoutTrend"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.8.8-UnlimitedFromL3"
-#define APEX_BUILD_ID      "3.8.8"
+#define APEX_VERSION       "XauCloud-Apex_v3.9.0-BreakoutTrend"
+#define APEX_BUILD_ID      "3.9.0"
 #define APEX_MAGIC         8620260903
 #define APEX_STATE_SCHEMA  4
 #define APEX_CONFIG_SCHEMA 2
@@ -63,6 +62,22 @@ input bool   InpCloudDiagnostics=true;
 input int    InpScanMilliseconds=250;
 input bool   InpRequireRemoteArm=true;
 input long   InpMagic=APEX_MAGIC;
+
+// --- v3.9 Breakout + Trend signal brain. These are analysis thresholds, not promises
+// --- of win probability. Pressure is derived from broker ticks/candles; XAUUSD has no
+// --- single centralized order book, so Apex never labels this as institutional order flow.
+input int    InpBreakoutLookbackBars=20;
+input int    InpBreakoutMinTouches=2;
+input double InpBreakoutBufferAtr=0.04;
+input double InpBreakoutArmDistanceAtr=0.45;
+input double InpBreakoutMaxExtensionAtr=0.50;
+input double InpBreakoutPressureMin=62.0;
+input double InpTrendPressureMin=58.0;
+input double InpTrendSlopeMinAtr=0.75;
+input int    InpTrendPullbackBars=5;
+input double InpTrendMaxPullbackAtr=1.60;
+input double InpIgnitionBodyAtr=0.18;
+input double InpIgnitionCloseLocation=0.68;
 
 // --- Fallback seeds. Once a config poll (or the last-good local cache) is applied,
 // --- C.* is authoritative for every one of these. APEX-AUDIT-012.
@@ -135,6 +150,12 @@ struct Config
    int      maxLayers;
    double   entryScore,addScore,impulseAtr,sweepAtr,addSpacingAtr,rejectionZoneAtr;
    int      rejectionBars,watchExpiryMinutes,cooldownMinutes;
+   // v3.9 signal brain. Legacy impulse/sweep/rejection keys stay in the protocol only
+   // so older saved configs remain readable; they no longer decide a v3.9 entry.
+   int      breakoutLookbackBars,breakoutMinTouches,trendPullbackBars;
+   double   breakoutBufferAtr,breakoutArmDistanceAtr,breakoutMaxExtensionAtr;
+   double   breakoutPressureMin,trendPressureMin,trendSlopeMinAtr,trendMaxPullbackAtr;
+   double   ignitionBodyAtr,ignitionCloseLocation;
    bool     requireM3Confirm,requireM5Context,learningEnabled;
    double   learnEntryAdj,learnAddAdj;
    // APEX-AUDIT-012: dashboard-only in v3.7.1, now genuinely consumed by the runtime.
@@ -383,6 +404,11 @@ struct Snap
    string sig,reason,bosKind;
    datetime triggerBarTime;
    double triggerPrice;
+   // v3.9 signal telemetry / decision evidence
+   string setupFamily,regime,triggerKind;
+   double buyPressure,sellPressure,activePressure,trendStrength,candleQuality;
+   double breakoutLevel,compressionScore,pullbackQuality;
+   bool   contextOk,ignition,liveTrigger;
   };
 
 struct AddCandidate
@@ -470,6 +496,12 @@ string CampStateName();
 ulong    g_lastManageTickMs=0;
 ulong    g_maxRiskLoopGapMs=0;
 ulong    g_lastNetworkMs=0;
+
+// Broker-feed tick pressure window. This is intentionally local and ephemeral: it is
+// execution evidence, not durable campaign state.
+double   g_lastTickMid=0;
+long     g_tickUp=0,g_tickDown=0;
+datetime g_tickWindowStart=0;
 
 // --- v3.8.1 LIVE-READY operational state -----------------------------
 // A broker/session MARKET_CLOSED response is not a strategy rejection. Keep the
@@ -815,13 +847,19 @@ void Defaults()
    C.baseMarginPct=100;C.layerMultiplier=2;C.maxLayers=0;C.entryScore=76;C.addScore=70;
    C.impulseAtr=1.8;C.sweepAtr=.05;C.rejectionBars=5;C.watchExpiryMinutes=12;
    C.addSpacingAtr=.22;C.rejectionZoneAtr=.12;C.cooldownMinutes=0;C.requireM3Confirm=true;
+   C.breakoutLookbackBars=InpBreakoutLookbackBars;C.breakoutMinTouches=InpBreakoutMinTouches;
+   C.breakoutBufferAtr=InpBreakoutBufferAtr;C.breakoutArmDistanceAtr=InpBreakoutArmDistanceAtr;
+   C.breakoutMaxExtensionAtr=InpBreakoutMaxExtensionAtr;C.breakoutPressureMin=InpBreakoutPressureMin;
+   C.trendPressureMin=InpTrendPressureMin;C.trendSlopeMinAtr=InpTrendSlopeMinAtr;
+   C.trendPullbackBars=InpTrendPullbackBars;C.trendMaxPullbackAtr=InpTrendMaxPullbackAtr;
+   C.ignitionBodyAtr=InpIgnitionBodyAtr;C.ignitionCloseLocation=InpIgnitionCloseLocation;
    C.requireM5Context=false;C.learningEnabled=true;C.learnEntryAdj=0;C.learnAddAdj=0;
    C.revision=0;C.configHash="";
   }
 
 string ConfigCanonical(const Config &x)
   {
-   return StringFormat(
+   string base=StringFormat(
      "%s|%s|%s|%s|%.4f|%.4f|%.4f|%.4f|%.4f|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%d|%d|%d|%s|%s|%s|%.4f|%.4f"
      "|%.4f|%.4f|%.4f|%.4f|%s|%.4f|%.4f|%.4f|%.4f|%s|%.4f|%s|%.4f|%.4f|%.4f|%.4f|%I64d",
      BoolJson(x.armed),x.account,x.symbolContains,x.targetMode,x.targetEquity,x.targetMultiplier,
@@ -833,7 +871,12 @@ string ConfigCanonical(const Config &x)
      x.ratchetStepPct,x.ratchetLockStepPct,BoolJson(x.masterBreakEvenEnabled),x.masterBreakEvenTriggerPct,
      BoolJson(x.recoveryExitEnabled),x.recoveryExitArmPctOfSL,x.maxBasketLots,x.minMarginLevelPct,
      x.marginReservePct,x.normalReferenceLeverage);
+   return base+StringFormat("|%d|%d|%.6f|%.6f|%.6f|%.6f|%.6f|%.6f|%d|%.6f|%.6f|%.6f",
+     x.breakoutLookbackBars,x.breakoutMinTouches,x.breakoutBufferAtr,x.breakoutArmDistanceAtr,
+     x.breakoutMaxExtensionAtr,x.breakoutPressureMin,x.trendPressureMin,x.trendSlopeMinAtr,
+     x.trendPullbackBars,x.trendMaxPullbackAtr,x.ignitionBodyAtr,x.ignitionCloseLocation);
   }
+
 string ConfigHash(const Config &x){return StringFormat("%08x",Fnv1a(ConfigCanonical(x)+"|"+x.accountProfile));}
 
 string ConfigToJson(const Config &x)
@@ -851,6 +894,10 @@ string ConfigToJson(const Config &x)
      "\"masterBreakEvenEnabled\":%s,\"masterBreakEvenTriggerPct\":%.6f,\"recoveryExitEnabled\":%s,"
      "\"recoveryExitArmPctOfSL\":%.6f,\"maxBasketLots\":%.6f,\"minMarginLevelPct\":%.6f,"
      "\"marginReservePct\":%.6f,\"normalReferenceLeverage\":%I64d,"
+     "\"breakoutLookbackBars\":%d,\"breakoutMinTouches\":%d,\"breakoutBufferAtr\":%.6f,"
+     "\"breakoutArmDistanceAtr\":%.6f,\"breakoutMaxExtensionAtr\":%.6f,\"breakoutPressureMin\":%.6f,"
+     "\"trendPressureMin\":%.6f,\"trendSlopeMinAtr\":%.6f,\"trendPullbackBars\":%d,"
+     "\"trendMaxPullbackAtr\":%.6f,\"ignitionBodyAtr\":%.6f,\"ignitionCloseLocation\":%.6f,"
      "\"commandRevision\":%I64d,\"denied\":%s,\"deniedReason\":\"%s\"}",
      APEX_CONFIG_SCHEMA,BoolJson(x.armed),x.account,x.symbolContains,x.targetMode,x.accountProfile,
      x.targetEquity,x.targetMultiplier,x.normalTargetProfitPct,x.baseMarginPct,x.layerMultiplier,x.maxLayers,
@@ -861,6 +908,9 @@ string ConfigToJson(const Config &x)
      x.ratchetLockPct,x.ratchetStepPct,x.ratchetLockStepPct,BoolJson(x.masterBreakEvenEnabled),
      x.masterBreakEvenTriggerPct,BoolJson(x.recoveryExitEnabled),x.recoveryExitArmPctOfSL,
      x.maxBasketLots,x.minMarginLevelPct,x.marginReservePct,x.normalReferenceLeverage,
+     x.breakoutLookbackBars,x.breakoutMinTouches,x.breakoutBufferAtr,x.breakoutArmDistanceAtr,
+     x.breakoutMaxExtensionAtr,x.breakoutPressureMin,x.trendPressureMin,x.trendSlopeMinAtr,
+     x.trendPullbackBars,x.trendMaxPullbackAtr,x.ignitionBodyAtr,x.ignitionCloseLocation,
      g_cloudLastCommandRevision,BoolJson(g_cloudExplicitDenied),g_cloudDeniedReason);
   }
 
@@ -921,6 +971,24 @@ bool ConfigFromParsed(Config &out)
    out.maxBasketLots      =CfgNum("maxBasketLots",out.maxBasketLots);
    out.minMarginLevelPct  =CfgNum("minMarginLevelPct",out.minMarginLevelPct);
    out.marginReservePct   =CfgNum("marginReservePct",out.marginReservePct);
+   out.breakoutLookbackBars=(int)CfgNum("breakoutLookbackBars",(double)out.breakoutLookbackBars);
+   out.breakoutMinTouches =(int)CfgNum("breakoutMinTouches",(double)out.breakoutMinTouches);
+   out.breakoutBufferAtr  =CfgNum("breakoutBufferAtr",out.breakoutBufferAtr);
+   out.breakoutArmDistanceAtr=CfgNum("breakoutArmDistanceAtr",out.breakoutArmDistanceAtr);
+   out.breakoutMaxExtensionAtr=CfgNum("breakoutMaxExtensionAtr",out.breakoutMaxExtensionAtr);
+   out.breakoutPressureMin=CfgNum("breakoutPressureMin",out.breakoutPressureMin);
+   out.trendPressureMin   =CfgNum("trendPressureMin",out.trendPressureMin);
+   out.trendSlopeMinAtr   =CfgNum("trendSlopeMinAtr",out.trendSlopeMinAtr);
+   out.trendPullbackBars  =(int)CfgNum("trendPullbackBars",(double)out.trendPullbackBars);
+   out.trendMaxPullbackAtr=CfgNum("trendMaxPullbackAtr",out.trendMaxPullbackAtr);
+   out.ignitionBodyAtr    =CfgNum("ignitionBodyAtr",out.ignitionBodyAtr);
+   out.ignitionCloseLocation=CfgNum("ignitionCloseLocation",out.ignitionCloseLocation);
+   out.breakoutLookbackBars=MathMax(8,MathMin(60,out.breakoutLookbackBars));
+   out.breakoutMinTouches=MathMax(1,MathMin(6,out.breakoutMinTouches));
+   out.trendPullbackBars=MathMax(2,MathMin(12,out.trendPullbackBars));
+   out.breakoutPressureMin=clamp(out.breakoutPressureMin,50,95);
+   out.trendPressureMin=clamp(out.trendPressureMin,50,95);
+   out.ignitionCloseLocation=clamp(out.ignitionCloseLocation,.50,.98);
    return true;
   }
 
@@ -2517,18 +2585,17 @@ string NewSetupId()
    return StringFormat("S%I64d-%08x",(long)TimeCurrent(),
       Fnv1a(g_instanceId+IntegerToString((int)GetTickCount())+IntegerToString(MathRand())));
   }
-void ArmSetup(int dir,datetime sweepBar,double extreme,double prior,double atr,double impulseMult)
+void ArmSetup(int dir,datetime anchorBar,double invalidLevel,double referenceLevel,double atr,
+              double strength,string sig,string family)
   {
    S.state=SETUP_WATCHING;
-   S.id=NewSetupId();
-   S.dir=dir;
-   S.armedAt=TimeCurrent();
-   S.sweepBarTime=sweepBar;
-   S.extreme=extreme;S.prior=prior;S.atr=atr;
-   S.confirmedAt=0;S.triggerBarTime=0;S.triggerPrice=0;S.bosKind="";S.cancelReason="";
-   S.sig=dir<0?"SELL_UPSIDE_LIQUIDITY_EXHAUST":"BUY_DOWNSIDE_LIQUIDITY_EXHAUST";
-   Emit("WATCH_ARMED",StringFormat(",\"setupId\":\"%s\",\"watchDir\":%d,\"impulseAtr\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"sweepBarTime\":%I64d",
-        S.id,dir,impulseMult,extreme,prior,(long)sweepBar));
+   S.id=NewSetupId();S.dir=dir;S.armedAt=TimeCurrent();S.sweepBarTime=anchorBar;
+   S.extreme=invalidLevel;S.prior=referenceLevel;S.atr=atr;
+   S.confirmedAt=0;S.triggerBarTime=0;S.triggerPrice=0;S.bosKind="";S.cancelReason="";S.sig=sig;
+   Emit("WATCH_ARMED",StringFormat(
+        ",\"setupId\":\"%s\",\"watchDir\":%d,\"setupFamily\":\"%s\",\"regime\":\"%s\","
+        "\"strength\":%.2f,\"extreme\":%.5f,\"invalidationLevel\":%.5f,\"referenceLevel\":%.5f,\"anchorBarTime\":%I64d",
+        S.id,dir,family,family,strength,invalidLevel,invalidLevel,referenceLevel,(long)anchorBar));
   }
 
 string SetupStateText()
@@ -2541,231 +2608,325 @@ string SetupStateText()
    return "NONE";
   }
 
-string SetupWaitReason(const Snap &s,bool m3Available,bool m5Available,
-                       bool m3Gate,bool m5Gate,double threshold)
+string FamilyFromSig(string sig)
   {
-   if(C.requireM3Confirm&&!m3Available) return "M3_HISTORY_UNAVAILABLE";
-   if(C.requireM5Context&&!m5Available) return "M5_HISTORY_UNAVAILABLE";
-   if(!s.rejected) return "REJECTION";
-   if(!s.microBreak) return "MICRO_BOS";
-   if(!m3Gate) return "M3_CONFIRM";
-   if(!m5Gate) return "M5_CONTEXT";
-   if(s.score<threshold) return "SCORE";
+   if(StringFind(sig,"BREAKOUT_")==0) return "BREAKOUT";
+   if(StringFind(sig,"TREND_")==0) return "TREND_CONTINUATION";
+   return "UNKNOWN";
+  }
+
+void UpdateTickPressure()
+  {
+   MqlTick tk;if(!SymbolInfoTick(_Symbol,tk)||tk.bid<=0||tk.ask<=0)return;
+   datetime now=TimeCurrent();
+   if(g_tickWindowStart==0||now-g_tickWindowStart>=60)
+     {g_tickWindowStart=now;g_tickUp=0;g_tickDown=0;g_lastTickMid=0;}
+   double mid=(tk.bid+tk.ask)*.5;
+   if(g_lastTickMid>0)
+     {
+      if(mid>g_lastTickMid+_Point*.05)g_tickUp++;
+      else if(mid<g_lastTickMid-_Point*.05)g_tickDown++;
+     }
+   g_lastTickMid=mid;
+  }
+
+double AverageRange(MqlRates &r[],int start,int count)
+  {
+   int n=ArraySize(r);if(n<=start||count<=0)return 0;
+   int end=MathMin(n,start+count);double sum=0;int used=0;
+   for(int i=start;i<end;i++){double x=r[i].high-r[i].low;if(x>0){sum+=x;used++;}}
+   return used>0?sum/used:0;
+  }
+
+double DirectionalCandleQuality(MqlRates &b,int dir,double atr)
+  {
+   double range=MathMax(_Point,b.high-b.low);
+   double body=dir>0?b.close-b.open:b.open-b.close;
+   if(body<=0)return 0;
+   double bodyEff=clamp(body/range,0,1);
+   double closeLoc=dir>0?(b.close-b.low)/range:(b.high-b.close)/range;
+   double bodyAtr=atr>0?body/atr:0;
+   return clamp(bodyEff*45.0+clamp(closeLoc,0,1)*35.0+clamp(bodyAtr/.55,0,1)*20.0,0,100);
+  }
+
+void CalculatePressure(MqlRates &m1[],double atr,double &buy,double &sell,double &velocity)
+  {
+   buy=50;sell=50;velocity=0;if(atr<=0||ArraySize(m1)<10)return;
+   double br=1.0,sr=1.0;
+   int n=MathMin(8,ArraySize(m1)-1);
+   for(int i=1;i<=n;i++)
+     {
+      double range=MathMax(_Point,m1[i].high-m1[i].low);
+      double body=MathAbs(m1[i].close-m1[i].open);
+      double eff=clamp(body/range,0,1);
+      double volWeight=1.0+clamp((double)m1[i].tick_volume/MathMax(1.0,(double)m1[n].tick_volume),0,3)*.20;
+      if(m1[i].close>m1[i].open)
+        {
+         br+=(1.0+2.0*eff)*volWeight;
+         br+=clamp((m1[i].close-m1[i].low)/range,0,1)*.70;
+         sr+=clamp((m1[i].high-m1[i].close)/range,0,1)*.20;
+        }
+      else if(m1[i].close<m1[i].open)
+        {
+         sr+=(1.0+2.0*eff)*volWeight;
+         sr+=clamp((m1[i].high-m1[i].close)/range,0,1)*.70;
+         br+=clamp((m1[i].close-m1[i].low)/range,0,1)*.20;
+        }
+     }
+   double net=(m1[1].close-m1[n].open)/atr;
+   if(net>0)br+=clamp(net,0,3)*1.5;else sr+=clamp(-net,0,3)*1.5;
+
+   // Current live candle contributes modestly; it cannot dominate closed evidence alone.
+   double live=(m1[0].close-m1[0].open)/atr;
+   int age=(int)MathMax(1.0,(double)(TimeCurrent()-m1[0].time));
+   velocity=MathAbs(live)*60.0/(double)age;
+   if(live>0)br+=clamp(live,0,1.5)*2.0+clamp(velocity,0,3)*.6;
+   else if(live<0)sr+=clamp(-live,0,1.5)*2.0+clamp(velocity,0,3)*.6;
+
+   long ticks=g_tickUp+g_tickDown;
+   if(ticks>=8)
+     {
+      double tb=100.0*(double)g_tickUp/(double)ticks;
+      br+=tb/100.0*4.0;sr+=(100.0-tb)/100.0*4.0;
+     }
+   double total=MathMax(.0001,br+sr);buy=100.0*br/total;sell=100.0*sr/total;
+  }
+
+bool BreakoutContext(MqlRates &m1[],int dir,double atr,double price,double &level,int &touches,
+                     double &compression,double &extensionAtr)
+  {
+   int look=MathMax(8,MathMin(C.breakoutLookbackBars,60));
+   if(ArraySize(m1)<look+4||atr<=0)return false;
+   level=dir>0?-DBL_MAX:DBL_MAX;
+   for(int i=2;i<=look+1;i++) level=dir>0?MathMax(level,m1[i].high):MathMin(level,m1[i].low);
+   double tol=MathMax(_Point*10.0,atr*.12);touches=0;
+   for(int i=2;i<=look+1;i++)
+     {
+      double v=dir>0?m1[i].high:m1[i].low;
+      if(MathAbs(v-level)<=tol)touches++;
+     }
+   int comp=0,total=0;
+   for(int i=2;i<=5&&i+3<ArraySize(m1);i++)
+     {
+      total++;
+      if(dir>0&&m1[i].low>m1[i+3].low)comp++;
+      if(dir<0&&m1[i].high<m1[i+3].high)comp++;
+     }
+   compression=total>0?100.0*(double)comp/(double)total:0;
+   extensionAtr=dir>0?(price-level)/atr:(level-price)/atr;
+   double distanceAtr=dir>0?(level-price)/atr:(price-level)/atr;
+   bool closeEnough=distanceAtr<=C.breakoutArmDistanceAtr;
+   bool notChased=extensionAtr<=C.breakoutMaxExtensionAtr;
+   return touches>=C.breakoutMinTouches&&closeEnough&&notChased;
+  }
+
+int DetectTrend(MqlRates &m15[],MqlRates &m5[],double &strength)
+  {
+   strength=0;if(ArraySize(m15)<8||ArraySize(m5)<8)return 0;
+   double r15=AverageRange(m15,1,8),r5=AverageRange(m5,1,8);
+   if(r15<=0||r5<=0)return 0;
+   double s15=(m15[1].close-m15[6].close)/r15;
+   double s5=(m5[1].close-m5[5].close)/r5;
+   int dir=0;
+   if(s15>=C.trendSlopeMinAtr&&s5>.10&&m15[1].low>m15[6].low)dir=1;
+   else if(s15<=-C.trendSlopeMinAtr&&s5<-.10&&m15[1].high<m15[6].high)dir=-1;
+   strength=clamp(MathAbs(s15)*35.0+MathAbs(s5)*20.0,0,100);
+   return dir;
+  }
+
+bool TrendPullbackContext(MqlRates &m1[],int dir,double atr,double &invalidLevel,double &quality)
+  {
+   int pb=MathMax(2,MathMin(C.trendPullbackBars,12));
+   if(ArraySize(m1)<pb+6||atr<=0)return false;
+   bool opposing=false;invalidLevel=dir>0?DBL_MAX:-DBL_MAX;
+   double recentExtreme=dir>0?-DBL_MAX:DBL_MAX;
+   for(int i=1;i<=pb;i++)
+     {
+      if(dir>0){invalidLevel=MathMin(invalidLevel,m1[i].low);if(m1[i].close<m1[i].open)opposing=true;}
+      else {invalidLevel=MathMax(invalidLevel,m1[i].high);if(m1[i].close>m1[i].open)opposing=true;}
+     }
+   for(int i=pb+1;i<=pb+4;i++)
+      recentExtreme=dir>0?MathMax(recentExtreme,m1[i].high):MathMin(recentExtreme,m1[i].low);
+   double depth=dir>0?(recentExtreme-invalidLevel)/atr:(invalidLevel-recentExtreme)/atr;
+   if(!opposing||depth<.08||depth>C.trendMaxPullbackAtr)return false;
+   quality=clamp(100.0*(1.0-depth/MathMax(.01,C.trendMaxPullbackAtr)),0,100);
+   invalidLevel+=dir>0?(-atr*.05):(atr*.05);
+   return true;
+  }
+
+bool IgnitionPattern(MqlRates &m1[],int dir,double atr,double pressure,double pressureMin,
+                     double &quality,string &kind,bool requireBreak)
+  {
+   quality=0;kind="NONE";if(ArraySize(m1)<4||atr<=0)return false;
+   MqlRates live=m1[0];double range=MathMax(_Point,live.high-live.low);
+   double body=dir>0?live.close-live.open:live.open-live.close;
+   if(body<=0)return false;
+   double closeLoc=dir>0?(live.close-live.low)/range:(live.high-live.close)/range;
+   double bodyAtr=body/atr;
+   bool microBreak=dir>0?live.close>m1[1].high:live.close<m1[1].low;
+   bool engulf=dir>0?(m1[1].close<m1[1].open&&live.close>m1[1].open)
+                    :(m1[1].close>m1[1].open&&live.close<m1[1].open);
+   bool reclaim=dir>0?(live.close>m1[1].open&&m1[1].low<m1[2].low)
+                     :(live.close<m1[1].open&&m1[1].high>m1[2].high);
+   bool structural=requireBreak?microBreak:(microBreak||engulf||reclaim);
+   if(!structural||bodyAtr<C.ignitionBodyAtr||closeLoc<C.ignitionCloseLocation||pressure<pressureMin)return false;
+   quality=DirectionalCandleQuality(live,dir,atr);
+   if(microBreak)kind="LIVE_MICRO_BREAK";else if(engulf)kind="LIVE_ENGULF_RECLAIM";else kind="FAILED_COUNTER_RECLAIM";
+   return quality>=50.0;
+  }
+
+string SetupWaitReason(const Snap &s,double threshold)
+  {
+   if(!s.contextOk)return "CONTEXT";
+   if(!s.ignition)return "IGNITION";
+   if(s.setupFamily=="BREAKOUT"&&s.activePressure<C.breakoutPressureMin)return "PRESSURE";
+   if(s.setupFamily=="TREND_CONTINUATION"&&s.activePressure<C.trendPressureMin)return "PRESSURE";
+   if(s.candleQuality<50)return "CANDLE_QUALITY";
+   if(s.score<threshold)return "SCORE";
    return "READY";
   }
 
-void EmitSetupTelemetry(const Snap &s,bool m3Available,bool m5Available,
-                        bool m3Gate,bool m5Gate,double threshold)
+void EmitSetupTelemetry(const Snap &s,double threshold)
   {
-   if(S.id=="") return;
-
-   // TELEMETRY ONLY: exact existing score terms, recomputed for display.
-   // They never feed back into s.score or any entry condition.
-   double impulsePoints=clamp(s.impulseMult/C.impulseAtr*15,0,18);
-   double rejectionPoints=s.rejected?24.0:0.0;
-   double bosPoints=s.microBreak?22.0:0.0;
-   double m3Points=s.m3Color?8.0:0.0;
-   double m5Points=s.m5Color?3.0:0.0;
-   double wickPoints=clamp(s.wickRatio*2,0,5);
-   string waitReason=SetupWaitReason(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
+   if(S.id=="")return;
+   string waitReason=SetupWaitReason(s,threshold);
    datetime closedBar=iTime(_Symbol,PERIOD_M1,1);
-
-   // Scanner can run every 250 ms. Emit only on meaningful state/bar changes.
-   string fingerprint=StringFormat(
-      "%s|%I64d|%s|%.2f|%s|%s|%s|%s|%s|%s",
-      S.id,(long)closedBar,SetupStateText(),s.score,
-      BoolJson(s.rejected),BoolJson(s.microBreak),BoolJson(m3Gate),BoolJson(m5Gate),
-      BoolJson(m3Available),BoolJson(m5Available));
-   static string lastFingerprint="";
-   if(fingerprint==lastFingerprint) return;
-   lastFingerprint=fingerprint;
-
+   string fingerprint=StringFormat("%s|%I64d|%s|%s|%d|%d|%d",S.id,(long)closedBar,SetupStateText(),waitReason,
+      (int)MathFloor(s.score/5.0),(int)MathFloor(s.activePressure/5.0),(int)MathFloor(s.candleQuality/5.0));
+   static string lastFingerprint="";if(fingerprint==lastFingerprint)return;lastFingerprint=fingerprint;
    Emit("SETUP_SCORE",StringFormat(
-      ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"%s\","
-      "\"score\":%.2f,\"requiredScore\":%.2f,\"basePoints\":%.2f,\"impulsePoints\":%.2f,"
-      "\"rejectionPoints\":%.2f,\"bosPoints\":%.2f,\"m3Points\":%.2f,\"m5Points\":%.2f,\"wickPoints\":%.2f,"
-      "\"rejected\":%s,\"microBreak\":%s,\"m3Color\":%s,\"m3Fresh\":%s,\"m5Color\":%s,"
-      "\"m3Available\":%s,\"m5Available\":%s,\"m3Gate\":%s,\"m5Gate\":%s,"
-      "\"requireM3\":%s,\"requireM5\":%s,\"waitReason\":\"%s\",\"bosKind\":\"%s\","
-      "\"impulseAtr\":%.3f,\"wickRatio\":%.3f,\"extreme\":%.5f,\"priorLevel\":%.5f,\"ageSec\":%d",
-      S.id,S.dir,SetupStateText(),s.score,threshold,APEX_SCORE_BASE,impulsePoints,
-      rejectionPoints,bosPoints,m3Points,m5Points,wickPoints,
-      BoolJson(s.rejected),BoolJson(s.microBreak),BoolJson(s.m3Color),BoolJson(s.m3Fresh),BoolJson(s.m5Color),
-      BoolJson(m3Available),BoolJson(m5Available),BoolJson(m3Gate),BoolJson(m5Gate),
-      BoolJson(C.requireM3Confirm),BoolJson(C.requireM5Context),waitReason,s.bosKind,
-      s.impulseMult,s.wickRatio,S.extreme,S.prior,
-      S.armedAt>0?(int)MathMax(0,(double)(TimeCurrent()-S.armedAt)):0));
-
-   Print("APEX SETUP | ",S.dir>0?"BUY":"SELL",
-         " | id=",S.id,
-         " | state=",SetupStateText(),
-         " | score=",DoubleToString(s.score,1),"/",DoubleToString(threshold,1),
-         " | rejection=",s.rejected?"PASS":"WAIT",
-         " | bos=",s.microBreak?"PASS":"WAIT",
-         " | m3=",C.requireM3Confirm?(m3Gate?"PASS":"WAIT"):"OPTIONAL",
-         " | m5=",C.requireM5Context?(m5Gate?"PASS":"WAIT"):"OPTIONAL",
-         " | waiting=",waitReason);
+      ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"%s\",\"setupFamily\":\"%s\",\"regime\":\"%s\","
+      "\"score\":%.2f,\"requiredScore\":%.2f,\"buyPressure\":%.2f,\"sellPressure\":%.2f,\"activePressure\":%.2f,"
+      "\"trendStrength\":%.2f,\"candleQuality\":%.2f,\"compressionScore\":%.2f,\"pullbackQuality\":%.2f,"
+      "\"contextOk\":%s,\"ignition\":%s,\"liveTrigger\":%s,\"waitReason\":\"%s\",\"triggerKind\":\"%s\","
+      "\"breakoutLevel\":%.5f,\"invalidationLevel\":%.5f,\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"ageSec\":%d",
+      S.id,S.dir,SetupStateText(),s.setupFamily,s.regime,s.score,threshold,s.buyPressure,s.sellPressure,s.activePressure,
+      s.trendStrength,s.candleQuality,s.compressionScore,s.pullbackQuality,BoolJson(s.contextOk),BoolJson(s.ignition),
+      BoolJson(s.liveTrigger),waitReason,s.triggerKind,s.breakoutLevel,S.extreme,s.triggerPrice,(long)s.triggerBarTime,
+      S.armedAt>0?(int)MathMax(0.0,(double)(TimeCurrent()-S.armedAt)):0));
   }
 
 //====================== observation ===================================
-// The detector itself is UNCHANGED from v3.7.1 (impulse -> sweep -> rejection -> BOS).
-// What changed:
-//   003  a new extreme beyond the watched one RE-ARMS a fresh setup instead of leaving
-//        the dead one frozen until its timer runs out;
-//   006  the BOS predicate is explicit and its kind is reported truthfully;
-//   007  missing M3/M5 history is no longer a hard dependency when the filter is off.
+// v3.9 has exactly two opportunity families:
+//   1) BREAKOUT: compression/level pressure -> live ignition through the level.
+//   2) TREND_CONTINUATION: higher-timeframe trend -> controlled pullback -> live resumption.
+// Closed bars establish context. The live M1 candle + fresh ticks establish L1 ignition.
 Snap Observe()
   {
    Snap s;
-   s.valid=false;s.dir=0;s.score=0;s.atr=ATR();s.price=0;s.extreme=0;
-   s.impulseMult=0;s.sweepMult=0;s.wickRatio=0;s.swept=false;s.rejected=false;s.microBreak=false;
-   s.m3Color=false;s.m5Color=false;s.m3Fresh=false;s.continuation=false;s.pullbackFail=false;
-   s.sig="NONE";s.reason="";s.bosKind="NONE";s.triggerBarTime=0;s.triggerPrice=0;
+   s.valid=false;s.dir=0;s.score=0;s.atr=ATR();s.price=0;s.extreme=0;s.impulseMult=0;s.sweepMult=0;s.wickRatio=0;
+   s.swept=false;s.rejected=false;s.microBreak=false;s.m3Color=false;s.m5Color=false;s.m3Fresh=false;
+   s.continuation=false;s.pullbackFail=false;s.sig="NONE";s.reason="";s.bosKind="NONE";s.triggerBarTime=0;s.triggerPrice=0;
+   s.setupFamily="NONE";s.regime="UNKNOWN";s.triggerKind="NONE";s.buyPressure=50;s.sellPressure=50;s.activePressure=50;
+   s.trendStrength=0;s.candleQuality=0;s.breakoutLevel=0;s.compressionScore=0;s.pullbackQuality=0;
+   s.contextOk=false;s.ignition=false;s.liveTrigger=false;
    if(s.atr<=0){s.reason="NO_ATR";return s;}
 
-   MqlRates m1[],m3[],m5[];
+   MqlRates m1[],m5[],m15[];
    if(!Rates(PERIOD_M1,90,m1)){s.reason="NO_M1_HISTORY";return s;}
-   // APEX-AUDIT-007: optional-timeframe history is now NON-FATAL. It is still requested
-   // because the ranking score consumes the candle-colour context (intended behaviour),
-   // but its absence can no longer disable the M1 scanner. It is only MANDATORY when the
-   // corresponding filter is switched on.
-   bool m3Available=Rates(PERIOD_M3,24,m3);
-   bool m5Available=Rates(PERIOD_M5,18,m5);
+   if(!Rates(PERIOD_M5,24,m5)||!Rates(PERIOD_M15,20,m15)){s.reason="NO_CONTEXT_HISTORY";return s;}
+   MqlTick tk;if(!SymbolInfoTick(_Symbol,tk)||tk.bid<=0||tk.ask<=0){s.reason="NO_FRESH_QUOTE";return s;}
+   double velocity=0;CalculatePressure(m1,s.atr,s.buyPressure,s.sellPressure,velocity);
 
-   double move=m1[1].close-m1[8].close;
-   int imp=move>=0?1:-1;
-   s.impulseMult=MathAbs(move)/s.atr;
-   int directional=0;
-   for(int i=1;i<=7;i++)
-      if((imp>0&&m1[i].close>m1[i].open)||(imp<0&&m1[i].close<m1[i].open))directional++;
-
-   double ph=-DBL_MAX,pl=DBL_MAX;
-   for(int i=9;i<80;i++){ph=MathMax(ph,m1[i].high);pl=MathMin(pl,m1[i].low);}
-
-   // --- APEX-AUDIT-003: a watch whose premise the market has destroyed must die, and a
-   // --- genuinely new sweep must be able to take its place immediately.
+   // Expire/invalidate an existing thesis before considering a new one.
    if(S.state==SETUP_WATCHING||S.state==SETUP_CONFIRMED)
      {
-      if(TimeCurrent()-S.armedAt>C.watchExpiryMinutes*60)
-        {S.state=SETUP_EXPIRED;SetupReset("EXPIRED");}
+      if(TimeCurrent()-S.armedAt>C.watchExpiryMinutes*60){S.state=SETUP_EXPIRED;SetupReset("EXPIRED");}
       else
         {
-         // a later bar printing an extreme BEYOND the swept one means the rejection failed
-         bool newExtreme=false;
-         for(int i=1;i<=8;i++)
-           {
-            if(m1[i].time<=S.sweepBarTime)break;
-            if(S.dir<0&&m1[i].high>S.extreme){newExtreme=true;break;}
-            if(S.dir>0&&m1[i].low<S.extreme){newExtreme=true;break;}
-           }
-         if(newExtreme){S.state=SETUP_INVALIDATED;SetupReset("NEW_EXTREME_BEYOND_SWEPT_LEVEL");}
+         bool crossed=S.dir>0?(tk.bid<=S.extreme):(tk.ask>=S.extreme);
+         if(crossed){S.state=SETUP_INVALIDATED;SetupReset("THESIS_INVALIDATION_LEVEL_BREACHED");}
         }
      }
 
-   bool canArm=(S.state==SETUP_NONE);
-   if(canArm&&s.impulseMult>=C.impulseAtr&&directional>=5)
+   double upLevel=0,dnLevel=0,upComp=0,dnComp=0,upExt=0,dnExt=0;int upTouches=0,dnTouches=0;
+   bool upBreakCtx=BreakoutContext(m1,1,s.atr,tk.ask,upLevel,upTouches,upComp,upExt);
+   bool dnBreakCtx=BreakoutContext(m1,-1,s.atr,tk.bid,dnLevel,dnTouches,dnComp,dnExt);
+   double upCQ=0,dnCQ=0;string upKind="NONE",dnKind="NONE";
+   bool upBreakIgn=upBreakCtx&&tk.ask>=upLevel+C.breakoutBufferAtr*s.atr&&upExt<=C.breakoutMaxExtensionAtr&&
+                    IgnitionPattern(m1,1,s.atr,s.buyPressure,C.breakoutPressureMin,upCQ,upKind,false);
+   bool dnBreakIgn=dnBreakCtx&&tk.bid<=dnLevel-C.breakoutBufferAtr*s.atr&&dnExt<=C.breakoutMaxExtensionAtr&&
+                    IgnitionPattern(m1,-1,s.atr,s.sellPressure,C.breakoutPressureMin,dnCQ,dnKind,false);
+
+   double trendStrength=0;int trendDir=DetectTrend(m15,m5,trendStrength);
+   double trendInvalid=0,pbQuality=0;
+   bool trendCtx=trendDir!=0&&TrendPullbackContext(m1,trendDir,s.atr,trendInvalid,pbQuality);
+   double trendCQ=0;string trendKind="NONE";double trendPressure=trendDir>0?s.buyPressure:s.sellPressure;
+   bool trendIgn=trendCtx&&IgnitionPattern(m1,trendDir,s.atr,trendPressure,C.trendPressureMin,trendCQ,trendKind,false);
+
+   // Arm the best developing thesis. A true breakout ignition outranks a generic trend
+   // continuation because it is the time-sensitive event Apex was redesigned to catch.
+   if(S.state==SETUP_NONE)
      {
-      double ex=imp>0?m1[1].high:m1[1].low;
-      bool swept=imp>0?ex>=ph+C.sweepAtr*s.atr:ex<=pl-C.sweepAtr*s.atr;
-      if(swept) ArmSetup(-imp,m1[1].time,ex,imp>0?ph:pl,s.atr,s.impulseMult);
+      if(upBreakIgn||dnBreakIgn)
+        {
+         int d=upBreakIgn&&!dnBreakIgn?1:dnBreakIgn&&!upBreakIgn?-1:(s.buyPressure>=s.sellPressure?1:-1);
+         double level=d>0?upLevel:dnLevel,comp=d>0?upComp:dnComp;
+         double inv=d>0?level-MathMax(.20,C.breakoutBufferAtr*2.0)*s.atr:level+MathMax(.20,C.breakoutBufferAtr*2.0)*s.atr;
+         ArmSetup(d,m1[1].time,inv,level,s.atr,comp,d>0?"BREAKOUT_UP":"BREAKOUT_DOWN","BREAKOUT");
+        }
+      else if(trendCtx&&trendIgn)
+        ArmSetup(trendDir,m1[1].time,trendInvalid,m1[1].close,s.atr,trendStrength,
+                 trendDir>0?"TREND_UP_CONTINUATION":"TREND_DOWN_CONTINUATION","TREND_CONTINUATION");
+      else if(upBreakCtx||dnBreakCtx)
+        {
+         int d=upBreakCtx&&!dnBreakCtx?1:dnBreakCtx&&!upBreakCtx?-1:
+               ((s.buyPressure+upComp*.10)>=(s.sellPressure+dnComp*.10)?1:-1);
+         double level=d>0?upLevel:dnLevel,comp=d>0?upComp:dnComp;
+         double inv=d>0?level-MathMax(.20,C.breakoutBufferAtr*2.0)*s.atr:level+MathMax(.20,C.breakoutBufferAtr*2.0)*s.atr;
+         ArmSetup(d,m1[1].time,inv,level,s.atr,comp,d>0?"BREAKOUT_UP":"BREAKOUT_DOWN","BREAKOUT");
+        }
+      else if(trendCtx)
+        ArmSetup(trendDir,m1[1].time,trendInvalid,m1[1].close,s.atr,trendStrength,
+                 trendDir>0?"TREND_UP_CONTINUATION":"TREND_DOWN_CONTINUATION","TREND_CONTINUATION");
      }
 
-   if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason="NO_ACTIVE_SETUP";return s;}
+   if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason="NO_QUALIFIED_CONTEXT";return s;}
 
-   s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.swept=true;
-   s.impulseMult=MathAbs(m1[1].close-m1[8].close)/s.atr;
-   s.price=s.dir>0?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.price=S.dir>0?tk.ask:tk.bid;s.triggerPrice=s.price;
+   s.triggerBarTime=m1[1].time;s.setupFamily=FamilyFromSig(S.sig);s.regime=S.sig;
+   s.buyPressure=clamp(s.buyPressure,0,100);s.sellPressure=clamp(s.sellPressure,0,100);
+   s.activePressure=S.dir>0?s.buyPressure:s.sellPressure;s.trendStrength=trendStrength;
 
-   int rb=MathMax(1,MathMin(C.rejectionBars,8));
-   bool rej=false;double bestW=0;
-   for(int i=1;i<=rb;i++)
+   int touches=0;double comp=0,ext=0,level=0,cq=0;string kind="NONE";bool ctx=false,ign=false;
+   if(s.setupFamily=="BREAKOUT")
      {
-      if(m1[i].time<=S.sweepBarTime)continue;
-      double body=MathMax(_Point,MathAbs(m1[i].close-m1[i].open));
-      double up=m1[i].high-MathMax(m1[i].open,m1[i].close);
-      double lo=MathMin(m1[i].open,m1[i].close)-m1[i].low;
-      if(s.dir<0)
-        {bestW=MathMax(bestW,up/body);
-         if(m1[i].high>=S.extreme-C.rejectionZoneAtr*s.atr&&m1[i].close<S.prior)rej=true;}
-      else
-        {bestW=MathMax(bestW,lo/body);
-         if(m1[i].low<=S.extreme+C.rejectionZoneAtr*s.atr&&m1[i].close>S.prior)rej=true;}
+      ctx=BreakoutContext(m1,S.dir,s.atr,s.price,level,touches,comp,ext);
+      double requiredLevel=S.prior;
+      bool broke=S.dir>0?(tk.ask>=requiredLevel+C.breakoutBufferAtr*s.atr):(tk.bid<=requiredLevel-C.breakoutBufferAtr*s.atr);
+      ign=ctx&&broke&&ext<=C.breakoutMaxExtensionAtr&&
+          IgnitionPattern(m1,S.dir,s.atr,s.activePressure,C.breakoutPressureMin,cq,kind,false);
+      s.breakoutLevel=requiredLevel;s.compressionScore=comp;
+      double touchPts=MathMin(10.0,(double)touches*3.0);
+      bool m5Aligned=S.dir>0?m5[1].close>=m5[2].close:m5[1].close<=m5[2].close;
+      s.score=clamp(20.0+s.activePressure*.25+cq*.20+comp*.15+touchPts+(broke?12.0:0)+(m5Aligned?8.0:0),0,100);
      }
-
-   // --- APEX-AUDIT-006: explicit, truthfully-named confirmation predicate.
-   // BOS_V371_CLOSE_OR_WICK is byte-for-byte the v3.7.1 rule; nothing is removed by default.
-   bool bos=false;string bosKind="NONE";
-   if(m1[1].time>S.sweepBarTime)
+   else
      {
-      bool closeBreak = s.dir<0 ? (m1[1].close<m1[2].low) : (m1[1].close>m1[2].high);
-      bool wickConfirm= s.dir<0 ? (m1[1].low<m1[3].low  && m1[1].close<m1[2].open)
-                                : (m1[1].high>m1[3].high&& m1[1].close>m1[2].open);
-      if(closeBreak){bos=true;bosKind="CLOSE_BREAK_PRIOR_BAR_EXTREME";}
-      else if(InpBosMode==BOS_V371_CLOSE_OR_WICK&&wickConfirm){bos=true;bosKind="WICK_BREACH_3BAR_PLUS_CLOSE_BEYOND_PRIOR_OPEN";}
+      double inv=0,pq=0;ctx=(trendDir==S.dir)&&TrendPullbackContext(m1,S.dir,s.atr,inv,pq);
+      ign=ctx&&IgnitionPattern(m1,S.dir,s.atr,s.activePressure,C.trendPressureMin,cq,kind,false);
+      s.pullbackQuality=pq;s.trendStrength=trendStrength;
+      bool m5Aligned=S.dir>0?m5[1].close>m5[3].close:m5[1].close<m5[3].close;
+      s.score=clamp(20.0+s.activePressure*.25+cq*.20+trendStrength*.20+pq*.15+(ign?12.0:0)+(m5Aligned?8.0:0),0,100);
      }
-   s.rejected=rej;s.microBreak=bos;s.wickRatio=bestW;s.bosKind=bosKind;
-   if(bos){s.triggerBarTime=m1[1].time;s.triggerPrice=m1[1].close;}
-
-   if(m3Available)
-     {
-      s.m3Color=s.dir<0?(m3[1].close<m3[1].open&&m3[1].close<(m3[1].high+m3[1].low)/2)
-                       :(m3[1].close>m3[1].open&&m3[1].close>(m3[1].high+m3[1].low)/2);
-      s.m3Fresh=(m3[1].time>=S.sweepBarTime);
-     }
-   if(m5Available)
-      s.m5Color=s.dir<0?m5[1].close<m5[1].open:m5[1].close>m5[1].open;
-
-   // Ranking score. UNCALIBRATED and UNCHANGED numerically from v3.7.1. It is a ranking,
-   // not a probability: with the mandatory gates satisfied the score already exceeds the
-   // default entryScore threshold, so the threshold is informational at those defaults.
-   // The redundancy is reported (scoreFloorGivenMandatory) rather than silently repaired
-   // by inventing new weights -- calibration needs held-out labelled data we do not have.
-   double score=APEX_SCORE_BASE
-               +clamp(s.impulseMult/C.impulseAtr*15,0,18)
-               +(s.rejected?24:0)+(s.microBreak?22:0)
-               +(s.m3Color?8:0)+(s.m5Color?3:0)
-               +clamp(bestW*2,0,5);
-   s.score=clamp(score,0,100);
-
-   bool m3Gate=(!C.requireM3Confirm)||(s.m3Color&&(!InpRequireFreshM3||s.m3Fresh));
-   bool m5Gate=(!C.requireM5Context)||s.m5Color;
+   s.contextOk=ctx;s.ignition=ign;s.liveTrigger=ign;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;
+   // Legacy booleans remain populated only for old telemetry readers; they no longer mean
+   // rejection/BOS in v3.9. Their authoritative names are contextOk/ignition.
+   s.rejected=ctx;s.microBreak=ign;s.continuation=(s.setupFamily=="TREND_CONTINUATION");
    double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
+   s.valid=ctx&&ign&&s.candleQuality>=50.0&&s.score>=threshold;
+   s.reason=s.valid?"BREAKOUT_TREND_SIGNAL_CONFIRMED":SetupWaitReason(s,threshold);
 
-   // Missing required history remains the same hard gate. We only expose it.
-   if(C.requireM3Confirm&&!m3Available)
-     {
-      s.reason="M3_HISTORY_UNAVAILABLE_BUT_REQUIRED";
-      EmitSetupTelemetry(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
-      return s;
-     }
-   if(C.requireM5Context&&!m5Available)
-     {
-      s.reason="M5_HISTORY_UNAVAILABLE_BUT_REQUIRED";
-      EmitSetupTelemetry(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
-      return s;
-     }
-
-   s.valid=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold;
-   s.reason=s.valid?"CONFIRMED_EXHAUSTION_REVERSAL":"WATCHING_FOR_REJECTION_AND_BOS";
    bool newlyConfirmed=s.valid&&S.state==SETUP_WATCHING;
    if(newlyConfirmed)
-     {
-      S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();
-      S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=bosKind;
-     }
-
-   EmitSetupTelemetry(s,m3Available,m5Available,m3Gate,m5Gate,threshold);
+     {S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=kind;}
+   EmitSetupTelemetry(s,threshold);
    if(newlyConfirmed)
-     {
-      Emit("SETUP_CONFIRMED",StringFormat(
-         ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"score\":%.2f,"
-         "\"requiredScore\":%.2f,\"bosKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"ageSec\":%d",
-         S.id,S.dir,s.score,threshold,S.bosKind,S.triggerPrice,(long)S.triggerBarTime,
-         S.armedAt>0?(int)MathMax(0,(double)(TimeCurrent()-S.armedAt)):0));
-      Print("APEX SETUP CONFIRMED | ",S.dir>0?"BUY":"SELL"," | id=",S.id,
-            " | score=",DoubleToString(s.score,1),"/",DoubleToString(threshold,1),
-            " | bos=",S.bosKind," | submitting on existing v3.8.2 rule");
-     }
+     Emit("SETUP_CONFIRMED",StringFormat(
+       ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"setupFamily\":\"%s\",\"regime\":\"%s\","
+       "\"score\":%.2f,\"requiredScore\":%.2f,\"activePressure\":%.2f,\"candleQuality\":%.2f,"
+       "\"triggerKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d",
+       S.id,S.dir,s.setupFamily,s.regime,s.score,threshold,s.activePressure,s.candleQuality,kind,s.triggerPrice,(long)s.triggerBarTime));
    return s;
   }
 
@@ -2773,7 +2934,7 @@ Snap Observe()
 // so the dashboard can show honestly whether entryScore is actually binding.
 double ScoreFloorGivenMandatory()
   {
-   return APEX_SCORE_BASE+24+22+(C.requireM3Confirm?8:0)+(C.requireM5Context?3:0);
+   return 0.0; // v3.9 composite score varies continuously with pressure/quality/context.
   }
 
 //====================== final executable-price gate (APEX-AUDIT-001) ==
@@ -2972,555 +3133,13 @@ void PromotePendingFill()
       campState=CAMP_ACTIVE;
       S.state=SETUP_CONSUMED;
       Emit("CAMPAIGN_START",StringFormat(
-        ",\"score\":%.2f,\"targetEquity\":%.2f,\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"setupId\":\"%s\","
-        "\"lateFill\":true,\"pendingOrder\":%I64u",
-        g_pending.score,targetEq,cycleStart,firstEntryPrice,g_pending.setupId,g_pending.order));
-      SetupReset("CONSUMED_BY_CAMPAIGN_LATE_FILL");
-     }
-   else
-     {
-      if(g_pending.triggerId!="") ConsumeTrigger(g_pending.triggerId);
-      Emit("LAYER_OPEN",StringFormat(",\"layer\":%d,\"score\":%.2f,\"price\":%.5f,\"setupId\":\"%s\",\"lateFill\":true,\"family\":\"%s\"",
-           layers,g_pending.score,lastAdd,g_pending.setupId,g_pending.family));
-     }
-   Emit("ORDER_FILLED_LATE",StringFormat(",\"order\":%I64u,\"layers\":%d,\"isFirstEntry\":%s",
-        g_pending.order,layers,BoolJson(g_pending.isFirstEntry)));
-   g_pending.active=false;
-   SaveState();
-  }
-
-void ReconcilePending()
-  {
-   if(!g_pending.active) return;
-   int n=CountPos();
-   if(n>0)
-     {
-      PromotePendingFill();
-      return;
-     }
-   bool orderLive=false;
-   if(g_pending.order!=0)
-     {
-      for(int i=OrdersTotal()-1;i>=0;i--)
-        {
-         ulong t=OrderGetTicket(i);
-         if(t==g_pending.order){orderLive=true;break;}
-        }
-     }
-   if(orderLive) return;
-   if(g_pending.order!=0 && HistoryOrderSelect(g_pending.order))
-     {
-      long st=HistoryOrderGetInteger(g_pending.order,ORDER_STATE);
-      if(st==ORDER_STATE_FILLED||st==ORDER_STATE_PARTIAL)
-        {PromotePendingFill();return;}
-      if(st==ORDER_STATE_CANCELED||st==ORDER_STATE_REJECTED||st==ORDER_STATE_EXPIRED)
-        {ClearPending(StringFormat("HISTORY_ORDER_STATE_%d",(int)st));return;}
-     }
-   // Broker has not published a terminal state. Do NOT resend. Do NOT reset the campaign.
-  }
-
-//====================== preflight (APEX-AUDIT-014/027) ================
-// Reports why NEW exposure is refused. Protection/closing of already-open positions is
-// never gated by this -- an existing basket is always managed.
-string ComputePreflight()
-  {
-   if(g_observerOnly) return "OBSERVER_ONLY_SECOND_INSTANCE";
-   if(g_pending.active) return "ORDER_PENDING_BROKER_CONFIRMATION";
-   if(g_cloudLeaseSupported && !ManagerAllowsNewExposure(g_instanceId,g_cloudManagerId,g_cloudLeaseUntil,TimeCurrent(),g_cloudLeaseSupported,g_cloudLeaseConfirmed))
-      return "CROSS_TERMINAL_LEASE_NOT_MANAGER";
-   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED)) return "TERMINAL_DISCONNECTED";
-   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return "TERMINAL_TRADE_DISABLED";
-   if(!(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)) return "EA_TRADE_DISABLED";
-   if(!IsTester())
-     {
-      if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return "ACCOUNT_TRADE_DISABLED";
-      if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return "ACCOUNT_EXPERT_TRADING_DISABLED";
-     }
-   if(MarketClosedBackoffActive()) return "MARKET_CLOSED_BACKOFF";
-   ENUM_ORDER_TYPE_FILLING filling;
-   if(!ResolveFillingMode(filling)) return "NO_SUPPORTED_FILLING_MODE";
-   ENUM_ACCOUNT_MARGIN_MODE mm=(ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE);
-   // Platform capability, not a risk policy: a netting account merges positions, so a
-   // multi-layer basket, masterTicket and per-layer state cannot be represented at all.
-   if(mm!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING&&!InpAllowNettingAccounts) return "UNSUPPORTED_ACCOUNT_MODE_NETTING";
-   long tm=SymbolInfoInteger(_Symbol,SYMBOL_TRADE_MODE);
-   if(tm==SYMBOL_TRADE_MODE_DISABLED||tm==SYMBOL_TRADE_MODE_CLOSEONLY) return "SYMBOL_TRADE_MODE_RESTRICTED";
-   if(g_cloudExplicitDenied) return "LICENSE_DENIED";
-   if(campState==CAMP_CLOSING) return "CAMPAIGN_CLOSING";
-   if(campState==CAMP_SUBMITTING) return "CAMPAIGN_SUBMITTING";
-   if(campState!=CAMP_IDLE&&!anchorsKnown) return "ANCHORS_UNRECONCILED";
-   return "";
-  }
-
-//====================== layer submission ==============================
-// NORMAL (unchanged since v3.8.7): L1 15%, L2 50%, L3+ 100% of the CURRENT executable
-// capacity established by NORMAL's trusted margin economics (or its reference leverage),
-// read from the dashboard C.normal* fields.
-//
-// Retired for sizing: C.baseMarginPct * C.layerMultiplier^layers. Both fields remain
-// parsed for config compatibility but no longer size a layer.
-double LayerMarginPctFor(int filledLayers)
-  {
-   // APEX-AUDIT-012: these come from C.* (dashboard), seeded from the Inputs.
-   if(filledLayers<=0) return MathMax(0.1,MathMin(100.0,C.normalL1MarginPct));
-   if(filledLayers==1) return MathMax(0.1,MathMin(100.0,C.normalL2MarginPct));
-   return MathMax(0.1,MathMin(100.0,C.normalL3PlusMarginPct));
-  }
-double LayerMarginPct(){return LayerMarginPctFor(layers);}
-
-// v3.8.8 UNLIMITED state machine. ROOT CAUSE this replaces: v3.8.7 sized EVERY
-// UNLIMITED layer through ComputeVolume()'s UNLIMITED branch, i.e. "pct of the broker's
-// current executable capacity". On the Exness unlimited account the client margin model
-// reports 0.00/lot, so LargestVolumeWithinMargin() and OrderCheck() both approve
-// SYMBOL_VOLUME_MAX and that capacity is 200 lots -- so L1 = 15% x 200 = 30 lots on a
-// $1,000 account. The fix is structural: L1/L2 never reach that engine at all.
-//
-//   filled 0 -> L1  SIMULATED_1_200       15% of simulated 1:200 capacity
-//   filled 1 -> L2  SIMULATED_1_200       50% of FRESH simulated 1:200 capacity
-//   filled 2 -> L3  UNLIMITED            100% of actual executable capacity
-//   filled 3+-> L4+ UNLIMITED_PROFIT_FED 100% of actual executable capacity
-//
-// The percentages are fixed by the owner rule and deliberately NOT read from the
-// dashboard's C.normal* fields, so tuning NORMAL can never re-shape UNLIMITED. Any
-// profile that is not NORMAL takes this state machine, never the raw unlimited engine.
-LayerSizingPlan PlanLayerSizing(const string profile,int filledLayers)
-  {
-   LayerSizingPlan p;
-   p.profile=profile;
-   p.filledLayers=(filledLayers<0?0:filledLayers);
-   p.layerIndex=p.filledLayers+1;
-   p.simulatedLeverage=0;
-   if(profile=="NORMAL")
-     {p.mode="NORMAL";p.pct=LayerMarginPctFor(p.filledLayers);return p;}
-   if(p.filledLayers==0)
-     {p.mode="SIMULATED_1_200";p.pct=APEX_UNL_L1_SIM200_PCT;p.simulatedLeverage=APEX_SIM_LEVERAGE;return p;}
-   if(p.filledLayers==1)
-     {p.mode="SIMULATED_1_200";p.pct=APEX_UNL_L2_SIM200_PCT;p.simulatedLeverage=APEX_SIM_LEVERAGE;return p;}
-   p.mode=(p.filledLayers==2)?"UNLIMITED":"UNLIMITED_PROFIT_FED";
-   p.pct=APEX_UNL_L3PLUS_PCT;
-   return p;
-  }
-
-// The ONLY entry point that sizes a layer. The two capacity engines never mix:
-// SIMULATED_1_200 -> ComputeSimulated1200Volume(); everything else -> ComputeVolume(),
-// whose profile branch is NORMAL or UNLIMITED exactly as before.
-SizingDecision ComputeLayerVolume(const LayerSizingPlan &plan,int dir,double price,double sl)
-  {
-   if(plan.mode=="SIMULATED_1_200")
-     {
-      SizingDecision s=ComputeSimulated1200Volume(dir,plan.pct,price,sl,0);
-      s.sizingMode=plan.mode;
-      return s;
-     }
-   SizingDecision u=ComputeVolume(dir,plan.pct,price,sl);
-   u.sizingMode=plan.mode;
-   u.targetVolume=u.capacity*clamp(plan.pct,.1,100)/100.0;
-   return u;
-  }
-
-// After the SERVER refused `rejectedVol` for a SIZE reason: the refusal proves genuine
-// executable capacity is strictly below it. The layer's plan -- engine AND percentage --
-// is preserved exactly; only the capacity estimate is re-derived. Returns the next volume,
-// or 0 when nothing executable remains. An L1 retry is still 15% of 1:200 capacity, an L2
-// retry still 50% of 1:200 capacity; neither can become 50%, 100% or UNLIMITED.
-double RederiveAfterSizeRejection(const LayerSizingPlan &plan,int dir,double price,double sl,
-                                  double rejectedVol,double &trueCap)
-  {
-   trueCap=0;
-   double capHi=FloorToStep(rejectedVol-VolStep());
-   double learnedCap=ServerCapacityCeiling();
-   if(learnedCap>0&&learnedCap<capHi) capHi=FloorToStep(learnedCap);
-   if(capHi<=0) return 0;
-   double pct=clamp(plan.pct,.1,100);
-   double reSized=0;
-   if(plan.mode=="SIMULATED_1_200")
-     {
-      // Fresh 1:200 capacity from live equity/exposure, bounded by the refusal.
-      SizingDecision f=ComputeSimulated1200Volume(dir,plan.pct,price,sl,capHi);
-      trueCap=f.capacity;
-      reSized=f.finalVolume;
-      if(reSized>rejectedVol*0.9)
-        {
-         SizingDecision h=ComputeSimulated1200Volume(dir,plan.pct,price,sl,FloorToStep(capHi*0.5));
-         trueCap=h.capacity;
-         reSized=h.finalVolume;
-        }
-     }
-   else
-     {
-      trueCap=LargestVolumePassingCheck(dir,price,sl,capHi);
-      if(trueCap<=0) trueCap=capHi;   // preflight is degenerate; the bound is still true
-      reSized=FloorToStep(trueCap*pct/100.0);
-      // At pct=100 the request IS the capacity bound, so a refusal only shaves one
-      // volume step and the descent stalls (200 -> 199.99 -> 199.98 ...). When the
-      // re-derived request does not make real progress, BISECT the capacity bound and
-      // re-apply the SAME percentage to that. The percentage is still what is asked
-      // for -- only the capacity ESTIMATE contracts geometrically, which is the one
-      // thing a lying preflight leaves us free to do.
-      if(reSized>rejectedVol*0.9)
-        {
-         double bisected=FloorToStep(trueCap*0.5);
-         reSized=FloorToStep(bisected*pct/100.0);
-        }
-     }
-   if(reSized<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)||reSized<=0||reSized>=rejectedVol) return 0;
-   return reSized;
-  }
-
-// A blocked UNLIMITED layer WAITS (the trigger is not consumed and capacity is re-derived
-// on the next eligible scan). Report each distinct wait at most once a minute instead of
-// on every 250 ms scan. NORMAL reporting is untouched.
-string   g_sizingBlockKey="";
-datetime g_sizingBlockAt=0;
-bool SizingBlockReportDue(const string key)
-  {
-   datetime now=TimeCurrent();
-   if(key==g_sizingBlockKey&&now-g_sizingBlockAt<60) return false;
-   g_sizingBlockKey=key;
-   g_sizingBlockAt=now;
-   return true;
-  }
-
-// A rejection that is purely about SIZE. Anything else stops the descent immediately.
-bool IsSizeOnlyRejection(uint rc,int mt5err)
-  {
-   return rc==TRADE_RETCODE_NO_MONEY||rc==TRADE_RETCODE_INVALID_VOLUME||
-          rc==TRADE_RETCODE_LIMIT_VOLUME||mt5err==134/*ERR_NOT_ENOUGH_MONEY*/;
-  }
-
-bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPrice,
-               double atr,datetime triggerBar,bool enforceReclaim)
-  {
-   g_preflightBlock=ComputePreflight();
-   if(g_preflightBlock!="")
-     {Emit("ENTRY_BLOCKED",StringFormat(",\"reason\":\"%s\",\"stage\":\"PREFLIGHT\",\"why\":\"%s\"",g_preflightBlock,why));return false;}
-
-   // v3.8.8: the engine and percentage come from the BROKER-CONFIRMED layer count.
-   LayerSizingPlan plan=PlanLayerSizing(ExecutionProfile(),layers);
-   double pct=plan.pct;
-   int layerIndex=plan.layerIndex;
-   bool firstNormal=(ExecutionProfile()=="NORMAL"&&layers==0);
-   int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
-
-   // FINAL executable-price eligibility, immediately before sizing and submission.
-   Gate g;
-   ulong decidedAt=GetTickCount64();
-   if(!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g))
-     {
-      Emit("ENTRY_REJECTED_AT_GATE",StringFormat(
-         ",\"reason\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"invalidationLevel\":%.5f,\"referencePrice\":%.5f,"
-         "\"extensionAtr\":%.3f,\"quoteAgeMs\":%I64d,\"why\":\"%s\",\"setupId\":\"%s\"",
-         g.reason,g.bid,g.ask,invalidLevel,refPrice,g.extensionAtr,g.quoteAgeMs,why,S.id));
-      return false;
-     }
-   double sl=0;
-   if(firstNormal&&C.normalFixedSLGoldMove>0)
-      sl=NormalizeDouble(dir>0?g.price-C.normalFixedSLGoldMove:g.price+C.normalFixedSLGoldMove,digits);
-
-   SizingDecision d=ComputeLayerVolume(plan,dir,g.price,sl);
-   bool sizingBlocked=(d.finalVolume<=0);
-   bool reportSizing=(plan.mode=="NORMAL"||!sizingBlocked||
-                      SizingBlockReportDue(StringFormat("%d|%s|%s",layerIndex,plan.mode,d.blockReason)));
-   if(reportSizing) PrintLayerSizing(plan,d,dir);
-   if(sizingBlocked)
-     {
-      if(reportSizing)
-        {
-         if(plan.mode!="NORMAL")
-            PrintFormat("APEX SIZING WAIT | profile=%s layer=%d mode=%s capacity=%.2f percentage=%.0f%% reason=%s"
-                        " | trigger NOT consumed; capacity is re-derived on the next eligible scan",
-                        plan.profile,layerIndex,plan.mode,d.capacity,pct,
-                        d.blockReason==""?"NO_EXECUTABLE_VOLUME":d.blockReason);
-         Emit("ADD_BLOCKED",StringFormat(",\"reason\":\"%s\",\"stage\":\"SIZING\",\"why\":\"%s\"%s",
-              d.blockReason==""?"NO_EXECUTABLE_VOLUME":d.blockReason,why,SizingJson(d,layerIndex)));
-        }
-      return false;
-     }
-   g_sizingBlockKey="";
-
-   double vol=d.finalVolume;
-   string com=StringFormat("APEX L%d %.0f",layerIndex,score);
-   ExecResult e;
-   int attempt=0;
-   ulong submittedAt=0,settledAt=0;
-   while(true)
-     {
-      // Re-validate the executable price before EVERY submission attempt.
-      if(attempt>0&&!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g))
-        {
-         Emit("ENTRY_REJECTED_AT_GATE",StringFormat(
-            ",\"reason\":\"%s\",\"stage\":\"SIZING_RETRY\",\"attempt\":%d,\"why\":\"%s\",\"setupId\":\"%s\"",
-            g.reason,attempt,why,S.id));
-         return false;
-        }
-      if(attempt>0&&firstNormal&&C.normalFixedSLGoldMove>0)
-         sl=NormalizeDouble(dir>0?g.price-C.normalFixedSLGoldMove:g.price+C.normalFixedSLGoldMove,digits);
-
-      submittedAt=GetTickCount64();
-      e=SubmitMarket(dir,vol,sl,com);
-      settledAt=GetTickCount64();
-      if(e.cls==EXEC_FILLED||e.cls==EXEC_PARTIAL){NoteServerFilledVolume(e.filledVolume>0?e.filledVolume:vol);break;}
-      if(!IsSizeOnlyRejection(e.retcode,e.mt5Error)) break;
-
-      // The server has just contradicted the client preflight. Record that as capacity
-      // evidence for BOTH profiles before deciding how to retry.
-      NoteServerRejectedVolume(vol);
-
-      // v3.8.7 OWNER RULE, now applied to BOTH profiles: the requested PERCENTAGE must
-      // survive capacity rediscovery. The pre-v3.8.7 UNLIMITED branch halved the volume
-      // (vol*0.5) until something filled, which silently redefined the ladder -- a 15%
-      // L1 of a believed 200 lots became 30 -> 15 -> fill, and 15 lots is not 15% of the
-      // capacity that actually existed. Instead: the server has just proven that `vol`
-      // is NOT executable, so genuine capacity is strictly below it. Re-derive the best
-      // capacity the evidence supports and re-apply the SAME percentage.
-      Emit("SIZING_MODEL_REJECTED",StringFormat(
-         ",\"attempt\":%d,\"rejectedVolume\":%.4f,\"retcode\":%d,\"mt5Error\":%d,\"profile\":\"%s\",\"why\":\"%s\"%s",
-         attempt+1,vol,e.retcode,e.mt5Error,ExecutionProfile(),why,SizingJson(d,layerIndex)));
-      PrintFormat("APEX SIZING REJECTED | profile=%s layer=%d mode=%s attempt=%d rejected=%.4f retcode=%d mt5Error=%d reason=%s",
-                  plan.profile,layerIndex,plan.mode,attempt+1,vol,e.retcode,e.mt5Error,e.detail);
-      if(attempt>=MathMax(1,InpMaxSizingAttempts)-1) break;
-      // Same plan (engine + percentage); only the capacity estimate is re-derived,
-      // strictly below the refused volume and never above server-proven evidence.
-      double trueCap=0;
-      double reSized=RederiveAfterSizeRejection(plan,dir,g.price,sl,vol,trueCap);
-      if(reSized<=0)
-        {
-         PrintFormat("APEX SIZING ABORTED | profile=%s layer=%d mode=%s | %.2f%% of re-derived capacity %.4f is not executable",
-                     plan.profile,layerIndex,plan.mode,pct,trueCap);
-         break;
-        }
-      PrintFormat("APEX CAPACITY RE-DERIVED | profile=%s layer=%d mode=%s rejected=%.4f -> trueCapacity=%.4f -> %.2f%% = %.4f",
-                  plan.profile,layerIndex,plan.mode,vol,trueCap,pct,reSized);
-      Emit("SIZING_CAPACITY_REDERIVED",StringFormat(
-         ",\"attempt\":%d,\"rejectedVolume\":%.4f,\"trueCapacity\":%.4f,\"marginPct\":%.2f,"
-         "\"nextVolume\":%.4f,\"profile\":\"%s\",\"layerIndex\":%d,\"sizingMode\":\"%s\",\"why\":\"%s\"",
-         attempt+1,vol,trueCap,pct,reSized,ExecutionProfile(),layerIndex,plan.mode,why));
-      vol=reSized;
-      attempt++;
-     }
-   if(attempt>0)
-      PrintFormat("APEX SIZING RETRY RESULT | profile=%s layer=%d mode=%s percentage=%.0f%% attempts=%d lastVolume=%.4f"
-                  " filled=%.4f class=%s retcode=%d",
-                  plan.profile,layerIndex,plan.mode,pct,attempt+1,vol,e.filledVolume,
-                  (e.cls==EXEC_FILLED?"FILLED":e.cls==EXEC_PARTIAL?"PARTIAL":e.cls==EXEC_PENDING?"PENDING":
-                   e.cls==EXEC_REJECTED?"REJECTED":"UNCONFIRMED"),e.retcode);
-
-   string execExtra=StringFormat(
-      ",\"requestedVolume\":%.4f,\"filledVolume\":%.4f,\"retcode\":%d,\"execClass\":\"%s\",\"deal\":%I64u,"
-      "\"order\":%I64u,\"positionId\":%I64u,\"fillPrice\":%.5f,\"detail\":\"%s\",\"mt5Error\":%d,"
-      "\"sizingAttempts\":%d,\"decisionQuoteBid\":%.5f,\"decisionQuoteAsk\":%.5f,\"extensionAtr\":%.3f,"
-      "\"decisionToSubmitMs\":%I64u,\"submitToSettleMs\":%I64u,\"why\":\"%s\"%s",
-      e.requestedVolume,e.filledVolume,e.retcode,
-      (e.cls==EXEC_FILLED?"FILLED":e.cls==EXEC_PARTIAL?"PARTIAL":e.cls==EXEC_PENDING?"PENDING":
-       e.cls==EXEC_REJECTED?"REJECTED":"UNCONFIRMED"),
-      e.deal,e.order,e.position,e.fillPrice,e.detail,e.mt5Error,attempt+1,
-      g.bid,g.ask,g.extensionAtr,submittedAt-decidedAt,settledAt-submittedAt,why,SizingJson(d,layerIndex));
-
-   if(e.cls==EXEC_PENDING || ClassifyBrokerSubmit(e.retcode,e.filledVolume>1e-9)==2)
-     {
-      g_pending.active=true;
-      g_pending.isFirstEntry=(campState==CAMP_IDLE||campState==CAMP_SUBMITTING||layers==0);
-      g_pending.order=e.order;
-      g_pending.dir=dir;
-      g_pending.requestedVolume=e.requestedVolume;
-      g_pending.sl=sl;
-      g_pending.score=score;
-      g_pending.invalidLevel=invalidLevel;
-      g_pending.refPrice=refPrice;
-      g_pending.atr=atr;
-      g_pending.why=why;
-      g_pending.setupId=S.id;
-      g_pending.family="";
-      g_pending.triggerId="";
-      g_pending.submittedAt=TimeCurrent();
-      g_pending.triggerBar=triggerBar;
-      g_pending.enforceReclaim=enforceReclaim;
-      Emit("ORDER_PENDING",execExtra);
-      SaveState();
-      Print("APEX ORDER PLACED PENDING BROKER CONFIRMATION | order=",e.order," | setup=",S.id," | will NOT resend");
-      return false;
-     }
-
-   // APEX-AUDIT-008: internal state advances ONLY on a broker-confirmed fill. A rejected
-   // order leaves layers, masterTicket, lastAdd and the campaign exactly as they were.
-   if(e.cls!=EXEC_FILLED&&e.cls!=EXEC_PARTIAL)
-     {
-      Emit(e.cls==EXEC_REJECTED?"ORDER_REJECTED":"ORDER_UNCONFIRMED",execExtra);
-      if(e.retcode==TRADE_RETCODE_MARKET_CLOSED)
-         Print("APEX ENTRY PRESERVED | broker market closed; trigger/setup was NOT consumed");
-      PrintFormat("APEX ORDER NOT FILLED | class=%s retcode=%d requested=%.4f attempts=%d | layers unchanged at %d",
-                  e.cls==EXEC_REJECTED?"REJECTED":"UNCONFIRMED",e.retcode,e.requestedVolume,attempt+1,layers);
-      return false;
-     }
-
-   layers++;
-   lastAdd=(e.fillPrice>0?e.fillPrice:g.price);
-
-   if(firstNormal)
-     {
-      firstEntryPrice=(e.fillPrice>0?e.fillPrice:g.price);
-      ulong mt=(e.position!=0&&IsOurPosition(e.position))?e.position:FindOldestApexPosition();
-      masterTicket=mt;
-      masterGuardStage=0;
-      recoveryExitArmed=false;
-      double brokerSL=0;
-      if(masterTicket!=0&&PositionSelectByTicket(masterTicket)) brokerSL=PositionGetDouble(POSITION_SL);
-      if(sl>0&&MathAbs(brokerSL-sl)>MathMax(SymbolInfoDouble(_Symbol,SYMBOL_POINT),MathPow(10.0,-digits))*2.0)
-        {
-         SetMasterSL(sl,"INITIAL_FIXED_SL_REAPPLY");
-         if(masterTicket!=0&&PositionSelectByTicket(masterTicket)) brokerSL=PositionGetDouble(POSITION_SL);
-        }
-      firstSLPrice=brokerSL;
-      firstInitialSLPrice=brokerSL;
-      anchorsKnown=true;
-      Emit("FIRST_ENTRY_GUARD",StringFormat(
-        ",\"entryPrice\":%.5f,\"requestedSL\":%.5f,\"appliedSL\":%.5f,\"slVerified\":%s,\"goldMove\":%.2f,\"masterTicket\":%I64u",
-        firstEntryPrice,sl,brokerSL,BoolJson(sl<=0||MathAbs(brokerSL-sl)<=0.001),C.normalFixedSLGoldMove,masterTicket));
-     }
-   SaveState();
-   Emit("LAYER_OPEN",StringFormat(",\"layer\":%d,\"score\":%.2f,\"price\":%.5f,\"sl\":%.5f,"
-        "\"basketVolume\":%.4f,\"setupId\":\"%s\"%s",
-        layers,score,lastAdd,sl,BasketVolume(),S.id,execExtra));
-   return true;
-  }
-
-//====================== closing (APEX-AUDIT-010) ======================
-// A failed close can NEVER end a campaign. The campaign enters a persistent CLOSING
-// state that keeps its identity, anchors, protections and exit intent, prohibits every
-// addition and every new campaign, survives restart, and only finalises when the broker
-// confirms zero owned positions.
-bool AttemptClosePass()
-  {
-   if(MarketClosedBackoffActive()) return CountPos()==0;
-   trade.SetExpertMagicNumber(InpMagic);
-   ENUM_ORDER_TYPE_FILLING filling;
-   if(ResolveFillingMode(filling)) trade.SetTypeFilling(filling);
-   for(int pass=0;pass<6;pass++)
-     {
-      bool any=false;
-      for(int i=PositionsTotal()-1;i>=0;i--)
-        {
-         ulong t=PositionGetTicket(i);
-         if(t&&PositionGetString(POSITION_SYMBOL)==_Symbol&&PositionGetInteger(POSITION_MAGIC)==InpMagic)
-           {
-            any=true;
-            bool sent=trade.PositionClose(t);
-            uint rc=trade.ResultRetcode();
-            if(rc==TRADE_RETCODE_MARKET_CLOSED)
-              {NoteMarketClosed("POSITION_CLOSE",rc);return false;}
-            // sent=true means the request was accepted for sending, not that the position is gone.
-            if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_DONE_PARTIAL) ResetMarketClosedBackoff();
-           }
-        }
-      if(!any)break;
-      Sleep(100);
-     }
-   return CountPos()==0;
-  }
-
-void FinalizeClose()
-  {
-   double comm=0,swp=0;int deals=0;
-   double realised=CampaignRealised(comm,swp,deals);
-   Emit("CAMPAIGN_END",StringFormat(
-     ",\"outcome\":\"%s\",\"reason\":\"%s\",\"mfe\":%.2f,\"mae\":%.2f,\"durationSec\":%d,"
-     "\"realisedNet\":%.2f,\"realisedCommission\":%.2f,\"realisedSwap\":%.2f,\"closingDeals\":%d,"
-     "\"earnedFloorPct\":%.4f,\"closeAttempts\":%d,\"finalBalance\":%.2f",
-     closingOutcome,closingReason,mfe,mae,(int)(TimeCurrent()-campStart),
-     realised,comm,swp,deals,earnedFloorPct,closeAttempts,AccountInfoDouble(ACCOUNT_BALANCE)));
-   campState=CAMP_IDLE;campDir=0;layers=0;lastAdd=0;peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;
-   firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;anchorsKnown=true;
-   masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";
-   closingOutcome="";closingReason="";closingSince=0;closeAttempts=0;
-   ClearTriggers();
-   SetupReset("CAMPAIGN_ENDED");
-   ClearState();
-  }
-
-datetime g_lastCloseWarn=0;
-void ServiceClosing()
-  {
-   // A MARKET_CLOSED holdoff is not a close attempt; keep the persistent CLOSING state
-   // without hammering the broker or inflating closeAttempts.
-   if(MarketClosedBackoffActive()) return;
-   closeAttempts++;
-   bool done=AttemptClosePass();
-   int remaining=CountPos();
-   if(done&&remaining==0){FinalizeClose();return;}
-   SaveState();                       // closing intent must survive a restart mid-retry
-   if(TimeCurrent()-g_lastCloseWarn>=15)
-     {
-      g_lastCloseWarn=TimeCurrent();
-      int elapsed=(int)(TimeCurrent()-closingSince);
-      Emit(elapsed>=InpCloseStallWarnSeconds?"CLOSE_STALLED":"CLOSE_RETRY",
-           StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"remainingPositions\":%d,\"attempts\":%d,"
-                        "\"elapsedSec\":%d,\"lastRetcode\":%d",
-                        closingOutcome,closingReason,remaining,closeAttempts,elapsed,trade.ResultRetcode()));
-     }
-  }
-
-// First exit reason wins; a later condition can never overwrite the recorded intent.
-void RequestClose(string outcome,string reason)
-  {
-   if(campState==CAMP_CLOSING){ServiceClosing();return;}
-   campState=CAMP_CLOSING;
-   closingOutcome=outcome;closingReason=reason;closingSince=TimeCurrent();closeAttempts=0;
-   SaveState();
-   Emit("CLOSING_REQUESTED",StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"positions\":%d,\"floating\":%.2f",
-        outcome,reason,CountPos(),BasketProfitFloating()));
-   ServiceClosing();
-  }
-
-//====================== campaign start ================================
-string NewCampaignId()
-  {
-   return StringFormat("%I64d-%I64d-%08x",AccountInfoInteger(ACCOUNT_LOGIN),(long)TimeCurrent(),
-      Fnv1a(g_instanceId+IntegerToString((int)GetTickCount())+IntegerToString(MathRand())+_Symbol));
-  }
-
-void Start(Snap &s)
-  {
-   // Provisional identity; the campaign only becomes ACTIVE once a fill is confirmed.
-   campDir=s.dir;layers=0;
-   cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
-   targetEq=C.targetMode=="EQUITY"
-            ?C.targetEquity
-            :(C.accountProfile=="NORMAL"
-              ?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0)
-              :cycleStart*C.targetMultiplier);
-   peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;
-   firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;anchorsKnown=true;
-   masterTicket=0;masterGuardStage=0;campStart=TimeCurrent();
-   campId=NewCampaignId();campSig=s.sig;mfe=0;mae=0;
-   ClearTriggers();
-   SnapshotPolicy();
-
-   // APEX-AUDIT-002/008: submit FIRST, then report. v3.7.1 emitted CAMPAIGN_START (a
-   // blocking WebRequest) before the order existed, and reported a campaign that the
-   // broker might have rejected.
-   if(!OpenLayer(campDir,s.score,"PROBE_CONFIRMED",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
-     {
-      if(g_pending.active)
-        {
-         campState=CAMP_SUBMITTING;
-         SaveState();
-         Print("APEX FIRST ENTRY PENDING | campaign fenced as SUBMITTING | setup=",S.id," order=",g_pending.order);
-         return;
-        }
-      campState=CAMP_IDLE;campId="";campSig="";campDir=0;
-      ClearState();
-      return;
-     }
-   campState=CAMP_ACTIVE;
-   S.state=SETUP_CONSUMED;
-   SaveState();
-   Emit("CAMPAIGN_START",StringFormat(
-     ",\"score\":%.2f,\"scoreFloorGivenMandatory\":%.2f,\"scoreCalibration\":\"UNCALIBRATED_RANKING\","
-     "\"targetEquity\":%.2f,\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"impulseMult\":%.3f,\"wickRatio\":%.3f,"
-     "\"m3Color\":%s,\"m3Fresh\":%s,\"m5Color\":%s,\"atr\":%.5f,\"setupId\":\"%s\",\"bosKind\":\"%s\","
-     "\"sweepExtreme\":%.5f,\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"setupAgeSec\":%d",
-     s.score,ScoreFloorGivenMandatory(),targetEq,cycleStart,firstEntryPrice,s.impulseMult,s.wickRatio,
-     BoolJson(s.m3Color),BoolJson(s.m3Fresh),BoolJson(s.m5Color),s.atr,S.id,S.bosKind,
+     ",\"score\":%.2f,\"scoreCalibration\":\"COMPOSITE_RANKING_NOT_PROBABILITY\",\"targetEquity\":%.2f,"
+     "\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"atr\":%.5f,\"setupId\":\"%s\",\"setupFamily\":\"%s\","
+     "\"regime\":\"%s\",\"buyPressure\":%.2f,\"sellPressure\":%.2f,\"activePressure\":%.2f,"
+     "\"trendStrength\":%.2f,\"candleQuality\":%.2f,\"compressionScore\":%.2f,\"pullbackQuality\":%.2f,"
+     "\"triggerKind\":\"%s\",\"invalidationLevel\":%.5f,\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"setupAgeSec\":%d",
+     s.score,targetEq,cycleStart,firstEntryPrice,s.atr,S.id,s.setupFamily,s.regime,s.buyPressure,s.sellPressure,
+     s.activePressure,s.trendStrength,s.candleQuality,s.compressionScore,s.pullbackQuality,s.triggerKind,
      S.extreme,S.triggerPrice,(long)S.triggerBarTime,(int)(TimeCurrent()-S.armedAt)));
    SetupReset("CONSUMED_BY_CAMPAIGN");
   }
@@ -3536,47 +3155,31 @@ AddCandidate BuildAddCandidate()
    AddCandidate a;
    a.addEligible=false;a.family="NONE";a.score=0;a.atr=ATR();a.reason="NO_NEW_CONFIRMATION";
    a.triggerId="";a.triggerBarTime=0;a.dir=campDir;
-   if(a.atr<=0){a.reason="NO_ATR";return a;}
+   if(a.atr<=0)return a;
+   MqlRates m1[],m5[];if(!Rates(PERIOD_M1,30,m1)||!Rates(PERIOD_M5,12,m5)){a.reason="NO_CONFIRMATION_HISTORY";return a;}
+   datetime bar=m1[1].time;a.triggerBarTime=bar;
+   // No same-candle escalation: the first confirmation bar must begin after the L1 campaign.
+   if(bar<=campStart){a.reason="WAIT_NEW_CLOSED_BAR_AFTER_L1";return a;}
 
-   MqlRates m1[];
-   if(!Rates(PERIOD_M1,30,m1)){a.reason="NO_M1_HISTORY";return a;}
-   datetime bar=m1[1].time;
-   a.triggerBarTime=bar;
+   double buy=50,sell=50,velocity=0;CalculatePressure(m1,a.atr,buy,sell,velocity);
+   double pressure=campDir>0?buy:sell;
+   double cq=DirectionalCandleQuality(m1[1],campDir,a.atr);
+   bool closeBreak=campDir>0?(m1[1].close>m1[2].high):(m1[1].close<m1[2].low);
+   bool continuation=campDir>0?(m1[1].close>m1[1].open&&m1[1].close>m1[2].close)
+                               :(m1[1].close<m1[1].open&&m1[1].close<m1[2].close);
+   bool m5Aligned=campDir>0?(m5[1].close>=m5[2].close):(m5[1].close<=m5[2].close);
+   double pressureMin=(layers<=1?C.trendPressureMin:C.breakoutPressureMin);
+   bool structure=layers<=1?(closeBreak||continuation):(closeBreak&&m5Aligned);
+   if(!structure){a.reason=layers<=1?"WAIT_L2_STRUCTURE_CONFIRM":"WAIT_L3_EXPANSION";return a;}
+   if(pressure<pressureMin){a.reason="WAIT_ADD_PRESSURE";return a;}
+   if(cq<48.0){a.reason="WAIT_ADD_CANDLE_QUALITY";return a;}
 
-   // Family 1 -- REVERSAL: only a genuinely CONFIRMED same-direction setup counts.
-   Snap rev=Observe();
-   if(rev.valid&&rev.dir==campDir&&S.state==SETUP_CONFIRMED)
-     {
-      a.family="REVERSAL";
-      a.score=rev.score;
-      a.reason="CONFIRMED_REVERSAL_IN_CAMPAIGN_DIRECTION";
-      a.triggerId=StringFormat("REV|%s|%I64d",S.id,(long)S.triggerBarTime);
-      a.triggerBarTime=S.triggerBarTime;
-      a.addEligible=true;
-      return a;
-     }
-
-   // Families 2/3 -- CONTINUATION and FAILED_PULLBACK. Mandatory structure per family,
-   // never inferred from a direction match or from an invalid reversal candidate.
-   bool cont = campDir<0 ? (m1[1].close<m1[2].low  && m1[2].close<m1[3].low)
-                         : (m1[1].close>m1[2].high && m1[2].close>m1[3].high);
-   bool pf   = campDir<0 ? (m1[2].close>m1[2].open && m1[1].close<m1[2].low)
-                         : (m1[2].close<m1[2].open && m1[1].close>m1[2].high);
-   if(!cont&&!pf) return a;
-
-   // Optional, owner-enabled M3 colour filter for continuation adds (default off = v3.7.1).
-   if(InpAddRequireM3)
-     {
-      MqlRates m3[];
-      if(!Rates(PERIOD_M3,8,m3)){a.reason="M3_HISTORY_UNAVAILABLE_BUT_REQUIRED";return a;}
-      bool m3ok=campDir<0?(m3[1].close<m3[1].open):(m3[1].close>m3[1].open);
-      if(!m3ok){a.reason="ADD_M3_FILTER_REJECTED";return a;}
-     }
-
-   a.family=cont?"CONTINUATION":"FAILED_PULLBACK";
-   a.score=60+(cont?20:0)+(pf?15:0);        // unchanged from v3.7.1
-   a.reason=cont?"CONTINUATION_BREAK":"FAILED_PULLBACK";
-   a.triggerId=StringFormat("%s|%s|%I64d",a.family,campId,(long)bar);
+   a.family=layers<=1?"L2_CONFIRMATION":"L3_EXPANSION";
+   a.score=clamp(20.0+pressure*.35+cq*.25+(closeBreak?18.0:10.0)+(m5Aligned?12.0:0),0,100);
+   a.reason=a.family;
+   // Same bar => same trigger ID at every layer, so the existing consumed-trigger ledger
+   // prevents an L2 and L3 jump on one piece of evidence.
+   a.triggerId=StringFormat("CONFIRM|%s|%I64d",campId,(long)bar);
    a.addEligible=true;
    return a;
   }
@@ -3743,9 +3346,9 @@ void Manage()
       return;
      }
 
-   bool enforceReclaim=(a.family=="REVERSAL");
-   double invalidLevel=enforceReclaim?S.extreme:0;
-   double refPrice=enforceReclaim?S.triggerPrice:0;
+   bool enforceReclaim=false;
+   double invalidLevel=0;
+   double refPrice=0;
    datetime trigBar=a.triggerBarTime;
 
    if(OpenLayer(campDir,a.score,a.reason,invalidLevel,refPrice,a.atr,trigBar,enforceReclaim))
@@ -3754,7 +3357,6 @@ void Manage()
       SaveState();
       Emit("ADD_TRIGGER_CONSUMED",StringFormat(",\"triggerId\":\"%s\",\"family\":\"%s\",\"score\":%.2f",
            a.triggerId,a.family,a.score));
-      if(a.family=="REVERSAL"){S.state=SETUP_CONSUMED;SetupReset("CONSUMED_BY_ADD");}
      }
    else if(g_pending.active)
      {
@@ -3926,7 +3528,7 @@ int OnInit()
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | entry=confirm-then-start v3.8.2");
+      " | strategy=BREAKOUT_TREND | entry=live-ignition-v3.9");
    return INIT_SUCCEEDED;
   }
 
@@ -3942,9 +3544,19 @@ void OnDeinit(const int r)
      }
   }
 
-void OnTick(){}
+void ServiceEntryScan()
+  {
+   static ulong lastScanMs=0;ulong nowMs=GetTickCount64();
+   if(lastScanMs>0&&nowMs-lastScanMs<75)return;lastScanMs=nowMs;
+   if(g_observerOnly||campState!=CAMP_IDLE||!C.armed)return;
+   datetime now=TimeCurrent();if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60)return;
+   g_preflightBlock=ComputePreflight();if(g_preflightBlock!="")return;
+   Snap s=Observe();if(s.valid)Start(s);
+  }
 
-// APEX-AUDIT-002: risk first, telemetry second, cloud last. No network call sits between
+void OnTick(){UpdateTickPressure();ServiceEntryScan();}
+
+// APEX-AUDIT-002: risk first, signal scan second, telemetry/cloud last. No network call sits between
 // the entry decision and the order, and the executable-price gate re-runs immediately
 // before submission regardless of what blocked beforehand.
 void OnTimer()
@@ -3974,7 +3586,11 @@ void OnTimer()
       Manage();
      }
 
-   // 2/3. Telemetry OR cloud, never both on the same tick, never before Manage.
+   // 2. Local signal scan before any network work. MQL handlers are serialized, and
+   // ServiceEntryScan fences on campState, so OnTick + OnTimer cannot double-submit.
+   ServiceEntryScan();
+
+   // 3. Telemetry OR cloud, never both on the same tick, never before Manage/signal scan.
    ulong t0=GetTickCount64();
    bool cloudDue=(now-lastCfg>=InpConfigPollSeconds);
    if(cloudDue){CloudSync();lastCfg=now;}
@@ -3983,14 +3599,4 @@ void OnTimer()
    if(used>(ulong)MathMax(400,InpCloudTickBudgetMs))
       Print("APEX CLOUD TICK BUDGET | usedMs=",used," cloudDue=",cloudDue?"true":"false");
 
-   if(g_observerOnly) return;
-   if(campState==CAMP_SUBMITTING) return;
-   if(campState!=CAMP_IDLE) return;                // adds are handled inside Manage()
-   if(!C.armed) return;
-   if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60) return;
-   g_preflightBlock=ComputePreflight();
-   if(g_preflightBlock!="") return;
-
-   Snap s=Observe();
-   if(s.valid) Start(s);
   }

@@ -3133,13 +3133,555 @@ void PromotePendingFill()
       campState=CAMP_ACTIVE;
       S.state=SETUP_CONSUMED;
       Emit("CAMPAIGN_START",StringFormat(
-     ",\"score\":%.2f,\"scoreCalibration\":\"COMPOSITE_RANKING_NOT_PROBABILITY\",\"targetEquity\":%.2f,"
-     "\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"atr\":%.5f,\"setupId\":\"%s\",\"setupFamily\":\"%s\","
-     "\"regime\":\"%s\",\"buyPressure\":%.2f,\"sellPressure\":%.2f,\"activePressure\":%.2f,"
-     "\"trendStrength\":%.2f,\"candleQuality\":%.2f,\"compressionScore\":%.2f,\"pullbackQuality\":%.2f,"
-     "\"triggerKind\":\"%s\",\"invalidationLevel\":%.5f,\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"setupAgeSec\":%d",
-     s.score,targetEq,cycleStart,firstEntryPrice,s.atr,S.id,s.setupFamily,s.regime,s.buyPressure,s.sellPressure,
-     s.activePressure,s.trendStrength,s.candleQuality,s.compressionScore,s.pullbackQuality,s.triggerKind,
+        ",\"score\":%.2f,\"targetEquity\":%.2f,\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"setupId\":\"%s\","
+        "\"lateFill\":true,\"pendingOrder\":%I64u",
+        g_pending.score,targetEq,cycleStart,firstEntryPrice,g_pending.setupId,g_pending.order));
+      SetupReset("CONSUMED_BY_CAMPAIGN_LATE_FILL");
+     }
+   else
+     {
+      if(g_pending.triggerId!="") ConsumeTrigger(g_pending.triggerId);
+      Emit("LAYER_OPEN",StringFormat(",\"layer\":%d,\"score\":%.2f,\"price\":%.5f,\"setupId\":\"%s\",\"lateFill\":true,\"family\":\"%s\"",
+           layers,g_pending.score,lastAdd,g_pending.setupId,g_pending.family));
+     }
+   Emit("ORDER_FILLED_LATE",StringFormat(",\"order\":%I64u,\"layers\":%d,\"isFirstEntry\":%s",
+        g_pending.order,layers,BoolJson(g_pending.isFirstEntry)));
+   g_pending.active=false;
+   SaveState();
+  }
+
+void ReconcilePending()
+  {
+   if(!g_pending.active) return;
+   int n=CountPos();
+   if(n>0)
+     {
+      PromotePendingFill();
+      return;
+     }
+   bool orderLive=false;
+   if(g_pending.order!=0)
+     {
+      for(int i=OrdersTotal()-1;i>=0;i--)
+        {
+         ulong t=OrderGetTicket(i);
+         if(t==g_pending.order){orderLive=true;break;}
+        }
+     }
+   if(orderLive) return;
+   if(g_pending.order!=0 && HistoryOrderSelect(g_pending.order))
+     {
+      long st=HistoryOrderGetInteger(g_pending.order,ORDER_STATE);
+      if(st==ORDER_STATE_FILLED||st==ORDER_STATE_PARTIAL)
+        {PromotePendingFill();return;}
+      if(st==ORDER_STATE_CANCELED||st==ORDER_STATE_REJECTED||st==ORDER_STATE_EXPIRED)
+        {ClearPending(StringFormat("HISTORY_ORDER_STATE_%d",(int)st));return;}
+     }
+   // Broker has not published a terminal state. Do NOT resend. Do NOT reset the campaign.
+  }
+
+//====================== preflight (APEX-AUDIT-014/027) ================
+// Reports why NEW exposure is refused. Protection/closing of already-open positions is
+// never gated by this -- an existing basket is always managed.
+string ComputePreflight()
+  {
+   if(g_observerOnly) return "OBSERVER_ONLY_SECOND_INSTANCE";
+   if(g_pending.active) return "ORDER_PENDING_BROKER_CONFIRMATION";
+   if(g_cloudLeaseSupported && !ManagerAllowsNewExposure(g_instanceId,g_cloudManagerId,g_cloudLeaseUntil,TimeCurrent(),g_cloudLeaseSupported,g_cloudLeaseConfirmed))
+      return "CROSS_TERMINAL_LEASE_NOT_MANAGER";
+   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED)) return "TERMINAL_DISCONNECTED";
+   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return "TERMINAL_TRADE_DISABLED";
+   if(!(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)) return "EA_TRADE_DISABLED";
+   if(!IsTester())
+     {
+      if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return "ACCOUNT_TRADE_DISABLED";
+      if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return "ACCOUNT_EXPERT_TRADING_DISABLED";
+     }
+   if(MarketClosedBackoffActive()) return "MARKET_CLOSED_BACKOFF";
+   ENUM_ORDER_TYPE_FILLING filling;
+   if(!ResolveFillingMode(filling)) return "NO_SUPPORTED_FILLING_MODE";
+   ENUM_ACCOUNT_MARGIN_MODE mm=(ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE);
+   // Platform capability, not a risk policy: a netting account merges positions, so a
+   // multi-layer basket, masterTicket and per-layer state cannot be represented at all.
+   if(mm!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING&&!InpAllowNettingAccounts) return "UNSUPPORTED_ACCOUNT_MODE_NETTING";
+   long tm=SymbolInfoInteger(_Symbol,SYMBOL_TRADE_MODE);
+   if(tm==SYMBOL_TRADE_MODE_DISABLED||tm==SYMBOL_TRADE_MODE_CLOSEONLY) return "SYMBOL_TRADE_MODE_RESTRICTED";
+   if(g_cloudExplicitDenied) return "LICENSE_DENIED";
+   if(campState==CAMP_CLOSING) return "CAMPAIGN_CLOSING";
+   if(campState==CAMP_SUBMITTING) return "CAMPAIGN_SUBMITTING";
+   if(campState!=CAMP_IDLE&&!anchorsKnown) return "ANCHORS_UNRECONCILED";
+   return "";
+  }
+
+//====================== layer submission ==============================
+// NORMAL (unchanged since v3.8.7): L1 15%, L2 50%, L3+ 100% of the CURRENT executable
+// capacity established by NORMAL's trusted margin economics (or its reference leverage),
+// read from the dashboard C.normal* fields.
+//
+// Retired for sizing: C.baseMarginPct * C.layerMultiplier^layers. Both fields remain
+// parsed for config compatibility but no longer size a layer.
+double LayerMarginPctFor(int filledLayers)
+  {
+   // APEX-AUDIT-012: these come from C.* (dashboard), seeded from the Inputs.
+   if(filledLayers<=0) return MathMax(0.1,MathMin(100.0,C.normalL1MarginPct));
+   if(filledLayers==1) return MathMax(0.1,MathMin(100.0,C.normalL2MarginPct));
+   return MathMax(0.1,MathMin(100.0,C.normalL3PlusMarginPct));
+  }
+double LayerMarginPct(){return LayerMarginPctFor(layers);}
+
+// v3.8.8 UNLIMITED state machine. ROOT CAUSE this replaces: v3.8.7 sized EVERY
+// UNLIMITED layer through ComputeVolume()'s UNLIMITED branch, i.e. "pct of the broker's
+// current executable capacity". On the Exness unlimited account the client margin model
+// reports 0.00/lot, so LargestVolumeWithinMargin() and OrderCheck() both approve
+// SYMBOL_VOLUME_MAX and that capacity is 200 lots -- so L1 = 15% x 200 = 30 lots on a
+// $1,000 account. The fix is structural: L1/L2 never reach that engine at all.
+//
+//   filled 0 -> L1  SIMULATED_1_200       15% of simulated 1:200 capacity
+//   filled 1 -> L2  SIMULATED_1_200       50% of FRESH simulated 1:200 capacity
+//   filled 2 -> L3  UNLIMITED            100% of actual executable capacity
+//   filled 3+-> L4+ UNLIMITED_PROFIT_FED 100% of actual executable capacity
+//
+// The percentages are fixed by the owner rule and deliberately NOT read from the
+// dashboard's C.normal* fields, so tuning NORMAL can never re-shape UNLIMITED. Any
+// profile that is not NORMAL takes this state machine, never the raw unlimited engine.
+LayerSizingPlan PlanLayerSizing(const string profile,int filledLayers)
+  {
+   LayerSizingPlan p;
+   p.profile=profile;
+   p.filledLayers=(filledLayers<0?0:filledLayers);
+   p.layerIndex=p.filledLayers+1;
+   p.simulatedLeverage=0;
+   if(profile=="NORMAL")
+     {p.mode="NORMAL";p.pct=LayerMarginPctFor(p.filledLayers);return p;}
+   if(p.filledLayers==0)
+     {p.mode="SIMULATED_1_200";p.pct=APEX_UNL_L1_SIM200_PCT;p.simulatedLeverage=APEX_SIM_LEVERAGE;return p;}
+   if(p.filledLayers==1)
+     {p.mode="SIMULATED_1_200";p.pct=APEX_UNL_L2_SIM200_PCT;p.simulatedLeverage=APEX_SIM_LEVERAGE;return p;}
+   p.mode=(p.filledLayers==2)?"UNLIMITED":"UNLIMITED_PROFIT_FED";
+   p.pct=APEX_UNL_L3PLUS_PCT;
+   return p;
+  }
+
+// The ONLY entry point that sizes a layer. The two capacity engines never mix:
+// SIMULATED_1_200 -> ComputeSimulated1200Volume(); everything else -> ComputeVolume(),
+// whose profile branch is NORMAL or UNLIMITED exactly as before.
+SizingDecision ComputeLayerVolume(const LayerSizingPlan &plan,int dir,double price,double sl)
+  {
+   if(plan.mode=="SIMULATED_1_200")
+     {
+      SizingDecision s=ComputeSimulated1200Volume(dir,plan.pct,price,sl,0);
+      s.sizingMode=plan.mode;
+      return s;
+     }
+   SizingDecision u=ComputeVolume(dir,plan.pct,price,sl);
+   u.sizingMode=plan.mode;
+   u.targetVolume=u.capacity*clamp(plan.pct,.1,100)/100.0;
+   return u;
+  }
+
+// After the SERVER refused `rejectedVol` for a SIZE reason: the refusal proves genuine
+// executable capacity is strictly below it. The layer's plan -- engine AND percentage --
+// is preserved exactly; only the capacity estimate is re-derived. Returns the next volume,
+// or 0 when nothing executable remains. An L1 retry is still 15% of 1:200 capacity, an L2
+// retry still 50% of 1:200 capacity; neither can become 50%, 100% or UNLIMITED.
+double RederiveAfterSizeRejection(const LayerSizingPlan &plan,int dir,double price,double sl,
+                                  double rejectedVol,double &trueCap)
+  {
+   trueCap=0;
+   double capHi=FloorToStep(rejectedVol-VolStep());
+   double learnedCap=ServerCapacityCeiling();
+   if(learnedCap>0&&learnedCap<capHi) capHi=FloorToStep(learnedCap);
+   if(capHi<=0) return 0;
+   double pct=clamp(plan.pct,.1,100);
+   double reSized=0;
+   if(plan.mode=="SIMULATED_1_200")
+     {
+      // Fresh 1:200 capacity from live equity/exposure, bounded by the refusal.
+      SizingDecision f=ComputeSimulated1200Volume(dir,plan.pct,price,sl,capHi);
+      trueCap=f.capacity;
+      reSized=f.finalVolume;
+      if(reSized>rejectedVol*0.9)
+        {
+         SizingDecision h=ComputeSimulated1200Volume(dir,plan.pct,price,sl,FloorToStep(capHi*0.5));
+         trueCap=h.capacity;
+         reSized=h.finalVolume;
+        }
+     }
+   else
+     {
+      trueCap=LargestVolumePassingCheck(dir,price,sl,capHi);
+      if(trueCap<=0) trueCap=capHi;   // preflight is degenerate; the bound is still true
+      reSized=FloorToStep(trueCap*pct/100.0);
+      // At pct=100 the request IS the capacity bound, so a refusal only shaves one
+      // volume step and the descent stalls (200 -> 199.99 -> 199.98 ...). When the
+      // re-derived request does not make real progress, BISECT the capacity bound and
+      // re-apply the SAME percentage to that. The percentage is still what is asked
+      // for -- only the capacity ESTIMATE contracts geometrically, which is the one
+      // thing a lying preflight leaves us free to do.
+      if(reSized>rejectedVol*0.9)
+        {
+         double bisected=FloorToStep(trueCap*0.5);
+         reSized=FloorToStep(bisected*pct/100.0);
+        }
+     }
+   if(reSized<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)||reSized<=0||reSized>=rejectedVol) return 0;
+   return reSized;
+  }
+
+// A blocked UNLIMITED layer WAITS (the trigger is not consumed and capacity is re-derived
+// on the next eligible scan). Report each distinct wait at most once a minute instead of
+// on every 250 ms scan. NORMAL reporting is untouched.
+string   g_sizingBlockKey="";
+datetime g_sizingBlockAt=0;
+bool SizingBlockReportDue(const string key)
+  {
+   datetime now=TimeCurrent();
+   if(key==g_sizingBlockKey&&now-g_sizingBlockAt<60) return false;
+   g_sizingBlockKey=key;
+   g_sizingBlockAt=now;
+   return true;
+  }
+
+// A rejection that is purely about SIZE. Anything else stops the descent immediately.
+bool IsSizeOnlyRejection(uint rc,int mt5err)
+  {
+   return rc==TRADE_RETCODE_NO_MONEY||rc==TRADE_RETCODE_INVALID_VOLUME||
+          rc==TRADE_RETCODE_LIMIT_VOLUME||mt5err==134/*ERR_NOT_ENOUGH_MONEY*/;
+  }
+
+bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPrice,
+               double atr,datetime triggerBar,bool enforceReclaim)
+  {
+   g_preflightBlock=ComputePreflight();
+   if(g_preflightBlock!="")
+     {Emit("ENTRY_BLOCKED",StringFormat(",\"reason\":\"%s\",\"stage\":\"PREFLIGHT\",\"why\":\"%s\"",g_preflightBlock,why));return false;}
+
+   // v3.8.8: the engine and percentage come from the BROKER-CONFIRMED layer count.
+   LayerSizingPlan plan=PlanLayerSizing(ExecutionProfile(),layers);
+   double pct=plan.pct;
+   int layerIndex=plan.layerIndex;
+   bool firstNormal=(ExecutionProfile()=="NORMAL"&&layers==0);
+   int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
+
+   // FINAL executable-price eligibility, immediately before sizing and submission.
+   Gate g;
+   ulong decidedAt=GetTickCount64();
+   if(!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g))
+     {
+      Emit("ENTRY_REJECTED_AT_GATE",StringFormat(
+         ",\"reason\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"invalidationLevel\":%.5f,\"referencePrice\":%.5f,"
+         "\"extensionAtr\":%.3f,\"quoteAgeMs\":%I64d,\"why\":\"%s\",\"setupId\":\"%s\"",
+         g.reason,g.bid,g.ask,invalidLevel,refPrice,g.extensionAtr,g.quoteAgeMs,why,S.id));
+      return false;
+     }
+   double sl=0;
+   if(firstNormal&&C.normalFixedSLGoldMove>0)
+      sl=NormalizeDouble(dir>0?g.price-C.normalFixedSLGoldMove:g.price+C.normalFixedSLGoldMove,digits);
+
+   SizingDecision d=ComputeLayerVolume(plan,dir,g.price,sl);
+   bool sizingBlocked=(d.finalVolume<=0);
+   bool reportSizing=(plan.mode=="NORMAL"||!sizingBlocked||
+                      SizingBlockReportDue(StringFormat("%d|%s|%s",layerIndex,plan.mode,d.blockReason)));
+   if(reportSizing) PrintLayerSizing(plan,d,dir);
+   if(sizingBlocked)
+     {
+      if(reportSizing)
+        {
+         if(plan.mode!="NORMAL")
+            PrintFormat("APEX SIZING WAIT | profile=%s layer=%d mode=%s capacity=%.2f percentage=%.0f%% reason=%s"
+                        " | trigger NOT consumed; capacity is re-derived on the next eligible scan",
+                        plan.profile,layerIndex,plan.mode,d.capacity,pct,
+                        d.blockReason==""?"NO_EXECUTABLE_VOLUME":d.blockReason);
+         Emit("ADD_BLOCKED",StringFormat(",\"reason\":\"%s\",\"stage\":\"SIZING\",\"why\":\"%s\"%s",
+              d.blockReason==""?"NO_EXECUTABLE_VOLUME":d.blockReason,why,SizingJson(d,layerIndex)));
+        }
+      return false;
+     }
+   g_sizingBlockKey="";
+
+   double vol=d.finalVolume;
+   string com=StringFormat("APEX L%d %.0f",layerIndex,score);
+   ExecResult e;
+   int attempt=0;
+   ulong submittedAt=0,settledAt=0;
+   while(true)
+     {
+      // Re-validate the executable price before EVERY submission attempt.
+      if(attempt>0&&!FinalEntryGate(dir,invalidLevel,refPrice,atr,triggerBar,enforceReclaim,g))
+        {
+         Emit("ENTRY_REJECTED_AT_GATE",StringFormat(
+            ",\"reason\":\"%s\",\"stage\":\"SIZING_RETRY\",\"attempt\":%d,\"why\":\"%s\",\"setupId\":\"%s\"",
+            g.reason,attempt,why,S.id));
+         return false;
+        }
+      if(attempt>0&&firstNormal&&C.normalFixedSLGoldMove>0)
+         sl=NormalizeDouble(dir>0?g.price-C.normalFixedSLGoldMove:g.price+C.normalFixedSLGoldMove,digits);
+
+      submittedAt=GetTickCount64();
+      e=SubmitMarket(dir,vol,sl,com);
+      settledAt=GetTickCount64();
+      if(e.cls==EXEC_FILLED||e.cls==EXEC_PARTIAL){NoteServerFilledVolume(e.filledVolume>0?e.filledVolume:vol);break;}
+      if(!IsSizeOnlyRejection(e.retcode,e.mt5Error)) break;
+
+      // The server has just contradicted the client preflight. Record that as capacity
+      // evidence for BOTH profiles before deciding how to retry.
+      NoteServerRejectedVolume(vol);
+
+      // v3.8.7 OWNER RULE, now applied to BOTH profiles: the requested PERCENTAGE must
+      // survive capacity rediscovery. The pre-v3.8.7 UNLIMITED branch halved the volume
+      // (vol*0.5) until something filled, which silently redefined the ladder -- a 15%
+      // L1 of a believed 200 lots became 30 -> 15 -> fill, and 15 lots is not 15% of the
+      // capacity that actually existed. Instead: the server has just proven that `vol`
+      // is NOT executable, so genuine capacity is strictly below it. Re-derive the best
+      // capacity the evidence supports and re-apply the SAME percentage.
+      Emit("SIZING_MODEL_REJECTED",StringFormat(
+         ",\"attempt\":%d,\"rejectedVolume\":%.4f,\"retcode\":%d,\"mt5Error\":%d,\"profile\":\"%s\",\"why\":\"%s\"%s",
+         attempt+1,vol,e.retcode,e.mt5Error,ExecutionProfile(),why,SizingJson(d,layerIndex)));
+      PrintFormat("APEX SIZING REJECTED | profile=%s layer=%d mode=%s attempt=%d rejected=%.4f retcode=%d mt5Error=%d reason=%s",
+                  plan.profile,layerIndex,plan.mode,attempt+1,vol,e.retcode,e.mt5Error,e.detail);
+      if(attempt>=MathMax(1,InpMaxSizingAttempts)-1) break;
+      // Same plan (engine + percentage); only the capacity estimate is re-derived,
+      // strictly below the refused volume and never above server-proven evidence.
+      double trueCap=0;
+      double reSized=RederiveAfterSizeRejection(plan,dir,g.price,sl,vol,trueCap);
+      if(reSized<=0)
+        {
+         PrintFormat("APEX SIZING ABORTED | profile=%s layer=%d mode=%s | %.2f%% of re-derived capacity %.4f is not executable",
+                     plan.profile,layerIndex,plan.mode,pct,trueCap);
+         break;
+        }
+      PrintFormat("APEX CAPACITY RE-DERIVED | profile=%s layer=%d mode=%s rejected=%.4f -> trueCapacity=%.4f -> %.2f%% = %.4f",
+                  plan.profile,layerIndex,plan.mode,vol,trueCap,pct,reSized);
+      Emit("SIZING_CAPACITY_REDERIVED",StringFormat(
+         ",\"attempt\":%d,\"rejectedVolume\":%.4f,\"trueCapacity\":%.4f,\"marginPct\":%.2f,"
+         "\"nextVolume\":%.4f,\"profile\":\"%s\",\"layerIndex\":%d,\"sizingMode\":\"%s\",\"why\":\"%s\"",
+         attempt+1,vol,trueCap,pct,reSized,ExecutionProfile(),layerIndex,plan.mode,why));
+      vol=reSized;
+      attempt++;
+     }
+   if(attempt>0)
+      PrintFormat("APEX SIZING RETRY RESULT | profile=%s layer=%d mode=%s percentage=%.0f%% attempts=%d lastVolume=%.4f"
+                  " filled=%.4f class=%s retcode=%d",
+                  plan.profile,layerIndex,plan.mode,pct,attempt+1,vol,e.filledVolume,
+                  (e.cls==EXEC_FILLED?"FILLED":e.cls==EXEC_PARTIAL?"PARTIAL":e.cls==EXEC_PENDING?"PENDING":
+                   e.cls==EXEC_REJECTED?"REJECTED":"UNCONFIRMED"),e.retcode);
+
+   string execExtra=StringFormat(
+      ",\"requestedVolume\":%.4f,\"filledVolume\":%.4f,\"retcode\":%d,\"execClass\":\"%s\",\"deal\":%I64u,"
+      "\"order\":%I64u,\"positionId\":%I64u,\"fillPrice\":%.5f,\"detail\":\"%s\",\"mt5Error\":%d,"
+      "\"sizingAttempts\":%d,\"decisionQuoteBid\":%.5f,\"decisionQuoteAsk\":%.5f,\"extensionAtr\":%.3f,"
+      "\"decisionToSubmitMs\":%I64u,\"submitToSettleMs\":%I64u,\"why\":\"%s\"%s",
+      e.requestedVolume,e.filledVolume,e.retcode,
+      (e.cls==EXEC_FILLED?"FILLED":e.cls==EXEC_PARTIAL?"PARTIAL":e.cls==EXEC_PENDING?"PENDING":
+       e.cls==EXEC_REJECTED?"REJECTED":"UNCONFIRMED"),
+      e.deal,e.order,e.position,e.fillPrice,e.detail,e.mt5Error,attempt+1,
+      g.bid,g.ask,g.extensionAtr,submittedAt-decidedAt,settledAt-submittedAt,why,SizingJson(d,layerIndex));
+
+   if(e.cls==EXEC_PENDING || ClassifyBrokerSubmit(e.retcode,e.filledVolume>1e-9)==2)
+     {
+      g_pending.active=true;
+      g_pending.isFirstEntry=(campState==CAMP_IDLE||campState==CAMP_SUBMITTING||layers==0);
+      g_pending.order=e.order;
+      g_pending.dir=dir;
+      g_pending.requestedVolume=e.requestedVolume;
+      g_pending.sl=sl;
+      g_pending.score=score;
+      g_pending.invalidLevel=invalidLevel;
+      g_pending.refPrice=refPrice;
+      g_pending.atr=atr;
+      g_pending.why=why;
+      g_pending.setupId=S.id;
+      g_pending.family="";
+      g_pending.triggerId="";
+      g_pending.submittedAt=TimeCurrent();
+      g_pending.triggerBar=triggerBar;
+      g_pending.enforceReclaim=enforceReclaim;
+      Emit("ORDER_PENDING",execExtra);
+      SaveState();
+      Print("APEX ORDER PLACED PENDING BROKER CONFIRMATION | order=",e.order," | setup=",S.id," | will NOT resend");
+      return false;
+     }
+
+   // APEX-AUDIT-008: internal state advances ONLY on a broker-confirmed fill. A rejected
+   // order leaves layers, masterTicket, lastAdd and the campaign exactly as they were.
+   if(e.cls!=EXEC_FILLED&&e.cls!=EXEC_PARTIAL)
+     {
+      Emit(e.cls==EXEC_REJECTED?"ORDER_REJECTED":"ORDER_UNCONFIRMED",execExtra);
+      if(e.retcode==TRADE_RETCODE_MARKET_CLOSED)
+         Print("APEX ENTRY PRESERVED | broker market closed; trigger/setup was NOT consumed");
+      PrintFormat("APEX ORDER NOT FILLED | class=%s retcode=%d requested=%.4f attempts=%d | layers unchanged at %d",
+                  e.cls==EXEC_REJECTED?"REJECTED":"UNCONFIRMED",e.retcode,e.requestedVolume,attempt+1,layers);
+      return false;
+     }
+
+   layers++;
+   lastAdd=(e.fillPrice>0?e.fillPrice:g.price);
+
+   if(firstNormal)
+     {
+      firstEntryPrice=(e.fillPrice>0?e.fillPrice:g.price);
+      ulong mt=(e.position!=0&&IsOurPosition(e.position))?e.position:FindOldestApexPosition();
+      masterTicket=mt;
+      masterGuardStage=0;
+      recoveryExitArmed=false;
+      double brokerSL=0;
+      if(masterTicket!=0&&PositionSelectByTicket(masterTicket)) brokerSL=PositionGetDouble(POSITION_SL);
+      if(sl>0&&MathAbs(brokerSL-sl)>MathMax(SymbolInfoDouble(_Symbol,SYMBOL_POINT),MathPow(10.0,-digits))*2.0)
+        {
+         SetMasterSL(sl,"INITIAL_FIXED_SL_REAPPLY");
+         if(masterTicket!=0&&PositionSelectByTicket(masterTicket)) brokerSL=PositionGetDouble(POSITION_SL);
+        }
+      firstSLPrice=brokerSL;
+      firstInitialSLPrice=brokerSL;
+      anchorsKnown=true;
+      Emit("FIRST_ENTRY_GUARD",StringFormat(
+        ",\"entryPrice\":%.5f,\"requestedSL\":%.5f,\"appliedSL\":%.5f,\"slVerified\":%s,\"goldMove\":%.2f,\"masterTicket\":%I64u",
+        firstEntryPrice,sl,brokerSL,BoolJson(sl<=0||MathAbs(brokerSL-sl)<=0.001),C.normalFixedSLGoldMove,masterTicket));
+     }
+   SaveState();
+   Emit("LAYER_OPEN",StringFormat(",\"layer\":%d,\"score\":%.2f,\"price\":%.5f,\"sl\":%.5f,"
+        "\"basketVolume\":%.4f,\"setupId\":\"%s\"%s",
+        layers,score,lastAdd,sl,BasketVolume(),S.id,execExtra));
+   return true;
+  }
+
+//====================== closing (APEX-AUDIT-010) ======================
+// A failed close can NEVER end a campaign. The campaign enters a persistent CLOSING
+// state that keeps its identity, anchors, protections and exit intent, prohibits every
+// addition and every new campaign, survives restart, and only finalises when the broker
+// confirms zero owned positions.
+bool AttemptClosePass()
+  {
+   if(MarketClosedBackoffActive()) return CountPos()==0;
+   trade.SetExpertMagicNumber(InpMagic);
+   ENUM_ORDER_TYPE_FILLING filling;
+   if(ResolveFillingMode(filling)) trade.SetTypeFilling(filling);
+   for(int pass=0;pass<6;pass++)
+     {
+      bool any=false;
+      for(int i=PositionsTotal()-1;i>=0;i--)
+        {
+         ulong t=PositionGetTicket(i);
+         if(t&&PositionGetString(POSITION_SYMBOL)==_Symbol&&PositionGetInteger(POSITION_MAGIC)==InpMagic)
+           {
+            any=true;
+            bool sent=trade.PositionClose(t);
+            uint rc=trade.ResultRetcode();
+            if(rc==TRADE_RETCODE_MARKET_CLOSED)
+              {NoteMarketClosed("POSITION_CLOSE",rc);return false;}
+            // sent=true means the request was accepted for sending, not that the position is gone.
+            if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_DONE_PARTIAL) ResetMarketClosedBackoff();
+           }
+        }
+      if(!any)break;
+      Sleep(100);
+     }
+   return CountPos()==0;
+  }
+
+void FinalizeClose()
+  {
+   double comm=0,swp=0;int deals=0;
+   double realised=CampaignRealised(comm,swp,deals);
+   Emit("CAMPAIGN_END",StringFormat(
+     ",\"outcome\":\"%s\",\"reason\":\"%s\",\"mfe\":%.2f,\"mae\":%.2f,\"durationSec\":%d,"
+     "\"realisedNet\":%.2f,\"realisedCommission\":%.2f,\"realisedSwap\":%.2f,\"closingDeals\":%d,"
+     "\"earnedFloorPct\":%.4f,\"closeAttempts\":%d,\"finalBalance\":%.2f",
+     closingOutcome,closingReason,mfe,mae,(int)(TimeCurrent()-campStart),
+     realised,comm,swp,deals,earnedFloorPct,closeAttempts,AccountInfoDouble(ACCOUNT_BALANCE)));
+   campState=CAMP_IDLE;campDir=0;layers=0;lastAdd=0;peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;
+   firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;anchorsKnown=true;
+   masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";
+   closingOutcome="";closingReason="";closingSince=0;closeAttempts=0;
+   ClearTriggers();
+   SetupReset("CAMPAIGN_ENDED");
+   ClearState();
+  }
+
+datetime g_lastCloseWarn=0;
+void ServiceClosing()
+  {
+   // A MARKET_CLOSED holdoff is not a close attempt; keep the persistent CLOSING state
+   // without hammering the broker or inflating closeAttempts.
+   if(MarketClosedBackoffActive()) return;
+   closeAttempts++;
+   bool done=AttemptClosePass();
+   int remaining=CountPos();
+   if(done&&remaining==0){FinalizeClose();return;}
+   SaveState();                       // closing intent must survive a restart mid-retry
+   if(TimeCurrent()-g_lastCloseWarn>=15)
+     {
+      g_lastCloseWarn=TimeCurrent();
+      int elapsed=(int)(TimeCurrent()-closingSince);
+      Emit(elapsed>=InpCloseStallWarnSeconds?"CLOSE_STALLED":"CLOSE_RETRY",
+           StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"remainingPositions\":%d,\"attempts\":%d,"
+                        "\"elapsedSec\":%d,\"lastRetcode\":%d",
+                        closingOutcome,closingReason,remaining,closeAttempts,elapsed,trade.ResultRetcode()));
+     }
+  }
+
+// First exit reason wins; a later condition can never overwrite the recorded intent.
+void RequestClose(string outcome,string reason)
+  {
+   if(campState==CAMP_CLOSING){ServiceClosing();return;}
+   campState=CAMP_CLOSING;
+   closingOutcome=outcome;closingReason=reason;closingSince=TimeCurrent();closeAttempts=0;
+   SaveState();
+   Emit("CLOSING_REQUESTED",StringFormat(",\"outcome\":\"%s\",\"reason\":\"%s\",\"positions\":%d,\"floating\":%.2f",
+        outcome,reason,CountPos(),BasketProfitFloating()));
+   ServiceClosing();
+  }
+
+//====================== campaign start ================================
+string NewCampaignId()
+  {
+   return StringFormat("%I64d-%I64d-%08x",AccountInfoInteger(ACCOUNT_LOGIN),(long)TimeCurrent(),
+      Fnv1a(g_instanceId+IntegerToString((int)GetTickCount())+IntegerToString(MathRand())+_Symbol));
+  }
+
+void Start(Snap &s)
+  {
+   // Provisional identity; the campaign only becomes ACTIVE once a fill is confirmed.
+   campDir=s.dir;layers=0;
+   cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
+   targetEq=C.targetMode=="EQUITY"
+            ?C.targetEquity
+            :(C.accountProfile=="NORMAL"
+              ?(C.normalTargetProfitPct>0?cycleStart*(1.0+C.normalTargetProfitPct/100.0):0.0)
+              :cycleStart*C.targetMultiplier);
+   peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;
+   firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;anchorsKnown=true;
+   masterTicket=0;masterGuardStage=0;campStart=TimeCurrent();
+   campId=NewCampaignId();campSig=s.sig;mfe=0;mae=0;
+   ClearTriggers();
+   SnapshotPolicy();
+
+   // APEX-AUDIT-002/008: submit FIRST, then report. v3.7.1 emitted CAMPAIGN_START (a
+   // blocking WebRequest) before the order existed, and reported a campaign that the
+   // broker might have rejected.
+   if(!OpenLayer(campDir,s.score,s.setupFamily+"_L1_IGNITION",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
+     {
+      if(g_pending.active)
+        {
+         campState=CAMP_SUBMITTING;
+         SaveState();
+         Print("APEX FIRST ENTRY PENDING | campaign fenced as SUBMITTING | setup=",S.id," order=",g_pending.order);
+         return;
+        }
+      campState=CAMP_IDLE;campId="";campSig="";campDir=0;
+      ClearState();
+      return;
+     }
+   campState=CAMP_ACTIVE;
+   S.state=SETUP_CONSUMED;
+   SaveState();
+   Emit("CAMPAIGN_START",StringFormat(
+     ",\"score\":%.2f,\"scoreFloorGivenMandatory\":%.2f,\"scoreCalibration\":\"UNCALIBRATED_RANKING\","
+     "\"targetEquity\":%.2f,\"cycleStart\":%.2f,\"entryPrice\":%.5f,\"impulseMult\":%.3f,\"wickRatio\":%.3f,"
+     "\"m3Color\":%s,\"m3Fresh\":%s,\"m5Color\":%s,\"atr\":%.5f,\"setupId\":\"%s\",\"bosKind\":\"%s\","
+     "\"sweepExtreme\":%.5f,\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,\"setupAgeSec\":%d",
+     s.score,ScoreFloorGivenMandatory(),targetEq,cycleStart,firstEntryPrice,s.impulseMult,s.wickRatio,
+     BoolJson(s.m3Color),BoolJson(s.m3Fresh),BoolJson(s.m5Color),s.atr,S.id,S.bosKind,
      S.extreme,S.triggerPrice,(long)S.triggerBarTime,(int)(TimeCurrent()-S.armedAt)));
    SetupReset("CONSUMED_BY_CAMPAIGN");
   }

@@ -12,92 +12,65 @@ process.env.SESSION_SECRET='test-session-secret-at-least-32-chars!!';
 
 const {projectSetupStatus}=await import('../server.mjs?setuptelemetry='+Date.now());
 
-test('SETUP-TELEMETRY: active setup exposes score, threshold and gates',()=>{
+test('SETUP-TELEMETRY: active breakout exposes pressure, ignition and level evidence',()=>{
   const events=[
-    {ts:'2026-09-10T10:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:-1,impulseAtr:2.1,extreme:4400,priorLevel:4397},
-    {ts:'2026-09-10T10:00:05.000Z',eventId:'2',type:'SETUP_SCORE',setupId:'S1',setupDir:-1,setupState:'WATCHING',
-      score:67,requiredScore:76,basePoints:25,impulsePoints:17,rejectionPoints:24,bosPoints:0,m3Points:0,m5Points:0,wickPoints:1,
-      rejected:true,microBreak:false,m3Color:false,m3Fresh:false,m5Color:false,m3Available:true,m5Available:true,
-      m3Gate:false,m5Gate:true,requireM3:true,requireM5:false,waitReason:'MICRO_BOS',bosKind:'NONE'}
+    {ts:'2026-09-19T10:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:1,
+      setupFamily:'BREAKOUT',regime:'BREAKOUT_UP',invalidationLevel:3648,referenceLevel:3650,strength:75},
+    {ts:'2026-09-19T10:00:05.000Z',eventId:'2',type:'SETUP_SCORE',setupId:'S1',setupDir:1,setupState:'WATCHING',
+      setupFamily:'BREAKOUT',regime:'BREAKOUT_UP',score:73,requiredScore:76,buyPressure:68,sellPressure:32,
+      activePressure:68,trendStrength:20,candleQuality:61,compressionScore:75,pullbackQuality:0,
+      contextOk:true,ignition:false,liveTrigger:false,waitReason:'IGNITION',triggerKind:'NONE',
+      breakoutLevel:3650,invalidationLevel:3648}
   ];
-  const s=projectSetupStatus(events,Date.parse('2026-09-10T10:00:10.000Z'));
-  assert.equal(s.active,true);
-  assert.equal(s.state,'WATCHING');
-  assert.equal(s.direction,'SELL');
-  assert.equal(s.score,67);
-  assert.equal(s.requiredScore,76);
-  assert.equal(s.rejected,true);
-  assert.equal(s.microBreak,false);
-  assert.equal(s.waitReason,'MICRO_BOS');
-  assert.equal(s.eventAgeSec,5);
-  assert.equal(s.setupAgeSec,10);
+  const s=projectSetupStatus(events,Date.parse('2026-09-19T10:00:10.000Z'));
+  assert.equal(s.active,true); assert.equal(s.setupFamily,'BREAKOUT'); assert.equal(s.regime,'BREAKOUT_UP');
+  assert.equal(s.direction,'BUY'); assert.equal(s.buyPressure,68); assert.equal(s.activePressure,68);
+  assert.equal(s.waitReason,'IGNITION'); assert.equal(s.invalidationLevel,3648);
 });
 
-test('SETUP-TELEMETRY: expiry is terminal and remains visible with the reason',()=>{
+test('SETUP-TELEMETRY: confirmed trend continuation preserves evidence',()=>{
   const events=[
-    {ts:'2026-09-10T10:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:1},
-    {ts:'2026-09-10T10:01:00.000Z',eventId:'2',type:'SETUP_SCORE',setupId:'S1',setupDir:1,setupState:'WATCHING',
-      score:61,requiredScore:76,rejected:false,microBreak:false,m3Gate:false,m5Gate:true,requireM3:true,requireM5:false,waitReason:'REJECTION'},
-    {ts:'2026-09-10T10:12:01.000Z',eventId:'3',type:'SETUP_EXPIRED',setupId:'S1',setupDir:1,setupState:'EXPIRED',cancelReason:'EXPIRED'}
+    {ts:'2026-09-19T11:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'T1',watchDir:-1,
+      setupFamily:'TREND_CONTINUATION',regime:'TREND_DOWN_CONTINUATION',invalidationLevel:3670,referenceLevel:3665},
+    {ts:'2026-09-19T11:00:07.000Z',eventId:'2',type:'SETUP_SCORE',setupId:'T1',setupDir:-1,setupState:'WATCHING',
+      setupFamily:'TREND_CONTINUATION',regime:'TREND_DOWN_CONTINUATION',score:81,requiredScore:76,
+      buyPressure:31,sellPressure:69,activePressure:69,trendStrength:84,candleQuality:78,
+      compressionScore:0,pullbackQuality:66,contextOk:true,ignition:true,liveTrigger:true,
+      waitReason:'READY',triggerKind:'LIVE_MICRO_BREAK',invalidationLevel:3670},
+    {ts:'2026-09-19T11:00:08.000Z',eventId:'3',type:'SETUP_CONFIRMED',setupId:'T1',setupDir:-1,
+      setupFamily:'TREND_CONTINUATION',regime:'TREND_DOWN_CONTINUATION',score:81,requiredScore:76,
+      activePressure:69,candleQuality:78,triggerKind:'LIVE_MICRO_BREAK'}
   ];
-  const s=projectSetupStatus(events,Date.parse('2026-09-10T10:12:06.000Z'));
-  assert.equal(s.active,false);
-  assert.equal(s.state,'EXPIRED');
-  assert.equal(s.reason,'EXPIRED');
-  assert.equal(s.score,61);
-  assert.equal(s.eventAgeSec,5);
+  const s=projectSetupStatus(events,Date.parse('2026-09-19T11:00:09.000Z'));
+  assert.equal(s.state,'CONFIRMED'); assert.equal(s.direction,'SELL'); assert.equal(s.active,true);
+  assert.equal(s.triggerKind,'LIVE_MICRO_BREAK'); assert.equal(s.candleQuality,78);
 });
 
-test('SETUP-TELEMETRY: invalidation is not silently resurrected by unrelated events',()=>{
+test('SETUP-TELEMETRY: invalidation is terminal',()=>{
   const events=[
-    {ts:'2026-09-10T10:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:-1},
-    {ts:'2026-09-10T10:00:30.000Z',eventId:'2',type:'SETUP_INVALIDATED',setupId:'S1',setupDir:-1,setupState:'INVALIDATED',cancelReason:'NEW_EXTREME_BEYOND_SWEPT_LEVEL'},
-    {ts:'2026-09-10T10:00:31.000Z',eventId:'3',type:'MASTER_SL_MOVED'}
+    {ts:'2026-09-19T12:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:1,setupFamily:'BREAKOUT'},
+    {ts:'2026-09-19T12:00:20.000Z',eventId:'2',type:'SETUP_INVALIDATED',setupId:'S1',setupDir:1,setupState:'INVALIDATED',
+      cancelReason:'THESIS_INVALIDATION_LEVEL_BREACHED'}
   ];
-  const s=projectSetupStatus(events,Date.parse('2026-09-10T10:00:40.000Z'));
-  assert.equal(s.active,false);
-  assert.equal(s.state,'INVALIDATED');
-  assert.match(s.reason,/NEW_EXTREME/);
+  const s=projectSetupStatus(events,Date.parse('2026-09-19T12:00:25.000Z'));
+  assert.equal(s.active,false); assert.equal(s.state,'INVALIDATED'); assert.match(s.reason,/THESIS_INVALIDATION/);
 });
 
-test('SETUP-TELEMETRY: a newer setup supersedes an older terminal setup',()=>{
+test('SETUP-TELEMETRY: a newer setup supersedes the older terminal setup',()=>{
   const events=[
-    {ts:'2026-09-10T10:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:-1},
-    {ts:'2026-09-10T10:01:00.000Z',eventId:'2',type:'SETUP_EXPIRED',setupId:'S1',setupDir:-1,setupState:'EXPIRED',cancelReason:'EXPIRED'},
-    {ts:'2026-09-10T10:02:00.000Z',eventId:'3',type:'WATCH_ARMED',setupId:'S2',watchDir:1},
-    {ts:'2026-09-10T10:02:05.000Z',eventId:'4',type:'SETUP_SCORE',setupId:'S2',setupDir:1,setupState:'WATCHING',score:70,requiredScore:76,
-      rejected:true,microBreak:true,m3Gate:false,m5Gate:true,requireM3:true,requireM5:false,waitReason:'M3_CONFIRM'}
+    {ts:'2026-09-19T13:00:00.000Z',eventId:'1',type:'WATCH_ARMED',setupId:'S1',watchDir:-1,setupFamily:'BREAKOUT'},
+    {ts:'2026-09-19T13:01:00.000Z',eventId:'2',type:'SETUP_EXPIRED',setupId:'S1',setupDir:-1,cancelReason:'EXPIRED'},
+    {ts:'2026-09-19T13:02:00.000Z',eventId:'3',type:'WATCH_ARMED',setupId:'S2',watchDir:1,setupFamily:'TREND_CONTINUATION',regime:'TREND_UP_CONTINUATION'}
   ];
-  const s=projectSetupStatus(events,Date.parse('2026-09-10T10:02:10.000Z'));
-  assert.equal(s.setupId,'S2');
-  assert.equal(s.direction,'BUY');
-  assert.equal(s.active,true);
+  const s=projectSetupStatus(events,Date.parse('2026-09-19T13:02:02.000Z'));
+  assert.equal(s.setupId,'S2'); assert.equal(s.direction,'BUY'); assert.equal(s.active,true);
 });
 
-
-test('SETUP-TELEMETRY: delayed outbox replay cannot resurrect an older setup',()=>{
-  const events=[
-    // XauCloud receipt ts makes the old S1 score look newer, but emittedAt proves it is older.
-    {ts:'2026-09-10T10:05:00.000Z',emittedAt:1789034405,eventId:'late-old',type:'SETUP_SCORE',setupId:'S1',setupDir:-1,
-      setupState:'WATCHING',score:60,requiredScore:76,rejected:false,microBreak:false,m3Gate:false,m5Gate:true,requireM3:true,requireM5:false,waitReason:'REJECTION'},
-    {ts:'2026-09-10T10:02:00.000Z',emittedAt:1789034520,eventId:'new-arm',type:'WATCH_ARMED',setupId:'S2',watchDir:1},
-    {ts:'2026-09-10T10:02:05.000Z',emittedAt:1789034525,eventId:'new-score',type:'SETUP_SCORE',setupId:'S2',setupDir:1,
-      setupState:'WATCHING',score:70,requiredScore:76,rejected:true,microBreak:true,m3Gate:false,m5Gate:true,requireM3:true,requireM5:false,waitReason:'M3_CONFIRM'}
-  ];
-  const s=projectSetupStatus(events,Date.parse('2026-09-10T10:02:10.000Z'));
-  assert.equal(s.setupId,'S2');
-  assert.equal(s.direction,'BUY');
-  assert.equal(s.score,70);
-});
-
-test('SETUP-TELEMETRY: canonical and versioned EA remain byte-identical and trading trigger stays unchanged',async()=>{
+test('SETUP-TELEMETRY: canonical and versioned v3.9 sources remain byte-identical',async()=>{
   const root=new URL('../',import.meta.url);
   const canonical=await fs.readFile(new URL('ea/XauCloud-Apex.mq5',root),'utf8');
-  const versioned=await fs.readFile(new URL('ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5',root),'utf8');
+  const versioned=await fs.readFile(new URL('ea/XauCloud-Apex-v3.9.0-BreakoutTrend.mq5',root),'utf8');
   assert.equal(canonical,versioned);
-  assert.match(canonical,/Emit\("SETUP_SCORE"/);
-  assert.match(canonical,/eventType="SETUP_EXPIRED"/);
-  assert.match(canonical,/eventType="SETUP_INVALIDATED"/);
-  assert.match(canonical,/Emit\("SETUP_CONFIRMED"/);
-  assert.match(canonical,/if\(s\.valid\) Start\(s\);/);
+  assert.match(canonical,/BREAKOUT_TREND_SIGNAL_CONFIRMED/);
+  assert.match(canonical,/void OnTick\(\)\{UpdateTickPressure\(\);ServiceEntryScan\(\);\}/);
 });

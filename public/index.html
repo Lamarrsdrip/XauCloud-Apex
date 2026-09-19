@@ -886,22 +886,29 @@ function pageSettings(me){
 
   html += '<div id="apex-notifications-card"></div>';
 
-  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Advanced Strategy</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
+  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Breakout + Trend Strategy</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
     + '<div id="advanced-body">'
-    + '<div class="warn-banner">Advanced settings affect Apex setup recognition. Only change them if you understand the strategy.</div>'
+    + '<div class="warn-banner"><strong>Apex v3.9:</strong> entries are limited to Breakout and Trend Continuation setups. Pressure is calculated from your broker tick/candle feed; it is not a centralized institutional order book.</div>'
     + '<div class="field-grid">'
     + advField('Entry Score', 'entryScore', adv.entryScore, disabled)
     + advField('Add Score', 'addScore', adv.addScore, disabled)
-    + advField('Impulse ATR', 'impulseAtr', adv.impulseAtr, disabled)
-    + advField('Sweep ATR', 'sweepAtr', adv.sweepAtr, disabled)
-    + advField('Rejection Bars', 'rejectionBars', adv.rejectionBars, disabled)
     + advField('Watch Expiry (min)', 'watchExpiryMinutes', adv.watchExpiryMinutes, disabled)
-    + advField('Rejection Zone ATR', 'rejectionZoneAtr', adv.rejectionZoneAtr, disabled)
     + advField('Add Spacing ATR', 'addSpacingAtr', adv.addSpacingAtr, disabled)
+    + advField('Breakout Lookback Bars', 'breakoutLookbackBars', adv.breakoutLookbackBars, disabled)
+    + advField('Minimum Level Touches', 'breakoutMinTouches', adv.breakoutMinTouches, disabled)
+    + advField('Breakout Buffer ATR', 'breakoutBufferAtr', adv.breakoutBufferAtr, disabled)
+    + advField('Breakout Arm Distance ATR', 'breakoutArmDistanceAtr', adv.breakoutArmDistanceAtr, disabled)
+    + advField('Maximum Breakout Extension ATR', 'breakoutMaxExtensionAtr', adv.breakoutMaxExtensionAtr, disabled)
+    + advField('Breakout Pressure Minimum', 'breakoutPressureMin', adv.breakoutPressureMin, disabled)
+    + advField('Trend Pressure Minimum', 'trendPressureMin', adv.trendPressureMin, disabled)
+    + advField('Trend Slope Minimum', 'trendSlopeMinAtr', adv.trendSlopeMinAtr, disabled)
+    + advField('Trend Pullback Bars', 'trendPullbackBars', adv.trendPullbackBars, disabled)
+    + advField('Maximum Trend Pullback ATR', 'trendMaxPullbackAtr', adv.trendMaxPullbackAtr, disabled)
+    + advField('Ignition Body ATR', 'ignitionBodyAtr', adv.ignitionBodyAtr, disabled)
+    + advField('Ignition Close Location', 'ignitionCloseLocation', adv.ignitionCloseLocation, disabled)
     + '</div>'
-    + '<div class="toggle-row"><div class="lbl">Require M3 Confirmation</div><label class="switch"><input type="checkbox" id="f-requireM3Confirm" '+(adv.requireM3Confirm?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
-    + '<div class="toggle-row"><div class="lbl">Require M5 Context</div><label class="switch"><input type="checkbox" id="f-requireM5Context" '+(adv.requireM5Context?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
-    + '<div class="form-row"><button class="btn btn-primary" id="save-advanced" '+(disabled?'disabled':'')+'>Save Advanced Settings</button></div>'
+    + '<div class="hint" style="margin-top:10px">L1 is allowed on live ignition so Apex can join a move early. L2/L3 still require fresh closed-bar confirmation and the existing profit-side, spacing and one-trigger fences.</div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-advanced" '+(disabled?'disabled':'')+'>Save Breakout + Trend Settings</button></div>'
     + '</div></div>';
   return html;
 }
@@ -998,16 +1005,22 @@ function wireSettings(me){
     var payload = {
       entryScore: Number(document.getElementById('f-entryScore').value),
       addScore: Number(document.getElementById('f-addScore').value),
-      impulseAtr: Number(document.getElementById('f-impulseAtr').value),
-      sweepAtr: Number(document.getElementById('f-sweepAtr').value),
-      rejectionBars: Number(document.getElementById('f-rejectionBars').value),
       watchExpiryMinutes: Number(document.getElementById('f-watchExpiryMinutes').value),
-      rejectionZoneAtr: Number(document.getElementById('f-rejectionZoneAtr').value),
       addSpacingAtr: Number(document.getElementById('f-addSpacingAtr').value),
-      requireM3Confirm: document.getElementById('f-requireM3Confirm').checked,
-      requireM5Context: document.getElementById('f-requireM5Context').checked
+      breakoutLookbackBars: Number(document.getElementById('f-breakoutLookbackBars').value),
+      breakoutMinTouches: Number(document.getElementById('f-breakoutMinTouches').value),
+      breakoutBufferAtr: Number(document.getElementById('f-breakoutBufferAtr').value),
+      breakoutArmDistanceAtr: Number(document.getElementById('f-breakoutArmDistanceAtr').value),
+      breakoutMaxExtensionAtr: Number(document.getElementById('f-breakoutMaxExtensionAtr').value),
+      breakoutPressureMin: Number(document.getElementById('f-breakoutPressureMin').value),
+      trendPressureMin: Number(document.getElementById('f-trendPressureMin').value),
+      trendSlopeMinAtr: Number(document.getElementById('f-trendSlopeMinAtr').value),
+      trendPullbackBars: Number(document.getElementById('f-trendPullbackBars').value),
+      trendMaxPullbackAtr: Number(document.getElementById('f-trendMaxPullbackAtr').value),
+      ignitionBodyAtr: Number(document.getElementById('f-ignitionBodyAtr').value),
+      ignitionCloseLocation: Number(document.getElementById('f-ignitionCloseLocation').value)
     };
-    saveConfig(payload, 'save-advanced', 'Save Advanced Settings');
+    saveConfig(payload, 'save-advanced', 'Save Breakout + Trend Settings');
   });
 }
 function saveConfig(payload, btnId, btnLabel){

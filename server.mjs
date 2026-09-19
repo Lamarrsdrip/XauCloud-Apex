@@ -157,7 +157,20 @@ const SCHEMA={
   cooldownMinutes:{t:'int',d:0,min:0,max:1440},
   learningEnabled:{t:'bool',d:true},
   learningMinCampaigns:{t:'int',d:8,min:4,max:200},
-  learningMaxScoreAdjustment:{t:'num',d:5,min:0,max:15}
+  learningMaxScoreAdjustment:{t:'num',d:5,min:0,max:15},
+  // v3.9 Breakout + Trend opportunity engine
+  breakoutLookbackBars:{t:'int',d:20,min:8,max:60},
+  breakoutMinTouches:{t:'int',d:2,min:1,max:6},
+  breakoutBufferAtr:{t:'num',d:.04,min:0,max:.5},
+  breakoutArmDistanceAtr:{t:'num',d:.45,min:.05,max:2},
+  breakoutMaxExtensionAtr:{t:'num',d:.50,min:.05,max:2},
+  breakoutPressureMin:{t:'num',d:62,min:50,max:95},
+  trendPressureMin:{t:'num',d:58,min:50,max:95},
+  trendSlopeMinAtr:{t:'num',d:.75,min:.1,max:5},
+  trendPullbackBars:{t:'int',d:5,min:2,max:12},
+  trendMaxPullbackAtr:{t:'num',d:1.6,min:.2,max:5},
+  ignitionBodyAtr:{t:'num',d:.18,min:.03,max:2},
+  ignitionCloseLocation:{t:'num',d:.68,min:.5,max:.98}
 };
 export const DEFAULT=Object.fromEntries(Object.entries(SCHEMA).map(([k,s])=>[k,s.d]));
 export const CONFIG_FIELDS=Object.keys(SCHEMA);
@@ -813,82 +826,56 @@ export function projectSetupStatus(events,now=Date.now()){
     const id=String(e.setupId||'');
     const dir=Number(e.setupDir??e.watchDir??e.direction??0);
     const side=dir>0?'BUY':dir<0?'SELL':null;
-
     if(e.type==='WATCH_ARMED'){
-      s={
-        setupId:id||null,direction:side,state:'WATCHING',active:true,
+      s={setupId:id||null,direction:side,state:'WATCHING',active:true,
         armedAt:eventTs,updatedAt:eventTs,endedAt:null,reason:null,
-        score:null,requiredScore:null,waitReason:'REJECTION',
-        impulseAtr:numOrNull(e.impulseAtr),extreme:numOrNull(e.extreme),priorLevel:numOrNull(e.priorLevel)
-      };
+        setupFamily:String(e.setupFamily||e.regime||'UNKNOWN'),regime:String(e.regime||e.setupFamily||'UNKNOWN'),
+        score:null,requiredScore:null,waitReason:'IGNITION',
+        invalidationLevel:numOrNull(e.invalidationLevel??e.extreme),referenceLevel:numOrNull(e.referenceLevel??e.priorLevel),
+        strength:numOrNull(e.strength)};
       continue;
     }
-
     if(e.type==='SETUP_SCORE'){
-      if(!s || (id && s.setupId!==id)){
-        s={setupId:id||null,direction:side,state:String(e.setupState||'WATCHING'),
-           active:true,armedAt:eventTs,updatedAt:eventTs,endedAt:null,reason:null};
-      }
-      if(id && s.setupId && id!==s.setupId)continue;
+      if(!s || (id&&s.setupId!==id))s={setupId:id||null,direction:side,state:String(e.setupState||'WATCHING'),active:true,armedAt:eventTs,updatedAt:eventTs,endedAt:null,reason:null};
+      if(id&&s.setupId&&id!==s.setupId)continue;
       const state=String(e.setupState||s.state||'WATCHING').toUpperCase();
-      s={
-        ...s,setupId:id||s.setupId,direction:side||s.direction,state,
-        active:!['EXPIRED','INVALIDATED','CANCELLED','CONSUMED'].includes(state),
-        updatedAt:eventTs,
+      s={...s,setupId:id||s.setupId,direction:side||s.direction,state,
+        active:!['EXPIRED','INVALIDATED','CANCELLED','CONSUMED'].includes(state),updatedAt:eventTs,
+        setupFamily:String(e.setupFamily||s.setupFamily||'UNKNOWN'),regime:String(e.regime||s.regime||'UNKNOWN'),
         score:numOrNull(e.score),requiredScore:numOrNull(e.requiredScore),
-        basePoints:numOrNull(e.basePoints),impulsePoints:numOrNull(e.impulsePoints),
-        rejectionPoints:numOrNull(e.rejectionPoints),bosPoints:numOrNull(e.bosPoints),
-        m3Points:numOrNull(e.m3Points),m5Points:numOrNull(e.m5Points),wickPoints:numOrNull(e.wickPoints),
-        rejected:e.rejected===true,microBreak:e.microBreak===true,
-        m3Color:e.m3Color===true,m3Fresh:e.m3Fresh===true,m5Color:e.m5Color===true,
-        m3Available:e.m3Available!==false,m5Available:e.m5Available!==false,
-        m3Gate:e.m3Gate===true,m5Gate:e.m5Gate===true,
-        requireM3:e.requireM3===true,requireM5:e.requireM5===true,
-        waitReason:String(e.waitReason||''),bosKind:String(e.bosKind||'NONE'),
-        impulseAtr:numOrNull(e.impulseAtr),wickRatio:numOrNull(e.wickRatio),
-        extreme:numOrNull(e.extreme),priorLevel:numOrNull(e.priorLevel)
-      };
+        buyPressure:numOrNull(e.buyPressure),sellPressure:numOrNull(e.sellPressure),activePressure:numOrNull(e.activePressure),
+        trendStrength:numOrNull(e.trendStrength),candleQuality:numOrNull(e.candleQuality),
+        compressionScore:numOrNull(e.compressionScore),pullbackQuality:numOrNull(e.pullbackQuality),
+        contextOk:e.contextOk===true,ignition:e.ignition===true,liveTrigger:e.liveTrigger===true,
+        waitReason:String(e.waitReason||''),triggerKind:String(e.triggerKind||e.bosKind||'NONE'),
+        breakoutLevel:numOrNull(e.breakoutLevel),invalidationLevel:numOrNull(e.invalidationLevel??e.extreme),
+        triggerPrice:numOrNull(e.triggerPrice),triggerBarTime:numOrNull(e.triggerBarTime),
+        // Legacy fields remain readable for events emitted before v3.9.
+        rejected:e.rejected===true,microBreak:e.microBreak===true,m3Gate:e.m3Gate===true,m5Gate:e.m5Gate===true};
       continue;
     }
-
     if(e.type==='SETUP_CONFIRMED'){
-      if(!s || !id || !s.setupId || s.setupId===id){
-        s={...s,setupId:id||s?.setupId||null,direction:side||s?.direction||null,
-           state:'CONFIRMED',active:true,updatedAt:eventTs,
-           score:numOrNull(e.score)??s?.score??null,
-           requiredScore:numOrNull(e.requiredScore)??s?.requiredScore??null,
-           waitReason:'READY',bosKind:String(e.bosKind||s?.bosKind||'NONE')};
-      }
+      if(!s||!id||!s.setupId||s.setupId===id)s={...s,setupId:id||s?.setupId||null,direction:side||s?.direction||null,
+        state:'CONFIRMED',active:true,updatedAt:eventTs,setupFamily:String(e.setupFamily||s?.setupFamily||'UNKNOWN'),
+        regime:String(e.regime||s?.regime||'UNKNOWN'),score:numOrNull(e.score)??s?.score??null,
+        requiredScore:numOrNull(e.requiredScore)??s?.requiredScore??null,activePressure:numOrNull(e.activePressure)??s?.activePressure??null,
+        candleQuality:numOrNull(e.candleQuality)??s?.candleQuality??null,waitReason:'READY',triggerKind:String(e.triggerKind||s?.triggerKind||'NONE')};
       continue;
     }
-
     if(['SETUP_EXPIRED','SETUP_INVALIDATED','SETUP_CANCELLED','SETUP_CONSUMED'].includes(e.type)){
-      if(!s || !id || !s.setupId || s.setupId===id){
-        const state={
-          SETUP_EXPIRED:'EXPIRED',
-          SETUP_INVALIDATED:'INVALIDATED',
-          SETUP_CANCELLED:'CANCELLED',
-          SETUP_CONSUMED:'CONSUMED'
-        }[e.type];
-        s={...s,setupId:id||s?.setupId||null,direction:side||s?.direction||null,
-           state,active:false,reason:String(e.cancelReason||e.reason||state),
-           endedAt:eventTs,updatedAt:eventTs};
+      if(!s||!id||!s.setupId||s.setupId===id){
+        const state={SETUP_EXPIRED:'EXPIRED',SETUP_INVALIDATED:'INVALIDATED',SETUP_CANCELLED:'CANCELLED',SETUP_CONSUMED:'CONSUMED'}[e.type];
+        s={...s,setupId:id||s?.setupId||null,direction:side||s?.direction||null,state,active:false,
+          reason:String(e.cancelReason||e.reason||state),endedAt:eventTs,updatedAt:eventTs};
       }
       continue;
     }
-
-    if(e.type==='CAMPAIGN_START' && s && (!e.setupId || e.setupId===s.setupId)){
-      s={...s,state:'CONSUMED',active:false,reason:'CAMPAIGN_STARTED',endedAt:eventTs,updatedAt:eventTs};
-    }
+    if(e.type==='CAMPAIGN_START'&&s&&(!e.setupId||e.setupId===s.setupId))s={...s,state:'CONSUMED',active:false,reason:'CAMPAIGN_STARTED',endedAt:eventTs,updatedAt:eventTs};
   }
   if(!s)return null;
-  const updatedMs=Date.parse(String(s.updatedAt||s.endedAt||s.armedAt||''));
-  const armedMs=Date.parse(String(s.armedAt||''));
-  return {
-    ...s,
-    eventAgeSec:Number.isFinite(updatedMs)?Math.max(0,Math.floor((now-updatedMs)/1000)):null,
-    setupAgeSec:Number.isFinite(armedMs)?Math.max(0,Math.floor((now-armedMs)/1000)):null
-  };
+  const updatedMs=Date.parse(String(s.updatedAt||s.endedAt||s.armedAt||'')),armedMs=Date.parse(String(s.armedAt||''));
+  return {...s,eventAgeSec:Number.isFinite(updatedMs)?Math.max(0,Math.floor((now-updatedMs)/1000)):null,
+    setupAgeSec:Number.isFinite(armedMs)?Math.max(0,Math.floor((now-armedMs)/1000)):null};
 }
 
 // Projects the CURRENT campaign from the reconciled event stream.
@@ -1047,11 +1034,11 @@ function humanEvent(e){
   const d=e.direction>0?'BUY':e.direction<0?'SELL':'';
   const sd=e.setupDir>0?'BUY':e.setupDir<0?'SELL':e.watchDir>0?'BUY':e.watchDir<0?'SELL':'';
   switch(e.type){
-    case 'WATCH_ARMED':return `Potential ${e.watchDir>0?'BUY':'SELL'} reversal setup detected`;
+    case 'WATCH_ARMED':return `Potential ${e.watchDir>0?'BUY':'SELL'} ${e.setupFamily||'market'} setup detected`;
     case 'SETUP_SCORE':return null;
     case 'SETUP_CONFIRMED':return `${sd||'Setup'} confirmed at ${Number(e.score||0).toFixed(0)}/${Number(e.requiredScore||0).toFixed(0)} — submitting`;
     case 'SETUP_EXPIRED':return `${sd||'Setup'} expired — watch timeout reached; scanning resumed`;
-    case 'SETUP_INVALIDATED':return `${sd||'Setup'} invalidated — price made a new extreme; scanning resumed`;
+    case 'SETUP_INVALIDATED':return `${sd||'Setup'} invalidated — thesis level failed; scanning resumed`;
     case 'SETUP_CONSUMED':return `${sd||'Setup'} setup consumed by campaign`;
     case 'SETUP_CANCELLED':return `Setup cancelled — ${e.cancelReason||'no longer valid'}`;
     case 'SETUP_LOCATED':return `Legacy retest build event — setup location stored`;
@@ -1104,23 +1091,22 @@ function learningShape(events){
     bySignature:{},featureInsights:{}};
 }
 function settingsView(c){return {
-  accountProfile:c.accountProfile,targetMode:c.targetMode,targetEquity:c.targetEquity,
-  targetMultiplier:c.targetMultiplier,
-  normalTargetProfitPct:c.normalTargetProfitPct,baseMarginPct:c.baseMarginPct,
-  layerMultiplier:c.layerMultiplier,maxLayers:c.maxLayers,normalL1MarginPct:c.normalL1MarginPct,
-  normalL2MarginPct:c.normalL2MarginPct,normalL3PlusMarginPct:c.normalL3PlusMarginPct,
+  accountProfile:c.accountProfile,targetMode:c.targetMode,targetEquity:c.targetEquity,targetMultiplier:c.targetMultiplier,
+  normalTargetProfitPct:c.normalTargetProfitPct,baseMarginPct:c.baseMarginPct,layerMultiplier:c.layerMultiplier,maxLayers:c.maxLayers,
+  normalL1MarginPct:c.normalL1MarginPct,normalL2MarginPct:c.normalL2MarginPct,normalL3PlusMarginPct:c.normalL3PlusMarginPct,
   normalFixedSLGoldMove:c.normalFixedSLGoldMove,normalReferenceLeverage:c.normalReferenceLeverage,
-  profitRatchetEnabled:c.profitRatchetEnabled,
-  ratchetTriggerPct:c.ratchetTriggerPct,ratchetLockPct:c.ratchetLockPct,ratchetStepPct:c.ratchetStepPct,
-  ratchetLockStepPct:c.ratchetLockStepPct,masterBreakEvenEnabled:c.masterBreakEvenEnabled,
-  masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,
-  recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
+  profitRatchetEnabled:c.profitRatchetEnabled,ratchetTriggerPct:c.ratchetTriggerPct,ratchetLockPct:c.ratchetLockPct,
+  ratchetStepPct:c.ratchetStepPct,ratchetLockStepPct:c.ratchetLockStepPct,masterBreakEvenEnabled:c.masterBreakEvenEnabled,
+  masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
   maxBasketLots:c.maxBasketLots,minMarginLevelPct:c.minMarginLevelPct,marginReservePct:c.marginReservePct,
-  unlimitedSizingNote:'v3.8.7: BOTH profiles use the same layer ladder -- L1 '+c.normalL1MarginPct+'%, L2 '+c.normalL2MarginPct+'%, L3+ '+c.normalL3PlusMarginPct+'% of CURRENT executable capacity, re-derived before every layer. UNLIMITED still establishes that capacity from its own broker/server-proven capacity (no reference leverage, no lot cap). baseMarginPct and layerMultiplier no longer size a layer and are retained for config compatibility only.',
-  advanced:{entryScore:c.entryScore,addScore:c.addScore,impulseAtr:c.impulseAtr,sweepAtr:c.sweepAtr,
-    rejectionBars:c.rejectionBars,watchExpiryMinutes:c.watchExpiryMinutes,rejectionZoneAtr:c.rejectionZoneAtr,
-    addSpacingAtr:c.addSpacingAtr,requireM3Confirm:c.requireM3Confirm,requireM5Context:c.requireM5Context,
-    cooldownMinutes:c.cooldownMinutes,learningEnabled:c.learningEnabled,
+  unlimitedSizingNote:'L1 '+c.normalL1MarginPct+'%, L2 '+c.normalL2MarginPct+'%, L3+ '+c.normalL3PlusMarginPct+'%. v3.9 changed setup recognition only; the existing margin ladder and broker-capacity engine are preserved.',
+  advanced:{strategy:'BREAKOUT_TREND',entryScore:c.entryScore,addScore:c.addScore,watchExpiryMinutes:c.watchExpiryMinutes,
+    addSpacingAtr:c.addSpacingAtr,breakoutLookbackBars:c.breakoutLookbackBars,breakoutMinTouches:c.breakoutMinTouches,
+    breakoutBufferAtr:c.breakoutBufferAtr,breakoutArmDistanceAtr:c.breakoutArmDistanceAtr,breakoutMaxExtensionAtr:c.breakoutMaxExtensionAtr,
+    breakoutPressureMin:c.breakoutPressureMin,trendPressureMin:c.trendPressureMin,trendSlopeMinAtr:c.trendSlopeMinAtr,
+    trendPullbackBars:c.trendPullbackBars,trendMaxPullbackAtr:c.trendMaxPullbackAtr,ignitionBodyAtr:c.ignitionBodyAtr,
+    ignitionCloseLocation:c.ignitionCloseLocation,cooldownMinutes:c.cooldownMinutes,learningEnabled:c.learningEnabled,
+    pressureNote:'Broker tick/candle pressure proxy — not centralized institutional order flow.',
     learningNote:'OBSERVATION_ONLY. Apex does not adapt live. Adjustments are forced to zero.'}
 }}
 
@@ -1228,6 +1214,7 @@ async function buildMe(key){
     effectiveConfig:{
       eaVersion:hb?.ea_version||lic.eaVersion||null,
       buildId:hb?.build_id||lic.buildId||null,
+      strategy:'BREAKOUT_TREND',
       expectedEaVersion:MANIFEST.eaVersion,
       configSource:remote?'XAUCLOUD_BRIDGE':'REMOTE/CACHED_LOCAL',
       appliedRevision:appliedRevision||null,appliedConfigHash:appliedHash||null,

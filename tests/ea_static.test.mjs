@@ -180,7 +180,7 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
 });
 
 test('v3.9 starts L1 directly from a confirmed breakout/trend ignition', () => {
-  assert.match(s, /if\(s\.valid\) Start\(s\);/);
+  assert.match(s, /if\(s\.valid\)\s*Start\(s\);/);
   assert.match(s, /strategy=BREAKOUT_TREND \| entry=live-ignition-v3\.9/);
   assert.match(s, /BREAKOUT_TREND_SIGNAL_CONFIRMED/);
   assert.doesNotMatch(s, /CONFIRMED_EXHAUSTION_REVERSAL|LIQUIDITY_EXHAUST/);

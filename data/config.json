@@ -40,5 +40,17 @@
   "cooldownMinutes": 0,
   "learningEnabled": true,
   "learningMinCampaigns": 8,
-  "learningMaxScoreAdjustment": 5
+  "learningMaxScoreAdjustment": 5,
+  "breakoutLookbackBars": 20,
+  "breakoutMinTouches": 2,
+  "breakoutBufferAtr": 0.04,
+  "breakoutArmDistanceAtr": 0.45,
+  "breakoutMaxExtensionAtr": 0.5,
+  "breakoutPressureMin": 62,
+  "trendPressureMin": 58,
+  "trendSlopeMinAtr": 0.75,
+  "trendPullbackBars": 5,
+  "trendMaxPullbackAtr": 1.6,
+  "ignitionBodyAtr": 0.18,
+  "ignitionCloseLocation": 0.68
 }

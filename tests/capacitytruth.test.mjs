@@ -35,7 +35,7 @@ function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0
 
 test('canonical EA is v3.9 BreakoutTrend with hardened capacity execution intact',()=>{
   assert.ok(ea.includes('#property version   "3.900"'));
-  assert.match(ea,/XauCloud-Apex_v3\\.9\\.0-BreakoutTrend/);
+  assert.ok(ea.includes('XauCloud-Apex_v3.9.0-BreakoutTrend'));
   assert.match(ea,/if\(s\.valid\) Start\(s\);/);
   assert.doesNotMatch(ea,/if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.match(ea,/TrustedMarginPerLot/);

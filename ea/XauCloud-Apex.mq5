@@ -3551,7 +3551,7 @@ void ServiceEntryScan()
    if(g_observerOnly||campState!=CAMP_IDLE||!C.armed)return;
    datetime now=TimeCurrent();if(lastEnd>0&&now-lastEnd<C.cooldownMinutes*60)return;
    g_preflightBlock=ComputePreflight();if(g_preflightBlock!="")return;
-   Snap s=Observe();if(s.valid)Start(s);
+   Snap s=Observe();if(s.valid) Start(s);
   }
 
 void OnTick(){UpdateTickPressure();ServiceEntryScan();}

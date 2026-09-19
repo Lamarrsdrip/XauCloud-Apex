@@ -7,7 +7,7 @@ const server=fs.readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 const ui=fs.readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
 
 test('v3.9 entry requires context + live ignition + candle quality + configured score',()=>{
-  assert.match(ea,/s\.valid=ctx&&ign&&s\.candleQuality>=50\.0&&s\.score>=threshold;/);
+  assert.match(ea,/s\.valid=ctx&&ign&&s\.candleQuality>=50(?:\.0)?&&s\.score>=threshold;/);
   assert.match(ea,/double threshold=C\.entryScore\+\(C\.learningEnabled\?C\.learnEntryAdj:0\);/);
   assert.doesNotMatch(ea,/CONFIRMED_EXHAUSTION_REVERSAL|SELL_UPSIDE_LIQUIDITY_EXHAUST|BUY_DOWNSIDE_LIQUIDITY_EXHAUST/);
 });
@@ -24,7 +24,7 @@ test('pressure is broker-feed evidence, not a fabricated order-book claim',()=>{
   assert.match(ea,/void CalculatePressure\(/);
   assert.match(ea,/g_tickUp/);
   assert.match(ea,/tick_volume/);
-  assert.match(ea,/price velocity|Current live candle contributes modestly/i);
+  assert.match(ea,/velocity=MathAbs\(live\)\*60\.0/);
   assert.match(ui,/not a centralized institutional order book/i);
 });
 

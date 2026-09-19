@@ -12,6 +12,16 @@ function section(start, end) {
   return s.slice(a, b);
 }
 
+test('v3.9 preserves the complete hardened execution core from v3.8.8', () => {
+  const required = [
+    'string ComputePreflight(', 'double LayerMarginPctFor(', 'LayerSizingPlan PlanLayerSizing(',
+    'SizingDecision ComputeLayerVolume(', 'double RederiveAfterSizeRejection(', 'bool SizingBlockReportDue(',
+    'bool IsSizeOnlyRejection(', 'bool OpenLayer(', 'bool AttemptClosePass(', 'void FinalizeClose(',
+    'void ServiceClosing(', 'void RequestClose(', 'string NewCampaignId(', 'void Start(Snap'
+  ];
+  for (const signature of required) assert.ok(s.includes(signature), `missing preserved execution function: ${signature}`);
+});
+
 test('EA uses the canonical XauCloud infrastructure bridge', () => {
   assert.match(s, /InpCloudURL="https:\/\/xaucloud\.io"/);
   assert.match(s, /\/api\/cloud\/monitor\/heartbeat/);

@@ -617,7 +617,10 @@ function watchingCard(me){
 
   html += '<div class="row"><span class="k">Entry score</span><span class="v">'+(score==null?'—':score.toFixed(0))+' '+(required==null?'':setupGatePill(scoreReady,true,true))+'</span></div>'
     + '<div class="row"><span class="k">Setup family</span><span class="v">'+esc((s.setupFamily||'—').replace(/_/g,' '))+'</span></div>'
-    + '<div class="row"><span class="k">Direction authority</span><span class="v">'+esc(structureLabel(s.directionBias))+' · '+esc(directionTierLabel(s.directionTier))+'</span></div>'
+    + '<div class="row"><span class="k">Final direction</span><span class="v">'+esc(structureLabel(s.directionBias))+' · '+esc(directionTierLabel(s.directionTier))+'</span></div>'
+    + '<div class="row"><span class="k">Slow structure bias</span><span class="v">'+esc(structureLabel(s.structuralBias))+'</span></div>'
+    + '<div class="row"><span class="k">Fresh direction</span><span class="v">'+esc(structureLabel(s.freshDirection))+' · '+esc(directionTierLabel(s.freshDirectionTier))+'</span></div>'
+    + '<div class="row"><span class="k">Fresh M5 / M15 / M30</span><span class="v">'+esc(structureLabel(s.m5Flow))+' / '+esc(structureLabel(s.m15Flow))+' / '+esc(structureLabel(s.m30Flow))+'</span></div>'
     + '<div class="row"><span class="k">M5 structure</span><span class="v">'+esc(structureLabel(s.m5Structure))+'</span></div>'
     + '<div class="row"><span class="k">M15 structure</span><span class="v">'+esc(structureLabel(s.m15Structure))+'</span></div>'
     + '<div class="row"><span class="k">M5 structure break</span><span class="v">'+esc(structureLabel(s.m5Bos))+'</span></div>'
@@ -628,6 +631,7 @@ function watchingCard(me){
     + '<div class="row"><span class="k">Ignition</span><span class="v">'+setupGatePill(!!s.ignition,true,true)+'</span></div>'
     + '<div class="row"><span class="k">Waiting for</span><span class="v">'+esc((s.waitReason||'—').replace(/_/g,' '))+'</span></div>'
     + '<div class="row"><span class="k">Direction reason</span><span class="v">'+esc(s.directionReason||'—')+'</span></div>'
+    + '<div class="row"><span class="k">Fresh-flow reason</span><span class="v">'+esc(s.freshDirectionReason||'—')+'</span></div>'
     + '<div class="row"><span class="k">Trigger</span><span class="v">'+esc(s.triggerKind||'NONE')+'</span></div>'
     + '<div class="row"><span class="k">Setup age</span><span class="v">'+(s.setupAgeSec==null?'—':Math.max(0,Math.round(Number(s.setupAgeSec)))+'s')+'</span></div>'
     + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>';
@@ -635,6 +639,7 @@ function watchingCard(me){
   if (score!=null){
     html += '<div style="margin-top:14px"><h3>Setup evidence</h3>'
       + '<div class="row"><span class="k">Direction score gap</span><span class="v">'+(s.directionScoreGap==null?'—':Number(s.directionScoreGap).toFixed(1))+'</span></div>'
+      + '<div class="row"><span class="k">Fresh flow strength M5 / M15 / M30</span><span class="v">'+(s.m5FlowStrength==null?'—':Number(s.m5FlowStrength).toFixed(0))+' / '+(s.m15FlowStrength==null?'—':Number(s.m15FlowStrength).toFixed(0))+' / '+(s.m30FlowStrength==null?'—':Number(s.m30FlowStrength).toFixed(0))+'</span></div>'
       + '<div class="row"><span class="k">Trend strength</span><span class="v">'+(s.trendStrength==null?'—':Number(s.trendStrength).toFixed(1))+'</span></div>'
       + '<div class="row"><span class="k">Breakout compression</span><span class="v">'+(s.compressionScore==null?'—':Number(s.compressionScore).toFixed(1))+'</span></div>'
       + '<div class="row"><span class="k">Pullback quality</span><span class="v">'+(s.pullbackQuality==null?'—':Number(s.pullbackQuality).toFixed(1))+'</span></div>'
@@ -899,9 +904,9 @@ function pageSettings(me){
 
   html += '<div id="apex-notifications-card"></div>';
 
-  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Breakout + Trend Direction Authority</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
+  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Fresh Direction + Breakout/Trend</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
     + '<div id="advanced-body">'
-    + '<div class="warn-banner"><strong>Apex v3.9.1:</strong> Breakout and Trend Continuation remain the only setup families, but BUY/SELL direction must now agree with confirmed M5/M15 swing structure and structural-break evidence. Conflicted/transition markets wait instead of guessing. Pressure is calculated from your broker tick/candle feed; it is not a centralized institutional order book.</div>'
+    + '<div class="warn-banner"><strong>Apex v3.9.2:</strong> slow swing structure can no longer authorize a trade by itself. Final BUY/SELL permission requires fresh M5/M15/M30 flow plus compatible structure, pressure and ignition. If slow structure and fresh flow disagree, Apex waits; a true reversal needs fresh three-timeframe agreement plus a real M5/M15 structure break. Pressure is a broker tick/candle proxy, not centralized order flow.</div>'
     + '<div class="field-grid">'
     + advField('Entry Score', 'entryScore', adv.entryScore, disabled)
     + advField('Add Score', 'addScore', adv.addScore, disabled)

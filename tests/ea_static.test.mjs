@@ -179,9 +179,9 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
-test('v3.9.1 starts L1 only from direction-aligned breakout/trend ignition', () => {
+test('v3.9.2 starts L1 only from fresh-direction-aligned breakout/trend ignition', () => {
   assert.match(s, /if\(s\.valid\)\s*Start\(s\);/);
-  assert.match(s, /strategy=BREAKOUT_TREND_DIRECTION_AUTHORITY \| entry=live-ignition-v3\.9\.1/);
+  assert.match(s, /strategy=FRESH_DIRECTION_BREAKOUT_TREND \| entry=live-ignition-v3\.9\.2/);
   assert.match(s, /DIRECTION_ALIGNED_SIGNAL_CONFIRMED/);
   assert.doesNotMatch(s, /CONFIRMED_EXHAUSTION_REVERSAL|LIQUIDITY_EXHAUST/);
 });
@@ -212,12 +212,13 @@ test('v3.8.6: uncertain recovered identity blocks new exposure, existing basket 
   assert.match(pre, /CAMPAIGN_CLOSING/);
 });
 
-test('v3.9.1 L2/L3 adds require fresh same-direction evidence and current Direction Authority', () => {
+test('v3.9.2 L2/L3 adds require fresh M5-M30 direction to keep confirming the campaign', () => {
   const add = section('AddCandidate BuildAddCandidate()', '//====================== basket management');
   assert.match(add, /bar<=campStart/);
   assert.match(add, /L2_CONFIRMATION/);
   assert.match(add, /L3_EXPANSION/);
-  assert.match(add, /DIRECTION_AUTHORITY_NO_LONGER_CONFIRMS_CAMPAIGN/);
+  assert.match(add, /FRESH_DIRECTION_NO_LONGER_CONFIRMS_CAMPAIGN/);
+  assert.match(add, /da\.freshDir!=campDir\|\|da\.freshTier<2/);
   assert.match(add, /pressure<pressureMin\|\|pressure-opp<8/);
   assert.match(add, /CONFIRM\|%s\|%I64d/);
   assert.doesNotMatch(add, /REVERSAL/);

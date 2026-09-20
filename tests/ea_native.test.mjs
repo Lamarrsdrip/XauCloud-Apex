@@ -19,26 +19,40 @@ const has=Boolean(!run.skipped);
 const R=run.byName||{};
 const skip=has?false:`no C++ toolchain (${run.skipped})`;
 
-test('DIRECTION-AUTHORITY: aligned bullish M5/M15 permits BUY and forbids SELL',{skip},()=>{
+test('FRESH-DIRECTION: aligned bullish M5/M15/M30 permits BUY and forbids SELL',{skip},()=>{
   const r=R.direction_strong_buy;
-  assert.equal(r.dir,1); assert.ok(r.tier>=2); assert.equal(r.transition,false);
+  assert.equal(r.dir,1); assert.ok(r.tier>=2); assert.equal(r.freshDir,1); assert.ok(r.freshTier>=2); assert.equal(r.transition,false);
   assert.equal(r.m5,1); assert.equal(r.m15,1); assert.equal(r.buyAllowed,true); assert.equal(r.sellAllowed,false);
 });
 
-test('DIRECTION-AUTHORITY: aligned bearish M5/M15 permits SELL and forbids BUY',{skip},()=>{
+test('FRESH-DIRECTION: aligned bearish M5/M15/M30 permits SELL and forbids BUY',{skip},()=>{
   const r=R.direction_strong_sell;
-  assert.equal(r.dir,-1); assert.ok(r.tier>=2); assert.equal(r.transition,false);
+  assert.equal(r.dir,-1); assert.ok(r.tier>=2); assert.equal(r.freshDir,-1); assert.ok(r.freshTier>=2); assert.equal(r.transition,false);
   assert.equal(r.m5,-1); assert.equal(r.m15,-1); assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,true);
 });
 
-test('DIRECTION-AUTHORITY: conflicting M5/M15 structure waits instead of guessing',{skip},()=>{
-  const r=R.direction_conflict_wait;
+test('FRESH-DIRECTION: stale bullish swing structure cannot BUY into unanimous fresh bearish flow',{skip},()=>{
+  const r=R.stale_bull_fresh_bear_wait;
+  assert.equal(r.structDir,1); assert.equal(r.freshDir,-1); assert.ok(r.freshTier>=2);
   assert.equal(r.dir,0); assert.equal(r.transition,true); assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,false);
 });
 
-test('DIRECTION-AUTHORITY: neutral early-breakout exception needs BOS and cannot authorize a trend trade',{skip},()=>{
-  const r=R.direction_neutral_breakout_exception;
-  assert.equal(r.breakoutBuy,true); assert.equal(r.trendBuy,false); assert.equal(r.sell,false);
+test('FRESH-DIRECTION: stale bearish swing structure cannot SELL into unanimous fresh bullish flow',{skip},()=>{
+  const r=R.stale_bear_fresh_bull_wait;
+  assert.equal(r.structDir,-1); assert.equal(r.freshDir,1); assert.ok(r.freshTier>=2);
+  assert.equal(r.dir,0); assert.equal(r.transition,true); assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,false);
+});
+
+test('FRESH-DIRECTION: reversal side is permitted only after fresh consensus plus real BOS',{skip},()=>{
+  const r=R.stale_bull_fresh_bear_bos_sell;
+  assert.equal(r.freshDir,-1); assert.ok(r.freshTier>=3); assert.equal(r.dir,-1); assert.equal(r.transition,false);
+  assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,true); assert.ok(r.m5Bos<0||r.m15Bos<0);
+});
+
+test('FRESH-DIRECTION: M30 disagreement forces WAIT rather than trusting M5/M15 alone',{skip},()=>{
+  const r=R.fresh_m30_conflict_wait;
+  assert.equal(r.freshDir,0); assert.equal(r.dir,0); assert.equal(r.transition,true);
+  assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,false);
 });
 
 test('CAPACITY-TRUTH: a NORMAL L1 15% request is 15% of MONEY, never 15% of SYMBOL_VOLUME_MAX',{skip},()=>{

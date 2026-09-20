@@ -41,7 +41,7 @@ function portMqlArrays(src){
     .replace(/MqlRates m1\[\],m3\[\],m5\[\];/g,'std::vector<MqlRates> m1,m3,m5;')
     .replace(/void LiquidityRefs\(MqlRates &m1\[\],int n/g,'void LiquidityRefs(MqlRates *m1,int n')
     .replace(/LiquidityRefs\(m1,ArraySize\(m1\)/g,'LiquidityRefs(m1.data(),(int)m1.size()')
-    .replace(/MqlRates &(\\w+)\\[\\]/g,'std::vector<MqlRates> &$1');
+    .replace(/MqlRates &(\w+)\[\]/g,'std::vector<MqlRates> &$1');
 }
 
 export function generateExtractedHeader(){

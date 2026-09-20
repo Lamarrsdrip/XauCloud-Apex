@@ -40,7 +40,8 @@ function portMqlArrays(src){
   return src
     .replace(/MqlRates m1\[\],m3\[\],m5\[\];/g,'std::vector<MqlRates> m1,m3,m5;')
     .replace(/void LiquidityRefs\(MqlRates &m1\[\],int n/g,'void LiquidityRefs(MqlRates *m1,int n')
-    .replace(/LiquidityRefs\(m1,ArraySize\(m1\)/g,'LiquidityRefs(m1.data(),(int)m1.size()');
+    .replace(/LiquidityRefs\(m1,ArraySize\(m1\)/g,'LiquidityRefs(m1.data(),(int)m1.size()')
+    .replace(/MqlRates &(\\w+)\\[\\]/g,'std::vector<MqlRates> &$1');
 }
 
 export function generateExtractedHeader(){
@@ -55,7 +56,8 @@ export function generateExtractedHeader(){
     extract(cur,'LayerSizingPlan',{kind:'struct'}),
     extract(cur,'Gate',{kind:'struct'}),
     extract(cur,'Setup',{kind:'struct'}),
-    extract(cur,'Snap',{kind:'struct'})
+    extract(cur,'Snap',{kind:'struct'}),
+    extract(cur,'DirectionAuthority',{kind:'struct'})
   ].join('\n\n');
   const fns=[
     extract(cur,'VolStep'),
@@ -88,6 +90,13 @@ export function generateExtractedHeader(){
     extract(cur,'PlanLayerSizing'),
     extract(cur,'ComputeLayerVolume'),
     extract(cur,'RederiveAfterSizeRejection'),
+    extract(cur,'AverageRange'),
+    extract(cur,'IsConfirmedSwingHigh'),
+    extract(cur,'IsConfirmedSwingLow'),
+    extract(cur,'SwingSequenceDir'),
+    extract(cur,'StructureBreakDir'),
+    extract(cur,'EvaluateDirectionAuthority'),
+    extract(cur,'DirectionPermits'),
     extract(cur,'FinalEntryGate'),
     extract(cur,'IsSizeOnlyRejection'),
     extract(cur,'BodyLooksLikeJsonObject'),

@@ -93,6 +93,42 @@ static void emitGate(const std::string &name,int dir,double invalidLevel,double 
     b(g.reclaimed).c_str(),b(g.triggerStale).c_str(),b(g.quoteStale).c_str(),b(g.extended).c_str()));
 }
 
+static std::vector<MqlRates> bullishStructure(){
+  std::vector<MqlRates> v(24);
+  for(int i=0;i<(int)v.size();i++){
+    double c=110.0-i*0.4;
+    v[i].time=1000000-i*300; v[i].open=c-0.15; v[i].close=c;
+    v[i].high=c+1.0; v[i].low=c-1.0; v[i].tick_volume=100+i;
+  }
+  v[3].high=113.0; v[8].high=110.0;
+  v[5].low=104.0; v[10].low=100.0;
+  return v;
+}
+static std::vector<MqlRates> bearishStructure(){
+  auto bup=bullishStructure(); std::vector<MqlRates> v=bup;
+  for(size_t i=0;i<v.size();i++){
+    double oldOpen=bup[i].open,oldClose=bup[i].close,oldHigh=bup[i].high,oldLow=bup[i].low;
+    v[i].open=220.0-oldOpen; v[i].close=220.0-oldClose;
+    v[i].high=220.0-oldLow; v[i].low=220.0-oldHigh;
+  }
+  return v;
+}
+static void emitDirectionAuthorityScenarios(){
+  auto bull5=bullishStructure(), bull15=bullishStructure(), bear5=bearishStructure(), bear15=bearishStructure();
+  DirectionAuthority buy=EvaluateDirectionAuthority(bull5,bull15,2.0,70.0,30.0);
+  row(StringFormat("{\"test\":\"direction_strong_buy\",\"dir\":%d,\"tier\":%d,\"transition\":%s,\"m5\":%d,\"m15\":%d,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    buy.dir,buy.tier,b(buy.transition).c_str(),buy.m5Seq,buy.m15Seq,b(DirectionPermits(buy,1,false)).c_str(),b(DirectionPermits(buy,-1,false)).c_str()));
+  DirectionAuthority sell=EvaluateDirectionAuthority(bear5,bear15,2.0,30.0,70.0);
+  row(StringFormat("{\"test\":\"direction_strong_sell\",\"dir\":%d,\"tier\":%d,\"transition\":%s,\"m5\":%d,\"m15\":%d,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    sell.dir,sell.tier,b(sell.transition).c_str(),sell.m5Seq,sell.m15Seq,b(DirectionPermits(sell,1,false)).c_str(),b(DirectionPermits(sell,-1,false)).c_str()));
+  DirectionAuthority conflict=EvaluateDirectionAuthority(bull5,bear15,2.0,65.0,35.0);
+  row(StringFormat("{\"test\":\"direction_conflict_wait\",\"dir\":%d,\"tier\":%d,\"transition\":%s,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    conflict.dir,conflict.tier,b(conflict.transition).c_str(),b(DirectionPermits(conflict,1,true)).c_str(),b(DirectionPermits(conflict,-1,true)).c_str()));
+  DirectionAuthority neutral{}; neutral.dir=0; neutral.tier=1; neutral.transition=false; neutral.m5Bos=1; neutral.pressureGap=16.0;
+  row(StringFormat("{\"test\":\"direction_neutral_breakout_exception\",\"breakoutBuy\":%s,\"trendBuy\":%s,\"sell\":%s}",
+    b(DirectionPermits(neutral,1,true)).c_str(),b(DirectionPermits(neutral,1,false)).c_str(),b(DirectionPermits(neutral,-1,true)).c_str()));
+}
+
 //=============== v3.8.8 UnlimitedFromL3 ======================================
 // Everything below drives the REAL extracted PlanLayerSizing / ComputeLayerVolume /
 // ComputeSimulated1200Volume / ComputeVolume / RederiveAfterSizeRejection.
@@ -367,6 +403,8 @@ static void runV388Scenarios(){
 }
 
 int main(){
+  emitDirectionAuthorityScenarios();
+
   // ---------- A: the live Exness incident ----------------------------------
   // Client-side margin model reports ZERO margin for gold (Exness unlimited-leverage
   // style). v3.7.1's SYMBOL_VOLUME_MAX shortcut then returns 200.00 lots for a NORMAL

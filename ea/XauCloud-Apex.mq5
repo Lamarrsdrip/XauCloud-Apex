@@ -2693,11 +2693,14 @@ DirectionAuthority EvaluateDirectionAuthority(MqlRates &m5[],MqlRates &m15[],dou
    if(d.m5Bos>0)d.bullScore+=24;else if(d.m5Bos<0)d.bearScore+=24;
    if(d.m15Bos>0)d.bullScore+=26;else if(d.m15Bos<0)d.bearScore+=26;
    if(d.pressureGap>0)d.bullScore+=MathMin(18.0,d.pressureGap*.60);else d.bearScore+=MathMin(18.0,-d.pressureGap*.60);
-   if(ArraySize(m5)>5)
+   if(ArraySize(m5)>7)
      {
       double m5Range=MathMax(_Point,AverageRange(m5,1,8));
-      double move=(m5[1].close-m5[4].close)/m5Range;
-      if(move>.25)d.bullScore+=MathMin(10.0,move*6.0);else if(move<-.25)d.bearScore+=MathMin(10.0,-move*6.0);
+      double move=(m5[1].close-m5[6].close)/m5Range;
+      // Slope is supporting evidence only. Structure remains authoritative, but the
+      // existing cloud setting still has real meaning rather than becoming a dead knob.
+      if(move>=C.trendSlopeMinAtr)d.bullScore+=MathMin(10.0,move*6.0);
+      else if(move<=-C.trendSlopeMinAtr)d.bearScore+=MathMin(10.0,-move*6.0);
      }
 
    bool seqConflict=d.m5Seq!=0&&d.m15Seq!=0&&d.m5Seq!=d.m15Seq;

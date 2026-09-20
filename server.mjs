@@ -847,6 +847,9 @@ export function projectSetupStatus(events,now=Date.now()){
         trendStrength:numOrNull(e.trendStrength),candleQuality:numOrNull(e.candleQuality),
         compressionScore:numOrNull(e.compressionScore),pullbackQuality:numOrNull(e.pullbackQuality),
         contextOk:e.contextOk===true,ignition:e.ignition===true,liveTrigger:e.liveTrigger===true,
+        directionBias:numOrNull(e.directionBias),directionTier:numOrNull(e.directionTier),
+        m5Structure:numOrNull(e.m5Structure),m15Structure:numOrNull(e.m15Structure),m5Bos:numOrNull(e.m5Bos),m15Bos:numOrNull(e.m15Bos),
+        directionScoreGap:numOrNull(e.directionScoreGap),pressureGap:numOrNull(e.pressureGap),directionReason:String(e.directionReason||''),
         waitReason:String(e.waitReason||''),triggerKind:String(e.triggerKind||e.bosKind||'NONE'),
         breakoutLevel:numOrNull(e.breakoutLevel),invalidationLevel:numOrNull(e.invalidationLevel??e.extreme),
         triggerPrice:numOrNull(e.triggerPrice),triggerBarTime:numOrNull(e.triggerBarTime),
@@ -859,7 +862,10 @@ export function projectSetupStatus(events,now=Date.now()){
         state:'CONFIRMED',active:true,updatedAt:eventTs,setupFamily:String(e.setupFamily||s?.setupFamily||'UNKNOWN'),
         regime:String(e.regime||s?.regime||'UNKNOWN'),score:numOrNull(e.score)??s?.score??null,
         requiredScore:numOrNull(e.requiredScore)??s?.requiredScore??null,activePressure:numOrNull(e.activePressure)??s?.activePressure??null,
-        candleQuality:numOrNull(e.candleQuality)??s?.candleQuality??null,waitReason:'READY',triggerKind:String(e.triggerKind||s?.triggerKind||'NONE')};
+        candleQuality:numOrNull(e.candleQuality)??s?.candleQuality??null,
+        directionTier:numOrNull(e.directionTier)??s?.directionTier??null,m5Structure:numOrNull(e.m5Structure)??s?.m5Structure??null,
+        m15Structure:numOrNull(e.m15Structure)??s?.m15Structure??null,pressureGap:numOrNull(e.pressureGap)??s?.pressureGap??null,
+        directionReason:String(e.directionReason||s?.directionReason||''),waitReason:'READY',triggerKind:String(e.triggerKind||s?.triggerKind||'NONE')};
       continue;
     }
     if(['SETUP_EXPIRED','SETUP_INVALIDATED','SETUP_CANCELLED','SETUP_CONSUMED'].includes(e.type)){
@@ -1099,8 +1105,8 @@ function settingsView(c){return {
   ratchetStepPct:c.ratchetStepPct,ratchetLockStepPct:c.ratchetLockStepPct,masterBreakEvenEnabled:c.masterBreakEvenEnabled,
   masterBreakEvenTriggerPct:c.masterBreakEvenTriggerPct,recoveryExitEnabled:c.recoveryExitEnabled,recoveryExitArmPctOfSL:c.recoveryExitArmPctOfSL,
   maxBasketLots:c.maxBasketLots,minMarginLevelPct:c.minMarginLevelPct,marginReservePct:c.marginReservePct,
-  unlimitedSizingNote:'L1 '+c.normalL1MarginPct+'%, L2 '+c.normalL2MarginPct+'%, L3+ '+c.normalL3PlusMarginPct+'%. v3.9 changed setup recognition only; the existing margin ladder and broker-capacity engine are preserved.',
-  advanced:{strategy:'BREAKOUT_TREND',entryScore:c.entryScore,addScore:c.addScore,watchExpiryMinutes:c.watchExpiryMinutes,
+  unlimitedSizingNote:'L1 '+c.normalL1MarginPct+'%, L2 '+c.normalL2MarginPct+'%, L3+ '+c.normalL3PlusMarginPct+'%. v3.9.1 changes signal direction/recognition only; the existing margin ladder and broker-capacity engine are preserved.',
+  advanced:{strategy:'BREAKOUT_TREND_DIRECTION_AUTHORITY',entryScore:c.entryScore,addScore:c.addScore,watchExpiryMinutes:c.watchExpiryMinutes,
     addSpacingAtr:c.addSpacingAtr,breakoutLookbackBars:c.breakoutLookbackBars,breakoutMinTouches:c.breakoutMinTouches,
     breakoutBufferAtr:c.breakoutBufferAtr,breakoutArmDistanceAtr:c.breakoutArmDistanceAtr,breakoutMaxExtensionAtr:c.breakoutMaxExtensionAtr,
     breakoutPressureMin:c.breakoutPressureMin,trendPressureMin:c.trendPressureMin,trendSlopeMinAtr:c.trendSlopeMinAtr,
@@ -1214,7 +1220,7 @@ async function buildMe(key){
     effectiveConfig:{
       eaVersion:hb?.ea_version||lic.eaVersion||null,
       buildId:hb?.build_id||lic.buildId||null,
-      strategy:'BREAKOUT_TREND',
+      strategy:'BREAKOUT_TREND_DIRECTION_AUTHORITY',
       expectedEaVersion:MANIFEST.eaVersion,
       configSource:remote?'XAUCLOUD_BRIDGE':'REMOTE/CACHED_LOCAL',
       appliedRevision:appliedRevision||null,appliedConfigHash:appliedHash||null,

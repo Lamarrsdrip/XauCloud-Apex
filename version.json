@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.9.0",
-  "buildId": "3.9.0-breakout-trend",
-  "eaVersion": "XauCloud-Apex_v3.9.0-BreakoutTrend",
+  "version": "3.9.1",
+  "buildId": "3.9.1-direction-authority",
+  "eaVersion": "XauCloud-Apex_v3.9.1-DirectionAuthority",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.9.0-BreakoutTrend.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.9.1-DirectionAuthority.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.9.0 changes the setup/signal engine only: Apex now trades BREAKOUT and TREND_CONTINUATION opportunities using multi-timeframe structure, live M1 ignition, broker tick/candle pressure, candle quality, compression/pullback context and staged confirmation. Existing v3.8.8 execution, cloud resilience, broker preflight, basket management, protection and L1/L2/L3 sizing remain in place. L1=15%, L2=50%, L3+=100% according to the existing profile sizing engine. Compile ea/XauCloud-Apex.mq5."
+  "notes": "v3.9.1 adds a tactical Direction Authority above the Breakout + Trend engine. BUY/SELL now requires confirmed M5/M15 swing structure, structural-break and pressure agreement; transition/conflict states wait instead of guessing. Breakouts use structural M5/M15 barriers instead of raw M1 extremes, trend pullbacks must remain corrective and preserve M5 structure, stale setups are invalidated when direction flips, and L2/L3 require the current direction authority to still confirm the campaign. Existing v3.8.8 execution, sizing, cloud resilience and basket protection remain unchanged. Compile ea/XauCloud-Apex.mq5."
 }

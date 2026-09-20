@@ -69,8 +69,8 @@ test('SETUP-TELEMETRY: a newer setup supersedes the older terminal setup',()=>{
 test('SETUP-TELEMETRY: canonical and versioned v3.9 sources remain byte-identical',async()=>{
   const root=new URL('../',import.meta.url);
   const canonical=await fs.readFile(new URL('ea/XauCloud-Apex.mq5',root),'utf8');
-  const versioned=await fs.readFile(new URL('ea/XauCloud-Apex-v3.9.0-BreakoutTrend.mq5',root),'utf8');
+  const versioned=await fs.readFile(new URL('ea/XauCloud-Apex-v3.9.1-DirectionAuthority.mq5',root),'utf8');
   assert.equal(canonical,versioned);
-  assert.match(canonical,/BREAKOUT_TREND_SIGNAL_CONFIRMED/);
+  assert.match(canonical,/DIRECTION_ALIGNED_SIGNAL_CONFIRMED/);
   assert.match(canonical,/void OnTick\(\)\{UpdateTickPressure\(\);ServiceEntryScan\(\);\}/);
 });

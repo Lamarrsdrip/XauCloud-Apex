@@ -904,9 +904,9 @@ function pageSettings(me){
 
   html += '<div id="apex-notifications-card"></div>';
 
-  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Fresh Direction + Breakout/Trend</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
+  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Confirmed Direction + Breakout/Trend</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
     + '<div id="advanced-body">'
-    + '<div class="warn-banner"><strong>Apex v3.9.2:</strong> slow swing structure can no longer authorize a trade by itself. Final BUY/SELL permission requires fresh M5/M15/M30 flow plus compatible structure, pressure and ignition. If slow structure and fresh flow disagree, Apex waits; a true reversal needs fresh three-timeframe agreement plus a real M5/M15 structure break. Pressure is a broker tick/candle proxy, not a centralized institutional order book.</div>'
+    + '<div class="warn-banner"><strong>Apex v3.9.2:</strong> Apex no longer trades a forming M1 candle. A setup is detected first, then Apex waits for a NEW fully closed M1 confirmation candle and rechecks M5/M15/M30 direction, structure, pressure and candle quality before L1. If those no longer agree, it waits instead of entering. Pressure is a broker tick/candle proxy, not a centralized institutional order book.</div>'
     + '<div class="field-grid">'
     + advField('Entry Score', 'entryScore', adv.entryScore, disabled)
     + advField('Add Score', 'addScore', adv.addScore, disabled)

@@ -13,16 +13,16 @@ test('the canonical and versioned EA files are byte-identical',()=>{
   const canonical=fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5',import.meta.url));
   const versioned=fs.readFileSync(new URL('../'+version.versionedEaFile,import.meta.url));
   assert.equal(version.eaFile,'ea/XauCloud-Apex.mq5');
-  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.9.1-DirectionAuthority.mq5');
+  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.9.2-FreshDirection.mq5');
   assert.equal(sha(canonical),sha(versioned),
     `${version.eaFile} and ${version.versionedEaFile} must be identical`);
 });
 
 test('version.json, the EA banner and #property version all agree',()=>{
-  assert.equal(version.version,'3.9.1');
+  assert.equal(version.version,'3.9.2');
   assert.ok(ea.includes(version.eaVersion),'EA must define the version.json eaVersion string');
   const prop=ea.match(/#property version\s+"([\d.]+)"/)?.[1];
-  assert.equal(prop,'3.910');
+  assert.equal(prop,'3.920');
 });
 function floorStep(v,step=0.01){return Math.floor((v+1e-12)/step)*step;}
 function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0.01}){
@@ -33,9 +33,9 @@ function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0
   return Math.min(byCapacity,byMoney);
 }
 
-test('canonical EA is v3.9.1 DirectionAuthority with hardened capacity execution intact',()=>{
-  assert.ok(ea.includes('#property version   "3.910"'));
-  assert.ok(ea.includes('XauCloud-Apex_v3.9.1-DirectionAuthority'));
+test('canonical EA is v3.9.2 FreshDirection with hardened capacity execution intact',()=>{
+  assert.ok(ea.includes('#property version   "3.920"'));
+  assert.ok(ea.includes('XauCloud-Apex_v3.9.2-FreshDirection'));
   assert.match(ea,/if\(s\.valid\)\s*Start\(s\);/);
   assert.doesNotMatch(ea,/if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.match(ea,/TrustedMarginPerLot/);

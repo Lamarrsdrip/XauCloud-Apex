@@ -12,8 +12,8 @@ function section(start,end){
   return ea.slice(a,b);
 }
 
-test('v3.9.2 separates slow structure from fresh M5/M15/M30 flow',()=>{
-  assert.match(ea,/XauCloud-Apex_v3\.9\.2-FreshDirection/);
+test('v3.9.3 keeps slow structure separate from fresh M5/M15/M30 flow',()=>{
+  assert.match(ea,/XauCloud-Apex_v3\.9\.3-ConfirmedDirection/);
   assert.match(ea,/PERIOD_M30/);
   const fresh=section('int FreshFlowDir','void ResolveFreshConsensus');
   for(const x of ['ClosedEMA(r,8,1)','ClosedEMA(r,21,1)','move4','move8','bullPts','bearPts']) assert.ok(fresh.includes(x),x);
@@ -56,7 +56,7 @@ test('breakouts remain anchored to structural M5/M15 barriers, not raw M1 extrem
 });
 
 test('trend continuation still requires corrective pullback with intact M5 structure',()=>{
-  const fn=section('bool ProfessionalTrendPullback','bool IgnitionPattern');
+  const fn=section('bool ProfessionalTrendPullback','bool ClosedConfirmationPattern');
   assert.match(fn,/if\(d\.dir!=dir\|\|d\.tier<2\|\|d\.transition\)return false/);
   assert.match(fn,/if\(opposing<2\)return false/);
   assert.match(fn,/avgOpp>atr\*\.45/);
@@ -64,12 +64,20 @@ test('trend continuation still requires corrective pullback with intact M5 struc
   assert.match(fn,/structHigh/);
 });
 
-test('live ignition rejects wick spikes and requires pressure dominance',()=>{
-  const fn=section('bool IgnitionPattern','string SetupWaitReason');
-  assert.match(fn,/if\(age<4\)return false/);
-  assert.match(fn,/badWick>\.32/);
-  assert.match(fn,/activePressure-oppositePressure<8\.0/);
-  assert.match(fn,/quality>=58/);
+test('closed confirmation ignores forming M1 and requires pressure dominance',()=>{
+  const fn=section('bool ClosedConfirmationPattern','bool BreakoutClosedConfirmed');
+  assert.match(fn,/MqlRates c=m1\[1\]/);
+  assert.doesNotMatch(fn,/m1\[0\]/);
+  assert.match(fn,/badWick>\.30/);
+  assert.match(fn,/activePressure-oppositePressure<10\.0/);
+  assert.match(fn,/quality>=60/);
+});
+
+test('setup must arm before a newer closed M1 can confirm entry',()=>{
+  const obs=section('Snap Observe()','double ScoreFloorGivenMandatory');
+  assert.match(obs,/Entry is impossible on the same candle that creates the setup/);
+  assert.match(obs,/newClosedBar=m1\[1\]\.time>S\.sweepBarTime/);
+  assert.match(obs,/CLOSED_SETUP_CONFIRMATION_READY/);
 });
 
 test('an armed setup is invalidated by a fresh opposite direction',()=>{
@@ -102,7 +110,7 @@ test('dashboard receives slow and fresh direction evidence from the same EA tele
     assert.ok(ea.includes(field),`EA missing ${field}`);
     assert.ok(server.includes(field),`server missing ${field}`);
   }
-  assert.match(server,/FRESH_DIRECTION_BREAKOUT_TREND/);
+  assert.match(server,/CONFIRMED_DIRECTION_BREAKOUT_TREND/);
   assert.match(ui,/Fresh M5 \/ M15 \/ M30/);
   assert.match(ui,/Slow structure bias/);
   assert.match(ui,/Fresh-flow reason/);

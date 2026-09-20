@@ -257,7 +257,7 @@ struct ApexConfig { std::string accountProfile="NORMAL";
                     long normalReferenceLeverage=0;
                     double entryScore=76, addScore=70, impulseAtr=1.8, sweepAtr=0.05,
                            addSpacingAtr=0.22, rejectionZoneAtr=0.12, learnEntryAdj=0, learnAddAdj=0,
-                           trendSlopeMinAtr=0.75;
+                           trendSlopeMinAtr=0.75, ignitionBodyAtr=0.18, ignitionCloseLocation=0.68;
                     int rejectionBars=5, watchExpiryMinutes=12;
                     bool requireM3Confirm=false, requireM5Context=false, learningEnabled=false; };
 extern ApexConfig C;

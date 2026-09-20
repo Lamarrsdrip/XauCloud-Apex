@@ -550,6 +550,15 @@ function campaignSummaryCard(camp, cur, showLayers){
   return html;
 }
 
+function structureLabel(v){
+  var n=Number(v||0);
+  return n>0?'BULLISH':n<0?'BEARISH':'NEUTRAL';
+}
+function directionTierLabel(v){
+  var n=Number(v||0);
+  return n>=3?'STRONG':n===2?'CONFIRMED':n===1?'WEAK':'WAIT';
+}
+
 function setupGatePill(ok, required, available){
   if (available===false && required) return pill('UNAVAILABLE','red');
   if (!required) return pill(ok?'PASS':'OPTIONAL',ok?'green':'gray');
@@ -575,7 +584,7 @@ function watchingCard(me){
     var terminalText = s.state==='EXPIRED'
       ? 'The setup did not complete before the configured watch timeout. Apex discarded it and resumed scanning.'
       : s.state==='INVALIDATED'
-      ? 'Price printed a new extreme beyond the swept level, invalidating the rejection thesis. Apex resumed scanning.'
+      ? 'The setup thesis was invalidated by price structure or the Direction Authority changed. Apex resumed scanning.'
       : s.state==='CONSUMED'
       ? 'This setup was consumed by a campaign. Apex will scan again whenever it is idle.'
       : 'Apex cancelled this setup and resumed scanning.';
@@ -607,24 +616,28 @@ function watchingCard(me){
   }
 
   html += '<div class="row"><span class="k">Entry score</span><span class="v">'+(score==null?'—':score.toFixed(0))+' '+(required==null?'':setupGatePill(scoreReady,true,true))+'</span></div>'
-    + '<div class="row"><span class="k">Rejection</span><span class="v">'+setupGatePill(!!s.rejected,true,true)+'</span></div>'
-    + '<div class="row"><span class="k">Micro BOS</span><span class="v">'+setupGatePill(!!s.microBreak,true,true)+'</span></div>'
-    + '<div class="row"><span class="k">M3 confirmation</span><span class="v">'+setupGatePill(!!s.m3Gate,!!s.requireM3,s.m3Available!==false)+'</span></div>'
-    + '<div class="row"><span class="k">M5 context</span><span class="v">'+setupGatePill(!!s.m5Gate,!!s.requireM5,s.m5Available!==false)+'</span></div>'
+    + '<div class="row"><span class="k">Setup family</span><span class="v">'+esc((s.setupFamily||'—').replace(/_/g,' '))+'</span></div>'
+    + '<div class="row"><span class="k">Direction authority</span><span class="v">'+esc(structureLabel(s.directionBias))+' · '+esc(directionTierLabel(s.directionTier))+'</span></div>'
+    + '<div class="row"><span class="k">M5 structure</span><span class="v">'+esc(structureLabel(s.m5Structure))+'</span></div>'
+    + '<div class="row"><span class="k">M15 structure</span><span class="v">'+esc(structureLabel(s.m15Structure))+'</span></div>'
+    + '<div class="row"><span class="k">M5 structure break</span><span class="v">'+esc(structureLabel(s.m5Bos))+'</span></div>'
+    + '<div class="row"><span class="k">M15 structure break</span><span class="v">'+esc(structureLabel(s.m15Bos))+'</span></div>'
+    + '<div class="row"><span class="k">Buy / Sell pressure</span><span class="v">'+(s.buyPressure==null?'—':Number(s.buyPressure).toFixed(0))+' / '+(s.sellPressure==null?'—':Number(s.sellPressure).toFixed(0))+'</span></div>'
+    + '<div class="row"><span class="k">Pressure gap</span><span class="v">'+(s.pressureGap==null?'—':Number(s.pressureGap).toFixed(1))+'</span></div>'
+    + '<div class="row"><span class="k">Candle quality</span><span class="v">'+(s.candleQuality==null?'—':Number(s.candleQuality).toFixed(0))+'</span></div>'
+    + '<div class="row"><span class="k">Ignition</span><span class="v">'+setupGatePill(!!s.ignition,true,true)+'</span></div>'
     + '<div class="row"><span class="k">Waiting for</span><span class="v">'+esc((s.waitReason||'—').replace(/_/g,' '))+'</span></div>'
-    + '<div class="row"><span class="k">BOS type</span><span class="v">'+esc(s.bosKind||'NONE')+'</span></div>'
+    + '<div class="row"><span class="k">Direction reason</span><span class="v">'+esc(s.directionReason||'—')+'</span></div>'
+    + '<div class="row"><span class="k">Trigger</span><span class="v">'+esc(s.triggerKind||'NONE')+'</span></div>'
     + '<div class="row"><span class="k">Setup age</span><span class="v">'+(s.setupAgeSec==null?'—':Math.max(0,Math.round(Number(s.setupAgeSec)))+'s')+'</span></div>'
     + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>';
 
   if (score!=null){
-    html += '<div style="margin-top:14px"><h3>Score components</h3>'
-      + '<div class="row"><span class="k">Base</span><span class="v">+'+Number(s.basePoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Impulse</span><span class="v">+'+Number(s.impulsePoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Rejection</span><span class="v">+'+Number(s.rejectionPoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Micro BOS</span><span class="v">+'+Number(s.bosPoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">M3</span><span class="v">+'+Number(s.m3Points||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">M5</span><span class="v">+'+Number(s.m5Points||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Wick quality</span><span class="v">+'+Number(s.wickPoints||0).toFixed(1)+'</span></div>'
+    html += '<div style="margin-top:14px"><h3>Setup evidence</h3>'
+      + '<div class="row"><span class="k">Direction score gap</span><span class="v">'+(s.directionScoreGap==null?'—':Number(s.directionScoreGap).toFixed(1))+'</span></div>'
+      + '<div class="row"><span class="k">Trend strength</span><span class="v">'+(s.trendStrength==null?'—':Number(s.trendStrength).toFixed(1))+'</span></div>'
+      + '<div class="row"><span class="k">Breakout compression</span><span class="v">'+(s.compressionScore==null?'—':Number(s.compressionScore).toFixed(1))+'</span></div>'
+      + '<div class="row"><span class="k">Pullback quality</span><span class="v">'+(s.pullbackQuality==null?'—':Number(s.pullbackQuality).toFixed(1))+'</span></div>'
       + '</div>';
   }
 

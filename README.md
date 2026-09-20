@@ -1,5 +1,7 @@
 # XauCloud Apex v3.8.6 — HardenedCapacity
 
+> **Current strategy reference:** the protected v3.8.8 baseline and the seven-video Breakfast Setup analysis are documented in [docs/REFERENCE_TRADER_BREAKFAST_SETUP.md](docs/REFERENCE_TRADER_BREAKFAST_SETUP.md). Future strategy work must read that playbook before modifying setup/confirmation logic.
+
 **Main bot:** `ea/XauCloud-Apex.mq5`  
 **Identity:** `XauCloud-Apex_v3.8.6-HardenedCapacity`  
 **Compile that file.** The Expert name in MT5 is `XauCloud-Apex`.

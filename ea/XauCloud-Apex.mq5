@@ -2910,25 +2910,14 @@ Snap Observe()
    bool upCtx=StructuralBreakoutContext(m1,m5,m15,1,s.atr,tk.ask,upLevel,upTouches,upComp,upExt);
    bool dnCtx=StructuralBreakoutContext(m1,m5,m15,-1,s.atr,tk.bid,dnLevel,dnTouches,dnComp,dnExt);
    bool upAllowed=DirectionPermits(da,1,true),dnAllowed=DirectionPermits(da,-1,true);
-   double upCQ=0,dnCQ=0;string upKind="NONE",dnKind="NONE";
-   bool upIgn=upCtx&&upAllowed&&tk.ask>=upLevel+C.breakoutBufferAtr*s.atr&&IgnitionPattern(m1,1,s.atr,s.buyPressure,s.sellPressure,C.breakoutPressureMin,upCQ,upKind);
-   bool dnIgn=dnCtx&&dnAllowed&&tk.bid<=dnLevel-C.breakoutBufferAtr*s.atr&&IgnitionPattern(m1,-1,s.atr,s.sellPressure,s.buyPressure,C.breakoutPressureMin,dnCQ,dnKind);
-
    int trendDir=(da.tier>=2&&!da.transition)?da.dir:0;double trendInvalid=0,pbQ=0;
    bool trendCtx=trendDir!=0&&ProfessionalTrendPullback(m1,m5,trendDir,s.atr,da,trendInvalid,pbQ);
-   double trendCQ=0;string trendKind="NONE";double trendPressure=trendDir>0?s.buyPressure:s.sellPressure,trendOpp=trendDir>0?s.sellPressure:s.buyPressure;
-   bool trendIgn=trendCtx&&IgnitionPattern(m1,trendDir,s.atr,trendPressure,trendOpp,C.trendPressureMin,trendCQ,trendKind);
 
    if(S.state==SETUP_NONE)
      {
-      if(upIgn||dnIgn)
-        {
-         int d=upIgn?1:-1;double level=d>0?upLevel:dnLevel,comp=d>0?upComp:dnComp;
-         double inv=d>0?level-.20*s.atr:level+.20*s.atr;ArmSetup(d,m1[1].time,inv,level,s.atr,comp,d>0?"BREAKOUT_UP":"BREAKOUT_DOWN","BREAKOUT");
-        }
-      else if(trendCtx&&trendIgn)
-         ArmSetup(trendDir,m1[1].time,trendInvalid,m1[1].close,s.atr,MathAbs(da.scoreGap),trendDir>0?"TREND_UP_CONTINUATION":"TREND_DOWN_CONTINUATION","TREND_CONTINUATION");
-      else if((upCtx&&upAllowed)||(dnCtx&&dnAllowed))
+      // Detection only. Entry is impossible on the same candle that creates the setup.
+      // Apex arms first, then waits for a NEW fully closed M1 confirmation bar.
+      if((upCtx&&upAllowed)||(dnCtx&&dnAllowed))
         {
          int d=(upCtx&&upAllowed)?1:-1;double level=d>0?upLevel:dnLevel,comp=d>0?upComp:dnComp;
          double inv=d>0?level-.20*s.atr:level+.20*s.atr;ArmSetup(d,m1[1].time,inv,level,s.atr,comp,d>0?"BREAKOUT_UP":"BREAKOUT_DOWN","BREAKOUT");
@@ -2949,25 +2938,27 @@ Snap Observe()
       EmitSetupTelemetry(s,threshold);return s;
      }
 
-   double cq=0;string kind="NONE";bool ctx=false,ign=false;
+   double cq=0;string kind="NONE";bool ctx=false,confirmed=false;
+   bool newClosedBar=m1[1].time>S.sweepBarTime;
    if(s.setupFamily=="BREAKOUT")
      {
       double level=0,comp=0,ext=0;int touches=0;ctx=StructuralBreakoutContext(m1,m5,m15,S.dir,s.atr,s.price,level,touches,comp,ext)&&DirectionPermits(da,S.dir,true);
-      bool broke=S.dir>0?(tk.ask>=S.prior+C.breakoutBufferAtr*s.atr):(tk.bid<=S.prior-C.breakoutBufferAtr*s.atr);
-      double opp=S.dir>0?s.sellPressure:s.buyPressure;ign=ctx&&broke&&IgnitionPattern(m1,S.dir,s.atr,s.activePressure,opp,C.breakoutPressureMin,cq,kind);
+      double opp=S.dir>0?s.sellPressure:s.buyPressure;
+      bool closedBreak=newClosedBar&&BreakoutClosedConfirmed(m1,S.dir,S.prior,s.atr,C.breakoutBufferAtr);
+      confirmed=ctx&&closedBreak&&ClosedConfirmationPattern(m1,S.dir,s.atr,s.activePressure,opp,C.breakoutPressureMin,cq,kind);
       s.breakoutLevel=S.prior;s.compressionScore=comp;
-      s.score=clamp(8+s.activePressure*.18+cq*.20+comp*.08+MathMin(8.0,(double)touches*2.0)+MathMin(18.0,MathAbs(da.scoreGap)*.28)+MathMin(14.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.14)+(broke?10:0),0,100);
+      s.score=clamp(8+s.activePressure*.18+cq*.20+comp*.08+MathMin(8.0,(double)touches*2.0)+MathMin(18.0,MathAbs(da.scoreGap)*.28)+MathMin(14.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.14)+(closedBreak?10:0),0,100);
      }
    else
      {
       double inv=0,pq=0;ctx=ProfessionalTrendPullback(m1,m5,S.dir,s.atr,da,inv,pq);double opp=S.dir>0?s.sellPressure:s.buyPressure;
-      ign=ctx&&IgnitionPattern(m1,S.dir,s.atr,s.activePressure,opp,C.trendPressureMin,cq,kind);s.pullbackQuality=pq;
+      confirmed=newClosedBar&&ctx&&ClosedConfirmationPattern(m1,S.dir,s.atr,s.activePressure,opp,C.trendPressureMin,cq,kind);s.pullbackQuality=pq;
       s.score=0;
      }
    if(s.setupFamily=="TREND_CONTINUATION")
-      s.score=clamp(8+s.activePressure*.18+cq*.20+MathMin(20.0,MathAbs(da.scoreGap)*.30)+MathMin(16.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.16)+s.pullbackQuality*.14+(ign?10:0),0,100);
-   s.contextOk=ctx;s.ignition=ign;s.liveTrigger=ign;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;s.rejected=ctx;s.microBreak=ign;s.continuation=s.setupFamily=="TREND_CONTINUATION";
-   s.valid=ctx&&ign&&stillAllowed&&s.candleQuality>=58&&s.score>=threshold;s.reason=s.valid?"DIRECTION_ALIGNED_SIGNAL_CONFIRMED":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
+      s.score=clamp(8+s.activePressure*.18+cq*.20+MathMin(20.0,MathAbs(da.scoreGap)*.30)+MathMin(16.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.16)+s.pullbackQuality*.14+(confirmed?10:0),0,100);
+   s.contextOk=ctx;s.ignition=confirmed;s.liveTrigger=false;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;s.rejected=ctx;s.microBreak=confirmed;s.continuation=s.setupFamily=="TREND_CONTINUATION";
+   s.valid=ctx&&confirmed&&newClosedBar&&stillAllowed&&s.candleQuality>=60&&s.score>=threshold;s.reason=s.valid?"CLOSED_SETUP_CONFIRMATION_READY":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
    if(fresh){S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=kind;}EmitSetupTelemetry(s,threshold);
    if(fresh)Emit("SETUP_CONFIRMED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"setupFamily\":\"%s\",\"regime\":\"%s\",\"score\":%.2f,\"requiredScore\":%.2f,\"directionTier\":%d,\"structuralBias\":%d,\"freshDirection\":%d,\"freshDirectionTier\":%d,\"m5Flow\":%d,\"m15Flow\":%d,\"m30Flow\":%d,\"m5Structure\":%d,\"m15Structure\":%d,\"pressureGap\":%.2f,\"directionReason\":\"%s\",\"freshDirectionReason\":\"%s\",\"triggerKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d",S.id,S.dir,s.setupFamily,s.regime,s.score,threshold,s.directionTier,s.structuralBias,s.freshDirection,s.freshDirectionTier,s.m5Flow,s.m15Flow,s.m30Flow,s.m5Structure,s.m15Structure,s.pressureGap,s.directionReason,s.freshDirectionReason,kind,s.triggerPrice,(long)s.triggerBarTime));
    return s;
@@ -3711,7 +3702,7 @@ void Start(Snap &s)
    // APEX-AUDIT-002/008: submit FIRST, then report. v3.7.1 emitted CAMPAIGN_START (a
    // blocking WebRequest) before the order existed, and reported a campaign that the
    // broker might have rejected.
-   if(!OpenLayer(campDir,s.score,s.setupFamily+"_L1_IGNITION",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
+   if(!OpenLayer(campDir,s.score,s.setupFamily+"_L1_CLOSED_CONFIRMATION",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
      {
       if(g_pending.active)
         {
@@ -4100,7 +4091,7 @@ int OnInit()
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | strategy=FRESH_DIRECTION_BREAKOUT_TREND | entry=live-ignition-v3.9.2");
+      " | strategy=CONFIRMED_DIRECTION_BREAKOUT_TREND | entry=closed-confirmation-v3.9.3");
    return INIT_SUCCEEDED;
   }
 

@@ -4,7 +4,7 @@
 //|  EXECUTION BASE = v3.8.8. Basket handling, sizing, cloud link,     |
 //|  recovery, ratchet, SL/BE, broker preflight and restart hardening  |
 //|  are preserved. v3.9.x replaces ONLY the opportunity engine with  |
-//|  BREAKOUT + TREND CONTINUATION analysis and early ignition entry.  |
+//|  BREAKOUT + TREND CONTINUATION with closed-bar confirmation entry. |
 //|                                                                   |
 //|  Existing v3.8.8 sizing remains unchanged:                         |
 //|    L1  = 15% of SIMULATED 1:200 capacity                          |

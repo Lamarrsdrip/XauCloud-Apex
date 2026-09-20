@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.9.2",
-  "buildId": "3.9.2-fresh-direction",
-  "eaVersion": "XauCloud-Apex_v3.9.2-FreshDirection",
+  "version": "3.9.3",
+  "buildId": "3.9.3-confirmed-direction",
+  "eaVersion": "XauCloud-Apex_v3.9.3-ConfirmedDirection",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.9.2-FreshDirection.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.9.3-ConfirmedDirection.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "v3.9.2 adds a Fresh Direction authority to prevent slow HH/HL or LH/LL structure from authorizing trades after the current M5/M15/M30 flow has already reversed. Final BUY/SELL permission requires fresh multi-timeframe flow, pressure and structure compatibility; stale slow-vs-fresh conflicts wait, while a reversal needs fresh 3-timeframe agreement plus a real M5/M15 structure break. A direction contract blocks any mismatch between signal, setup, campaign and execution side. Existing v3.8.8 execution, sizing, cloud resilience and basket protection remain preserved. Compile ea/XauCloud-Apex.mq5."
+  "notes": "v3.9.3 ConfirmedDirection keeps v3.9.2 Fresh Direction but removes forming-candle entry. Apex detects and arms a setup first, then requires a NEW fully closed M1 confirmation bar. At confirmation time it rechecks M5/M15/M30 fresh direction, M5/M15 structure, pressure, candle quality and the direction contract before L1. Breakouts need a fresh closed break or retest-hold beyond the structural level. Existing v3.8.8 execution, sizing, cloud resilience and basket protection remain preserved. Compile ea/XauCloud-Apex.mq5."
 }

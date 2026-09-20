@@ -2683,10 +2683,12 @@ DirectionAuthority EvaluateDirectionAuthority(MqlRates &m5[],MqlRates &m15[],dou
    d.bullScore=0;d.bearScore=0;d.scoreGap=0;d.pressureGap=buyPressure-sellPressure;d.reason="NO_DIRECTION_EDGE";
    d.m5SwingHigh=d.m5SwingLow=d.m15SwingHigh=d.m15SwingLow=0;
    double oH=0,oL=0;string w5="",w15="";
-   d.m5Seq=SwingSequenceDir(m5,38,atr,d.m5SwingHigh,oH,d.m5SwingLow,oL,w5);
-   d.m15Seq=SwingSequenceDir(m15,30,atr,d.m15SwingHigh,oH,d.m15SwingLow,oL,w15);
-   d.m5Bos=StructureBreakDir(m5,d.m5SwingHigh,d.m5SwingLow,atr);
-   d.m15Bos=StructureBreakDir(m15,d.m15SwingHigh,d.m15SwingLow,atr);
+   double atr5=MathMax(_Point,AverageRange(m5,1,14));
+   double atr15=MathMax(_Point,AverageRange(m15,1,14));
+   d.m5Seq=SwingSequenceDir(m5,38,atr5,d.m5SwingHigh,oH,d.m5SwingLow,oL,w5);
+   d.m15Seq=SwingSequenceDir(m15,30,atr15,d.m15SwingHigh,oH,d.m15SwingLow,oL,w15);
+   d.m5Bos=StructureBreakDir(m5,d.m5SwingHigh,d.m5SwingLow,atr5);
+   d.m15Bos=StructureBreakDir(m15,d.m15SwingHigh,d.m15SwingLow,atr15);
 
    if(d.m5Seq>0)d.bullScore+=28;else if(d.m5Seq<0)d.bearScore+=28;
    if(d.m15Seq>0)d.bullScore+=32;else if(d.m15Seq<0)d.bearScore+=32;
@@ -2736,8 +2738,10 @@ bool DirectionPermits(const DirectionAuthority &d,int dir,bool breakout)
 bool StructuralBreakoutContext(MqlRates &m1[],MqlRates &m5[],MqlRates &m15[],int dir,double atr,double price,double &level,int &touches,double &compression,double &extensionAtr)
   {
    if(ArraySize(m1)<24||ArraySize(m5)<16||ArraySize(m15)<12||atr<=0)return false;
-   double rh=0,oh=0,rl=0,ol=0;string why="";SwingSequenceDir(m5,38,atr,rh,oh,rl,ol,why);
-   double h15=0,l15=0;SwingSequenceDir(m15,30,atr,h15,oh,l15,ol,why);
+   double rh=0,oh=0,rl=0,ol=0;string why="";
+   double atr5=MathMax(_Point,AverageRange(m5,1,14)),atr15=MathMax(_Point,AverageRange(m15,1,14));
+   SwingSequenceDir(m5,38,atr5,rh,oh,rl,ol,why);
+   double h15=0,l15=0;SwingSequenceDir(m15,30,atr15,h15,oh,l15,ol,why);
    level=dir>0?rh:rl;
    if(level<=0)
      {
@@ -2768,12 +2772,12 @@ bool ProfessionalTrendPullback(MqlRates &m1[],MqlRates &m5[],int dir,double atr,
   {
    if(d.dir!=dir||d.tier<2||d.transition)return false;
    int pb=MathMax(3,MathMin(C.trendPullbackBars,12));if(ArraySize(m1)<pb+7||ArraySize(m5)<10||atr<=0)return false;
-   int opposing=0,same=0;double oppBody=0,sameBody=0;invalidLevel=dir>0?DBL_MAX:-DBL_MAX;
+   int opposing=0;double oppBody=0;invalidLevel=dir>0?DBL_MAX:-DBL_MAX;
    for(int i=1;i<=pb;i++)
      {
       double body=MathAbs(m1[i].close-m1[i].open);
       bool opp=dir>0?m1[i].close<m1[i].open:m1[i].close>m1[i].open;
-      if(opp){opposing++;oppBody+=body;}else{same++;sameBody+=body;}
+      if(opp){opposing++;oppBody+=body;}
       if(dir>0)invalidLevel=MathMin(invalidLevel,m1[i].low);else invalidLevel=MathMax(invalidLevel,m1[i].high);
      }
    if(opposing<2)return false;
@@ -2803,7 +2807,14 @@ bool IgnitionPattern(MqlRates &m1[],int dir,double atr,double activePressure,dou
    quality=DirectionalCandleQuality(live,dir,atr);kind=microBreak?"LIVE_MICRO_BREAK":engulf?"LIVE_ENGULF_RECLAIM":"FAILED_COUNTER_RECLAIM";return quality>=58;
   }
 string SetupWaitReason(const Snap &s,double threshold)
-  {if(!s.contextOk)return "CONTEXT";if(!s.ignition)return "IGNITION";if(s.score<threshold)return "SCORE";return "READY";}
+  {
+   if(s.reason=="DIRECTION_AUTHORITY_NOT_ALIGNED")return "DIRECTION_AUTHORITY";
+   if(StringFind(s.directionReason,"TRANSITION")==0)return "DIRECTION_TRANSITION";
+   if(!s.contextOk)return "CONTEXT";
+   if(!s.ignition)return "IGNITION";
+   if(s.score<threshold)return "SCORE";
+   return "READY";
+  }
 void EmitSetupTelemetry(const Snap &s,double threshold)
   {
    if(S.id=="")return;string waitReason=SetupWaitReason(s,threshold);datetime closedBar=iTime(_Symbol,PERIOD_M1,1);
@@ -2873,11 +2884,17 @@ Snap Observe()
 
    if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason=da.transition?"DIRECTION_TRANSITION_WAIT":"NO_QUALIFIED_CONTEXT";return s;}
    string activeFamily=FamilyFromSig(S.sig);
-   bool stillAllowed=DirectionPermits(da,S.dir,activeFamily=="BREAKOUT");
-   if(!stillAllowed){s.reason="DIRECTION_AUTHORITY_NOT_ALIGNED";return s;}
-
    s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.price=S.dir>0?tk.ask:tk.bid;s.triggerPrice=s.price;s.triggerBarTime=m1[1].time;s.setupFamily=activeFamily;s.regime=S.sig;s.activePressure=S.dir>0?s.buyPressure:s.sellPressure;
-   s.trendStrength=MathAbs(da.scoreGap);double cq=0;string kind="NONE";bool ctx=false,ign=false;
+   s.trendStrength=MathAbs(da.scoreGap);
+   double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
+   bool stillAllowed=DirectionPermits(da,S.dir,activeFamily=="BREAKOUT");
+   if(!stillAllowed)
+     {
+      s.reason="DIRECTION_AUTHORITY_NOT_ALIGNED";s.contextOk=false;s.ignition=false;s.liveTrigger=false;
+      EmitSetupTelemetry(s,threshold);return s;
+     }
+
+   double cq=0;string kind="NONE";bool ctx=false,ign=false;
    if(s.setupFamily=="BREAKOUT")
      {
       double level=0,comp=0,ext=0;int touches=0;ctx=StructuralBreakoutContext(m1,m5,m15,S.dir,s.atr,s.price,level,touches,comp,ext)&&DirectionPermits(da,S.dir,true);
@@ -2895,7 +2912,7 @@ Snap Observe()
    if(s.setupFamily=="TREND_CONTINUATION")
       s.score=clamp(10+s.activePressure*.20+cq*.20+MathMin(28.0,MathAbs(da.scoreGap)*.40)+s.pullbackQuality*.18+(ign?10:0),0,100);
    s.contextOk=ctx;s.ignition=ign;s.liveTrigger=ign;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;s.rejected=ctx;s.microBreak=ign;s.continuation=s.setupFamily=="TREND_CONTINUATION";
-   double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);s.valid=ctx&&ign&&stillAllowed&&s.candleQuality>=58&&s.score>=threshold;s.reason=s.valid?"DIRECTION_ALIGNED_SIGNAL_CONFIRMED":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
+   s.valid=ctx&&ign&&stillAllowed&&s.candleQuality>=58&&s.score>=threshold;s.reason=s.valid?"DIRECTION_ALIGNED_SIGNAL_CONFIRMED":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
    if(fresh){S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=kind;}EmitSetupTelemetry(s,threshold);
    if(fresh)Emit("SETUP_CONFIRMED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"setupFamily\":\"%s\",\"regime\":\"%s\",\"score\":%.2f,\"requiredScore\":%.2f,\"directionTier\":%d,\"m5Structure\":%d,\"m15Structure\":%d,\"pressureGap\":%.2f,\"directionReason\":\"%s\",\"triggerKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d",S.id,S.dir,s.setupFamily,s.regime,s.score,threshold,s.directionTier,s.m5Structure,s.m15Structure,s.pressureGap,s.directionReason,kind,s.triggerPrice,(long)s.triggerBarTime));
    return s;

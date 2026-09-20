@@ -2706,12 +2706,16 @@ DirectionAuthority EvaluateDirectionAuthority(MqlRates &m5[],MqlRates &m15[],dou
      }
 
    bool seqConflict=d.m5Seq!=0&&d.m15Seq!=0&&d.m5Seq!=d.m15Seq;
-   bool freshConflict=(d.m15Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m15Seq);
-   d.transition=seqConflict||freshConflict;
+   bool m5AgainstM15=d.m15Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m15Seq;
+   bool m15AgainstM5=d.m5Seq!=0&&d.m15Bos!=0&&d.m15Bos!=d.m5Seq;
+   bool m5Choch=d.m5Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m5Seq;
+   bool m15Choch=d.m15Seq!=0&&d.m15Bos!=0&&d.m15Bos!=d.m15Seq;
+   d.transition=seqConflict||m5AgainstM15||m15AgainstM5||m5Choch||m15Choch;
    d.scoreGap=d.bullScore-d.bearScore;
    if(d.transition)
      {
-      d.dir=0;d.tier=0;d.reason=StringFormat("TRANSITION m5Seq=%d m15Seq=%d m5Bos=%d pressureGap=%.1f",d.m5Seq,d.m15Seq,d.m5Bos,d.pressureGap);
+      d.dir=0;d.tier=0;
+      d.reason=StringFormat("TRANSITION m5Seq=%d m15Seq=%d m5Bos=%d m15Bos=%d pressureGap=%.1f",d.m5Seq,d.m15Seq,d.m5Bos,d.m15Bos,d.pressureGap);
       return d;
      }
    if(d.scoreGap>=35&&d.bullScore>=55){d.dir=1;d.tier=3;d.reason=StringFormat("STRONG_BUY m5=%s m15=%s bos=%d/%d gap=%.1f",w5,w15,d.m5Bos,d.m15Bos,d.pressureGap);}

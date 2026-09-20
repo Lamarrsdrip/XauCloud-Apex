@@ -222,8 +222,10 @@ inline bool   MathIsValidNumber(double v){ return !std::isnan(v) && !std::isinf(
 inline int    MathRand(){ return 42; }
 inline void   Print(const std::string&){}
 template<typename... A> inline void PrintFormat(const char*, A...){}
+template<class T> inline T fmtArg(T v){ return v; }
+inline const char* fmtArg(const std::string &v){ return v.c_str(); }
 template<typename... A> inline std::string StringFormat(const char *fmt, A... a){
-  char buf[4096]; snprintf(buf,sizeof(buf),fmt,a...); return std::string(buf);
+  char buf[4096]; snprintf(buf,sizeof(buf),fmt,fmtArg(a)...); return std::string(buf);
 }
 inline std::string StringFormat(const char *fmt){ return std::string(fmt); }
 inline std::string BoolJson(bool v){ return v?"true":"false"; }
@@ -254,7 +256,8 @@ struct ApexConfig { std::string accountProfile="NORMAL";
                            baseMarginPct=100, layerMultiplier=2;
                     long normalReferenceLeverage=0;
                     double entryScore=76, addScore=70, impulseAtr=1.8, sweepAtr=0.05,
-                           addSpacingAtr=0.22, rejectionZoneAtr=0.12, learnEntryAdj=0, learnAddAdj=0;
+                           addSpacingAtr=0.22, rejectionZoneAtr=0.12, learnEntryAdj=0, learnAddAdj=0,
+                           trendSlopeMinAtr=0.75;
                     int rejectionBars=5, watchExpiryMinutes=12;
                     bool requireM3Confirm=false, requireM5Context=false, learningEnabled=false; };
 extern ApexConfig C;

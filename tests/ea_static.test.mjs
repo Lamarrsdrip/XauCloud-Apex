@@ -179,10 +179,10 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
-test('v3.9.2 starts L1 only from fresh-direction-aligned breakout/trend ignition', () => {
+test('v3.9.2 starts L1 only after fresh-direction-aligned CLOSED setup confirmation', () => {
   assert.match(s, /if\(s\.valid\)\s*Start\(s\);/);
-  assert.match(s, /strategy=FRESH_DIRECTION_BREAKOUT_TREND \| entry=live-ignition-v3\.9\.2/);
-  assert.match(s, /DIRECTION_ALIGNED_SIGNAL_CONFIRMED/);
+  assert.match(s, /strategy=CONFIRMED_DIRECTION_BREAKOUT_TREND \| entry=closed-confirmation-v3\.9\.2/);
+  assert.match(s, /CLOSED_SETUP_CONFIRMATION_READY/);
   assert.doesNotMatch(s, /CONFIRMED_EXHAUSTION_REVERSAL|LIQUIDITY_EXHAUST/);
 });
 
@@ -198,7 +198,7 @@ test('v3.9 preserves hardened first-submit fencing; continuation adds do not reu
   const start = section('void Start(Snap', '//====================== add candidates');
   assert.match(start, /campState=CAMP_SUBMITTING/);
   assert.match(start, /FIRST ENTRY PENDING/);
-  assert.match(start, /s\.setupFamily\+"_L1_IGNITION"/);
+  assert.match(start, /s\.setupFamily\+"_L1_CLOSED_CONFIRMATION"/);
   const manage = section('void Manage()', '//====================== restart reconciliation');
   assert.match(manage, /bool enforceReclaim=false;/);
 });

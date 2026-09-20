@@ -18,8 +18,11 @@ test('direction authority uses confirmed M5/M15 swing structure instead of slope
   assert.match(fn,/d\.m5Bos=StructureBreakDir/);
   assert.match(fn,/d\.m15Bos=StructureBreakDir/);
   assert.match(fn,/seqConflict/);
-  assert.match(fn,/freshConflict/);
-  assert.match(fn,/d\.transition=seqConflict\|\|freshConflict/);
+  assert.match(fn,/m5AgainstM15/);
+  assert.match(fn,/m15AgainstM5/);
+  assert.match(fn,/m5Choch/);
+  assert.match(fn,/m15Choch/);
+  assert.match(fn,/d\.transition=seqConflict\|\|m5AgainstM15\|\|m15AgainstM5\|\|m5Choch\|\|m15Choch/);
 });
 
 test('confirmed opposite structure cannot be overridden by one M1 pressure spike',()=>{

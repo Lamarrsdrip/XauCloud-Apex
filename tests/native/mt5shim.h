@@ -49,7 +49,7 @@ enum ENUM_SYMBOL_TRADE_EXECUTION { SYMBOL_TRADE_EXECUTION_REQUEST=0, SYMBOL_TRAD
 enum ENUM_ACCOUNT_INFO_DOUBLE { ACCOUNT_MARGIN_FREE, ACCOUNT_EQUITY, ACCOUNT_MARGIN,
                                 ACCOUNT_BALANCE, ACCOUNT_MARGIN_LEVEL };
 enum ENUM_ACCOUNT_INFO_INTEGER { ACCOUNT_LOGIN, ACCOUNT_LEVERAGE, ACCOUNT_MARGIN_MODE, ACCOUNT_TRADE_MODE };
-enum ENUM_TIMEFRAMES { PERIOD_M1=1, PERIOD_M3=3, PERIOD_M5=5 };
+enum ENUM_TIMEFRAMES { PERIOD_M1=1, PERIOD_M3=3, PERIOD_M5=5, PERIOD_M15=15, PERIOD_M30=30 };
 #define TRADE_RETCODE_DONE            10009
 #define TRADE_RETCODE_PLACED          10008
 #define TRADE_RETCODE_DONE_PARTIAL    10010
@@ -110,7 +110,7 @@ struct MockBroker {
   datetime now=1000000;
   datetime lastClosedM1=1000000;
   double atr=2.0;
-  std::vector<MqlRates> m1, m3, m5;
+  std::vector<MqlRates> m1, m3, m5, m15, m30;
   // execution log
   std::vector<double> submitted;
   std::vector<uint>   retcodes;
@@ -241,7 +241,9 @@ template<class T> inline int ArraySize(const std::vector<T>& v){ return (int)v.s
 inline bool Rates(ENUM_TIMEFRAMES tf,int n,std::vector<MqlRates> &r){
   if(tf==PERIOD_M1) r=BRK.m1;
   else if(tf==PERIOD_M3) r=BRK.m3;
-  else r=BRK.m5;
+  else if(tf==PERIOD_M5) r=BRK.m5;
+  else if(tf==PERIOD_M15) r=BRK.m15;
+  else if(tf==PERIOD_M30) r=BRK.m30;
   return (int)r.size()>=n-2;
 }
 
@@ -257,7 +259,7 @@ struct ApexConfig { std::string accountProfile="NORMAL";
                     long normalReferenceLeverage=0;
                     double entryScore=76, addScore=70, impulseAtr=1.8, sweepAtr=0.05,
                            addSpacingAtr=0.22, rejectionZoneAtr=0.12, learnEntryAdj=0, learnAddAdj=0,
-                           trendSlopeMinAtr=0.75;
+                           trendSlopeMinAtr=0.75, ignitionBodyAtr=0.18, ignitionCloseLocation=0.68;
                     int rejectionBars=5, watchExpiryMinutes=12;
                     bool requireM3Confirm=false, requireM5Context=false, learningEnabled=false; };
 extern ApexConfig C;

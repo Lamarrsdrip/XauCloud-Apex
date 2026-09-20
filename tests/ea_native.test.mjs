@@ -19,6 +19,28 @@ const has=Boolean(!run.skipped);
 const R=run.byName||{};
 const skip=has?false:`no C++ toolchain (${run.skipped})`;
 
+test('DIRECTION-AUTHORITY: aligned bullish M5/M15 permits BUY and forbids SELL',{skip},()=>{
+  const r=R.direction_strong_buy;
+  assert.equal(r.dir,1); assert.ok(r.tier>=2); assert.equal(r.transition,false);
+  assert.equal(r.m5,1); assert.equal(r.m15,1); assert.equal(r.buyAllowed,true); assert.equal(r.sellAllowed,false);
+});
+
+test('DIRECTION-AUTHORITY: aligned bearish M5/M15 permits SELL and forbids BUY',{skip},()=>{
+  const r=R.direction_strong_sell;
+  assert.equal(r.dir,-1); assert.ok(r.tier>=2); assert.equal(r.transition,false);
+  assert.equal(r.m5,-1); assert.equal(r.m15,-1); assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,true);
+});
+
+test('DIRECTION-AUTHORITY: conflicting M5/M15 structure waits instead of guessing',{skip},()=>{
+  const r=R.direction_conflict_wait;
+  assert.equal(r.dir,0); assert.equal(r.transition,true); assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,false);
+});
+
+test('DIRECTION-AUTHORITY: neutral early-breakout exception needs BOS and cannot authorize a trend trade',{skip},()=>{
+  const r=R.direction_neutral_breakout_exception;
+  assert.equal(r.breakoutBuy,true); assert.equal(r.trendBuy,false); assert.equal(r.sell,false);
+});
+
 test('CAPACITY-TRUTH: a NORMAL L1 15% request is 15% of MONEY, never 15% of SYMBOL_VOLUME_MAX',{skip},()=>{
   const r=R.live_exness_zero_margin_normal_L1;
   // v3.7.1 reproduction: the exact 200.00-lot request rejected on demo 476885386

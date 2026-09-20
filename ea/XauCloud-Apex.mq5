@@ -2869,10 +2869,11 @@ Snap Observe()
      }
 
    if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason=da.transition?"DIRECTION_TRANSITION_WAIT":"NO_QUALIFIED_CONTEXT";return s;}
-   bool stillAllowed=DirectionPermits(da,S.dir,s.setupFamily=="BREAKOUT");
+   string activeFamily=FamilyFromSig(S.sig);
+   bool stillAllowed=DirectionPermits(da,S.dir,activeFamily=="BREAKOUT");
    if(!stillAllowed){s.reason="DIRECTION_AUTHORITY_NOT_ALIGNED";return s;}
 
-   s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.price=S.dir>0?tk.ask:tk.bid;s.triggerPrice=s.price;s.triggerBarTime=m1[1].time;s.setupFamily=FamilyFromSig(S.sig);s.regime=S.sig;s.activePressure=S.dir>0?s.buyPressure:s.sellPressure;
+   s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.price=S.dir>0?tk.ask:tk.bid;s.triggerPrice=s.price;s.triggerBarTime=m1[1].time;s.setupFamily=activeFamily;s.regime=S.sig;s.activePressure=S.dir>0?s.buyPressure:s.sellPressure;
    s.trendStrength=MathAbs(da.scoreGap);double cq=0;string kind="NONE";bool ctx=false,ign=false;
    if(s.setupFamily=="BREAKOUT")
      {

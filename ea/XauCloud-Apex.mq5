@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.9.2 "FreshDirection"                              |
+//|  XauCloud Apex v3.9.2 "ConfirmedDirection"                              |
 //|                                                                   |
 //|  EXECUTION BASE = v3.8.8. Basket handling, sizing, cloud link,     |
 //|  recovery, ratchet, SL/BE, broker preflight and restart hardening  |
@@ -16,12 +16,12 @@
 #property copyright "XauCloud Apex"
 #property version   "3.920"
 #property strict
-#property description "XauCloud Apex v3.9.2 FreshDirection"
+#property description "XauCloud Apex v3.9.2 ConfirmedDirection"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.9.2-FreshDirection"
+#define APEX_VERSION       "XauCloud-Apex_v3.9.2-ConfirmedDirection"
 #define APEX_BUILD_ID      "3.9.2"
 #define APEX_MAGIC         8620260903
 #define APEX_STATE_SCHEMA  4
@@ -2807,9 +2807,12 @@ bool StructuralBreakoutContext(MqlRates &m1[],MqlRates &m5[],MqlRates &m15[],int
 bool ProfessionalTrendPullback(MqlRates &m1[],MqlRates &m5[],int dir,double atr,const DirectionAuthority &d,double &invalidLevel,double &quality)
   {
    if(d.dir!=dir||d.tier<2||d.transition)return false;
-   int pb=MathMax(3,MathMin(C.trendPullbackBars,12));if(ArraySize(m1)<pb+7||ArraySize(m5)<10||atr<=0)return false;
+   int pb=MathMax(3,MathMin(C.trendPullbackBars,12));if(ArraySize(m1)<pb+8||ArraySize(m5)<10||atr<=0)return false;
    int opposing=0;double oppBody=0;invalidLevel=dir>0?DBL_MAX:-DBL_MAX;
-   for(int i=1;i<=pb;i++)
+   // Bar 1 is reserved for the NEW closed confirmation candle. The pullback itself
+   // must already exist on bars 2..pb+1 so one bullish/bearish confirmation bar cannot
+   // manufacture its own pullback context.
+   for(int i=2;i<=pb+1;i++)
      {
       double body=MathAbs(m1[i].close-m1[i].open);
       bool opp=dir>0?m1[i].close<m1[i].open:m1[i].close>m1[i].open;
@@ -2817,10 +2820,8 @@ bool ProfessionalTrendPullback(MqlRates &m1[],MqlRates &m5[],int dir,double atr,
       if(dir>0)invalidLevel=MathMin(invalidLevel,m1[i].low);else invalidLevel=MathMax(invalidLevel,m1[i].high);
      }
    if(opposing<2)return false;
-   double anchor=dir>0?-DBL_MAX:DBL_MAX;for(int i=pb+1;i<=pb+4;i++)anchor=dir>0?MathMax(anchor,m1[i].high):MathMin(anchor,m1[i].low);
+   double anchor=dir>0?-DBL_MAX:DBL_MAX;for(int i=pb+2;i<=pb+5;i++)anchor=dir>0?MathMax(anchor,m1[i].high):MathMin(anchor,m1[i].low);
    double depth=dir>0?(anchor-invalidLevel)/atr:(invalidLevel-anchor)/atr;if(depth<.10||depth>C.trendMaxPullbackAtr)return false;
-   // A pullback is corrective, not a fresh opposite impulse. If its average opposing body is
-   // huge relative to ATR, the market is transitioning and Apex must not call it continuation.
    double avgOpp=oppBody/MathMax(1,opposing);if(avgOpp>atr*.45)return false;
    double structLow=d.m5SwingLow,structHigh=d.m5SwingHigh;
    if(dir>0&&structLow>0&&invalidLevel<=structLow-atr*.05)return false;
@@ -2828,26 +2829,42 @@ bool ProfessionalTrendPullback(MqlRates &m1[],MqlRates &m5[],int dir,double atr,
    quality=clamp(100.0*(1.0-depth/MathMax(.01,C.trendMaxPullbackAtr)) + MathMin(15.0,(double)opposing*3.0),0,100);
    invalidLevel+=dir>0?(-atr*.04):(atr*.04);return true;
   }
-bool IgnitionPattern(MqlRates &m1[],int dir,double atr,double activePressure,double oppositePressure,double pressureMin,double &quality,string &kind)
+bool ClosedConfirmationPattern(MqlRates &m1[],int dir,double atr,double activePressure,double oppositePressure,double pressureMin,double &quality,string &kind)
   {
-   quality=0;kind="NONE";if(ArraySize(m1)<4||atr<=0)return false;MqlRates live=m1[0];int age=(int)MathMax(1.0,(double)(TimeCurrent()-live.time));
-   if(age<4)return false;double range=MathMax(_Point,live.high-live.low),body=dir>0?live.close-live.open:live.open-live.close;if(body<=0)return false;
-   double closeLoc=dir>0?(live.close-live.low)/range:(live.high-live.close)/range,bodyAtr=body/atr;
-   double badWick=dir>0?(live.high-live.close)/range:(live.close-live.low)/range;
-   bool microBreak=dir>0?live.close>m1[1].high:live.close<m1[1].low;
-   bool engulf=dir>0?(m1[1].close<m1[1].open&&live.close>m1[1].open&&live.open<=m1[1].close):(m1[1].close>m1[1].open&&live.close<m1[1].open&&live.open>=m1[1].close);
-   bool reclaim=dir>0?(m1[1].low<m1[2].low&&live.close>m1[1].high):(m1[1].high>m1[2].high&&live.close<m1[1].low);
-   if(!(microBreak||engulf||reclaim))return false;
-   if(bodyAtr<C.ignitionBodyAtr||closeLoc<C.ignitionCloseLocation||badWick>.32)return false;
-   if(activePressure<pressureMin||activePressure-oppositePressure<8.0)return false;
-   quality=DirectionalCandleQuality(live,dir,atr);kind=microBreak?"LIVE_MICRO_BREAK":engulf?"LIVE_ENGULF_RECLAIM":"FAILED_COUNTER_RECLAIM";return quality>=58;
+   quality=0;kind="NONE";if(ArraySize(m1)<5||atr<=0)return false;
+   MqlRates c=m1[1]; // latest FULLY CLOSED M1 candle only
+   double range=MathMax(_Point,c.high-c.low),body=dir>0?c.close-c.open:c.open-c.close;if(body<=0)return false;
+   double closeLoc=dir>0?(c.close-c.low)/range:(c.high-c.close)/range,bodyAtr=body/atr;
+   double badWick=dir>0?(c.high-c.close)/range:(c.close-c.low)/range;
+   bool closeBreak=dir>0?c.close>m1[2].high:c.close<m1[2].low;
+   bool engulf=dir>0?(m1[2].close<m1[2].open&&c.close>m1[2].open&&c.open<=m1[2].close):(m1[2].close>m1[2].open&&c.close<m1[2].open&&c.open>=m1[2].close);
+   bool reclaim=dir>0?(m1[2].low<m1[3].low&&c.close>m1[2].high):(m1[2].high>m1[3].high&&c.close<m1[2].low);
+   if(!(closeBreak||engulf||reclaim))return false;
+   if(bodyAtr<C.ignitionBodyAtr||closeLoc<C.ignitionCloseLocation||badWick>.30)return false;
+   if(activePressure<pressureMin||activePressure-oppositePressure<10.0)return false;
+   quality=DirectionalCandleQuality(c,dir,atr);
+   kind=closeBreak?"CLOSED_M1_STRUCTURE_BREAK":engulf?"CLOSED_M1_ENGULF_CONFIRM":"CLOSED_M1_RECLAIM_CONFIRM";
+   return quality>=60;
   }
+
+bool BreakoutClosedConfirmed(MqlRates &m1[],int dir,double level,double atr,double bufferAtr)
+  {
+   if(ArraySize(m1)<4||atr<=0||level<=0)return false;
+   double buf=bufferAtr*atr;
+   bool beyond=dir>0?m1[1].close>=level+buf:m1[1].close<=level-buf;
+   if(!beyond)return false;
+   // Must be a fresh confirmed break/hold, not a candle that is many bars late.
+   bool freshBreak=dir>0?m1[2].close<level+buf:m1[2].close>level-buf;
+   bool retestHold=dir>0?(m1[2].low<=level+atr*.10&&m1[1].close>m1[2].close):(m1[2].high>=level-atr*.10&&m1[1].close<m1[2].close);
+   return freshBreak||retestHold;
+  }
+
 string SetupWaitReason(const Snap &s,double threshold)
   {
    if(s.reason=="DIRECTION_AUTHORITY_NOT_ALIGNED")return "DIRECTION_AUTHORITY";
    if(StringFind(s.directionReason,"TRANSITION")==0)return "DIRECTION_TRANSITION";
    if(!s.contextOk)return "CONTEXT";
-   if(!s.ignition)return "IGNITION";
+   if(!s.ignition)return "CLOSED_CONFIRMATION";
    if(s.score<threshold)return "SCORE";
    return "READY";
   }
@@ -2894,25 +2911,14 @@ Snap Observe()
    bool upCtx=StructuralBreakoutContext(m1,m5,m15,1,s.atr,tk.ask,upLevel,upTouches,upComp,upExt);
    bool dnCtx=StructuralBreakoutContext(m1,m5,m15,-1,s.atr,tk.bid,dnLevel,dnTouches,dnComp,dnExt);
    bool upAllowed=DirectionPermits(da,1,true),dnAllowed=DirectionPermits(da,-1,true);
-   double upCQ=0,dnCQ=0;string upKind="NONE",dnKind="NONE";
-   bool upIgn=upCtx&&upAllowed&&tk.ask>=upLevel+C.breakoutBufferAtr*s.atr&&IgnitionPattern(m1,1,s.atr,s.buyPressure,s.sellPressure,C.breakoutPressureMin,upCQ,upKind);
-   bool dnIgn=dnCtx&&dnAllowed&&tk.bid<=dnLevel-C.breakoutBufferAtr*s.atr&&IgnitionPattern(m1,-1,s.atr,s.sellPressure,s.buyPressure,C.breakoutPressureMin,dnCQ,dnKind);
-
    int trendDir=(da.tier>=2&&!da.transition)?da.dir:0;double trendInvalid=0,pbQ=0;
    bool trendCtx=trendDir!=0&&ProfessionalTrendPullback(m1,m5,trendDir,s.atr,da,trendInvalid,pbQ);
-   double trendCQ=0;string trendKind="NONE";double trendPressure=trendDir>0?s.buyPressure:s.sellPressure,trendOpp=trendDir>0?s.sellPressure:s.buyPressure;
-   bool trendIgn=trendCtx&&IgnitionPattern(m1,trendDir,s.atr,trendPressure,trendOpp,C.trendPressureMin,trendCQ,trendKind);
 
    if(S.state==SETUP_NONE)
      {
-      if(upIgn||dnIgn)
-        {
-         int d=upIgn?1:-1;double level=d>0?upLevel:dnLevel,comp=d>0?upComp:dnComp;
-         double inv=d>0?level-.20*s.atr:level+.20*s.atr;ArmSetup(d,m1[1].time,inv,level,s.atr,comp,d>0?"BREAKOUT_UP":"BREAKOUT_DOWN","BREAKOUT");
-        }
-      else if(trendCtx&&trendIgn)
-         ArmSetup(trendDir,m1[1].time,trendInvalid,m1[1].close,s.atr,MathAbs(da.scoreGap),trendDir>0?"TREND_UP_CONTINUATION":"TREND_DOWN_CONTINUATION","TREND_CONTINUATION");
-      else if((upCtx&&upAllowed)||(dnCtx&&dnAllowed))
+      // Detection only. Entry is impossible on the same candle that creates the setup.
+      // Apex arms a watch and waits for a NEW fully closed M1 confirmation bar.
+      if((upCtx&&upAllowed)||(dnCtx&&dnAllowed))
         {
          int d=(upCtx&&upAllowed)?1:-1;double level=d>0?upLevel:dnLevel,comp=d>0?upComp:dnComp;
          double inv=d>0?level-.20*s.atr:level+.20*s.atr;ArmSetup(d,m1[1].time,inv,level,s.atr,comp,d>0?"BREAKOUT_UP":"BREAKOUT_DOWN","BREAKOUT");
@@ -2933,25 +2939,27 @@ Snap Observe()
       EmitSetupTelemetry(s,threshold);return s;
      }
 
-   double cq=0;string kind="NONE";bool ctx=false,ign=false;
+   double cq=0;string kind="NONE";bool ctx=false,confirmed=false;
+   bool newClosedBar=m1[1].time>S.sweepBarTime;
    if(s.setupFamily=="BREAKOUT")
      {
       double level=0,comp=0,ext=0;int touches=0;ctx=StructuralBreakoutContext(m1,m5,m15,S.dir,s.atr,s.price,level,touches,comp,ext)&&DirectionPermits(da,S.dir,true);
-      bool broke=S.dir>0?(tk.ask>=S.prior+C.breakoutBufferAtr*s.atr):(tk.bid<=S.prior-C.breakoutBufferAtr*s.atr);
-      double opp=S.dir>0?s.sellPressure:s.buyPressure;ign=ctx&&broke&&IgnitionPattern(m1,S.dir,s.atr,s.activePressure,opp,C.breakoutPressureMin,cq,kind);
+      double opp=S.dir>0?s.sellPressure:s.buyPressure;
+      bool closedBreak=newClosedBar&&BreakoutClosedConfirmed(m1,S.dir,S.prior,s.atr,C.breakoutBufferAtr);
+      confirmed=ctx&&closedBreak&&ClosedConfirmationPattern(m1,S.dir,s.atr,s.activePressure,opp,C.breakoutPressureMin,cq,kind);
       s.breakoutLevel=S.prior;s.compressionScore=comp;
-      s.score=clamp(8+s.activePressure*.18+cq*.20+comp*.08+MathMin(8.0,(double)touches*2.0)+MathMin(18.0,MathAbs(da.scoreGap)*.28)+MathMin(14.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.14)+(broke?10:0),0,100);
+      s.score=clamp(8+s.activePressure*.18+cq*.20+comp*.08+MathMin(8.0,(double)touches*2.0)+MathMin(18.0,MathAbs(da.scoreGap)*.28)+MathMin(14.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.14)+(closedBreak?10:0),0,100);
      }
    else
      {
       double inv=0,pq=0;ctx=ProfessionalTrendPullback(m1,m5,S.dir,s.atr,da,inv,pq);double opp=S.dir>0?s.sellPressure:s.buyPressure;
-      ign=ctx&&IgnitionPattern(m1,S.dir,s.atr,s.activePressure,opp,C.trendPressureMin,cq,kind);s.pullbackQuality=pq;
+      confirmed=newClosedBar&&ctx&&ClosedConfirmationPattern(m1,S.dir,s.atr,s.activePressure,opp,C.trendPressureMin,cq,kind);s.pullbackQuality=pq;
       s.score=0;
      }
    if(s.setupFamily=="TREND_CONTINUATION")
-      s.score=clamp(8+s.activePressure*.18+cq*.20+MathMin(20.0,MathAbs(da.scoreGap)*.30)+MathMin(16.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.16)+s.pullbackQuality*.14+(ign?10:0),0,100);
-   s.contextOk=ctx;s.ignition=ign;s.liveTrigger=ign;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;s.rejected=ctx;s.microBreak=ign;s.continuation=s.setupFamily=="TREND_CONTINUATION";
-   s.valid=ctx&&ign&&stillAllowed&&s.candleQuality>=58&&s.score>=threshold;s.reason=s.valid?"DIRECTION_ALIGNED_SIGNAL_CONFIRMED":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
+      s.score=clamp(8+s.activePressure*.18+cq*.20+MathMin(20.0,MathAbs(da.scoreGap)*.30)+MathMin(16.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.16)+s.pullbackQuality*.14+(confirmed?10:0),0,100);
+   s.contextOk=ctx;s.ignition=confirmed;s.liveTrigger=false;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;s.rejected=ctx;s.microBreak=confirmed;s.continuation=s.setupFamily=="TREND_CONTINUATION";
+   s.valid=ctx&&confirmed&&newClosedBar&&stillAllowed&&s.candleQuality>=60&&s.score>=threshold;s.reason=s.valid?"CLOSED_SETUP_CONFIRMATION_READY":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
    if(fresh){S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=kind;}EmitSetupTelemetry(s,threshold);
    if(fresh)Emit("SETUP_CONFIRMED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"setupFamily\":\"%s\",\"regime\":\"%s\",\"score\":%.2f,\"requiredScore\":%.2f,\"directionTier\":%d,\"structuralBias\":%d,\"freshDirection\":%d,\"freshDirectionTier\":%d,\"m5Flow\":%d,\"m15Flow\":%d,\"m30Flow\":%d,\"m5Structure\":%d,\"m15Structure\":%d,\"pressureGap\":%.2f,\"directionReason\":\"%s\",\"freshDirectionReason\":\"%s\",\"triggerKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d",S.id,S.dir,s.setupFamily,s.regime,s.score,threshold,s.directionTier,s.structuralBias,s.freshDirection,s.freshDirectionTier,s.m5Flow,s.m15Flow,s.m30Flow,s.m5Structure,s.m15Structure,s.pressureGap,s.directionReason,s.freshDirectionReason,kind,s.triggerPrice,(long)s.triggerBarTime));
    return s;
@@ -3695,7 +3703,7 @@ void Start(Snap &s)
    // APEX-AUDIT-002/008: submit FIRST, then report. v3.7.1 emitted CAMPAIGN_START (a
    // blocking WebRequest) before the order existed, and reported a campaign that the
    // broker might have rejected.
-   if(!OpenLayer(campDir,s.score,s.setupFamily+"_L1_IGNITION",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
+   if(!OpenLayer(campDir,s.score,s.setupFamily+"_L1_CLOSED_CONFIRMATION",S.extreme,S.triggerPrice,s.atr,S.triggerBarTime,true))
      {
       if(g_pending.active)
         {
@@ -4084,7 +4092,7 @@ int OnInit()
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | strategy=FRESH_DIRECTION_BREAKOUT_TREND | entry=live-ignition-v3.9.2");
+      " | strategy=CONFIRMED_DIRECTION_BREAKOUT_TREND | entry=closed-confirmation-v3.9.2");
    return INIT_SUCCEEDED;
   }
 

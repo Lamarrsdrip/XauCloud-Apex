@@ -170,6 +170,52 @@ static void emitDirectionAuthorityScenarios(){
     tfConflict.freshDir,tfConflict.freshTier,tfConflict.dir,b(tfConflict.transition).c_str(),b(DirectionPermits(tfConflict,1,true)).c_str(),b(DirectionPermits(tfConflict,-1,true)).c_str()));
 }
 
+static std::vector<MqlRates> confirmationBars(bool bullish,bool formingOnly=false){
+  std::vector<MqlRates> v(6);
+  for(int i=0;i<(int)v.size();i++){
+    v[i].time=1000000-i*60;v[i].open=100.0;v[i].close=100.0;v[i].high=100.5;v[i].low=99.5;v[i].tick_volume=100;
+  }
+  if(bullish){
+    v[2].open=100.35;v[2].close=100.00;v[2].high=100.70;v[2].low=99.80;
+    if(!formingOnly){v[1].open=100.00;v[1].close=101.20;v[1].high=101.30;v[1].low=99.90;}
+    else {v[1].open=100.00;v[1].close=100.05;v[1].high=100.45;v[1].low=99.85;
+          v[0].open=100.00;v[0].close=101.80;v[0].high=101.90;v[0].low=99.95;}
+  }else{
+    v[2].open=99.65;v[2].close=100.00;v[2].high=100.20;v[2].low=99.30;
+    if(!formingOnly){v[1].open=100.00;v[1].close=98.80;v[1].high=100.10;v[1].low=98.70;}
+    else {v[1].open=100.00;v[1].close=99.95;v[1].high=100.15;v[1].low=99.55;
+          v[0].open=100.00;v[0].close=98.20;v[0].high=100.05;v[0].low=98.10;}
+  }
+  return v;
+}
+static void emitClosedConfirmationScenarios(){
+  C.ignitionBodyAtr=0.18;C.ignitionCloseLocation=0.68;
+  double q=0;string kind="";
+  auto bull=confirmationBars(true,false);
+  bool buy=ClosedConfirmationPattern(bull,1,2.0,70.0,30.0,62.0,q,kind);
+  bool buyBreak=BreakoutClosedConfirmed(bull,1,100.50,2.0,0.04);
+  row(StringFormat("{\"test\":\"closed_confirmation_buy\",\"ok\":%s,\"breakoutOk\":%s,\"quality\":%.2f,\"kind\":\"%s\"}",
+    b(buy).c_str(),b(buyBreak).c_str(),q,kind.c_str()));
+
+  q=0;kind="";
+  auto bear=confirmationBars(false,false);
+  bool sell=ClosedConfirmationPattern(bear,-1,2.0,70.0,30.0,62.0,q,kind);
+  bool sellBreak=BreakoutClosedConfirmed(bear,-1,99.50,2.0,0.04);
+  row(StringFormat("{\"test\":\"closed_confirmation_sell\",\"ok\":%s,\"breakoutOk\":%s,\"quality\":%.2f,\"kind\":\"%s\"}",
+    b(sell).c_str(),b(sellBreak).c_str(),q,kind.c_str()));
+
+  q=0;kind="";
+  auto liveOnly=confirmationBars(true,true);
+  bool formingIgnored=ClosedConfirmationPattern(liveOnly,1,2.0,80.0,20.0,62.0,q,kind);
+  row(StringFormat("{\"test\":\"forming_candle_ignored\",\"ok\":%s,\"quality\":%.2f,\"kind\":\"%s\"}",
+    b(formingIgnored).c_str(),q,kind.c_str()));
+
+  auto late=confirmationBars(true,false);
+  late[2].open=100.90;late[2].close=101.10;late[2].high=101.20;late[2].low=100.85;
+  bool lateBreak=BreakoutClosedConfirmed(late,1,100.50,2.0,0.04);
+  row(StringFormat("{\"test\":\"late_breakout_not_fresh\",\"ok\":%s}",b(lateBreak).c_str()));
+}
+
 //=============== v3.8.8 UnlimitedFromL3 ======================================
 // Everything below drives the REAL extracted PlanLayerSizing / ComputeLayerVolume /
 // ComputeSimulated1200Volume / ComputeVolume / RederiveAfterSizeRejection.
@@ -445,6 +491,7 @@ static void runV388Scenarios(){
 
 int main(){
   emitDirectionAuthorityScenarios();
+  emitClosedConfirmationScenarios();
 
   // ---------- A: the live Exness incident ----------------------------------
   // Client-side margin model reports ZERO margin for gold (Exness unlimited-leverage

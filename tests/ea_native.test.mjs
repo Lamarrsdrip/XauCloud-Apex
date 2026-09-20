@@ -55,6 +55,26 @@ test('FRESH-DIRECTION: M30 disagreement forces WAIT rather than trusting M5/M15 
   assert.equal(r.buyAllowed,false); assert.equal(r.sellAllowed,false);
 });
 
+test('CONFIRMED-DIRECTION: a fully closed bullish M1 candle can confirm BUY',{skip},()=>{
+  const r=R.closed_confirmation_buy;
+  assert.equal(r.ok,true); assert.equal(r.breakoutOk,true); assert.ok(r.quality>=60); assert.match(r.kind,/CLOSED_M1_/);
+});
+
+test('CONFIRMED-DIRECTION: a fully closed bearish M1 candle can confirm SELL',{skip},()=>{
+  const r=R.closed_confirmation_sell;
+  assert.equal(r.ok,true); assert.equal(r.breakoutOk,true); assert.ok(r.quality>=60); assert.match(r.kind,/CLOSED_M1_/);
+});
+
+test('CONFIRMED-DIRECTION: a huge forming candle is ignored until it closes',{skip},()=>{
+  const r=R.forming_candle_ignored;
+  assert.equal(r.ok,false); assert.equal(r.kind,'NONE');
+});
+
+test('CONFIRMED-DIRECTION: an already-extended breakout is not treated as a fresh close break',{skip},()=>{
+  const r=R.late_breakout_not_fresh;
+  assert.equal(r.ok,false);
+});
+
 test('CAPACITY-TRUTH: a NORMAL L1 15% request is 15% of MONEY, never 15% of SYMBOL_VOLUME_MAX',{skip},()=>{
   const r=R.live_exness_zero_margin_normal_L1;
   // v3.7.1 reproduction: the exact 200.00-lot request rejected on demo 476885386

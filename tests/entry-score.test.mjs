@@ -6,7 +6,7 @@ const ea=fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5',import.meta.url),'utf
 const server=fs.readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 const ui=fs.readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
 
-test('v3.9.1 entry requires direction authority + context + live ignition + candle quality + configured score',()=>{
+test('v3.9.2 entry requires fresh direction + context + live ignition + candle quality + configured score',()=>{
   assert.match(ea,/s\.valid=ctx&&ign&&stillAllowed&&s\.candleQuality>=58&&s\.score>=threshold;/);
   assert.match(ea,/double threshold=C\.entryScore\+\(C\.learningEnabled\?C\.learnEntryAdj:0\);/);
   assert.doesNotMatch(ea,/CONFIRMED_EXHAUSTION_REVERSAL|SELL_UPSIDE_LIQUIDITY_EXHAUST|BUY_DOWNSIDE_LIQUIDITY_EXHAUST/);

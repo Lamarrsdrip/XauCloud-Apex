@@ -94,39 +94,80 @@ static void emitGate(const std::string &name,int dir,double invalidLevel,double 
 }
 
 static std::vector<MqlRates> bullishStructure(){
-  std::vector<MqlRates> v(24);
+  std::vector<MqlRates> v(50);
   for(int i=0;i<(int)v.size();i++){
-    double c=110.0-i*0.4;
-    v[i].time=1000000-i*300; v[i].open=c-0.15; v[i].close=c;
-    v[i].high=c+1.0; v[i].low=c-1.0; v[i].tick_volume=100+i;
+    double px=110.0-i*0.4;
+    v[i].time=1000000-i*300; v[i].open=px-0.15; v[i].close=px;
+    v[i].high=px+1.0; v[i].low=px-1.0; v[i].tick_volume=100+i;
   }
+  // Confirmed HH/HL sequence: recent pivots are at the lower shift numbers.
   v[3].high=113.0; v[8].high=110.0;
   v[5].low=104.0; v[10].low=100.0;
   return v;
 }
 static std::vector<MqlRates> bearishStructure(){
-  auto bup=bullishStructure(); std::vector<MqlRates> v=bup;
+  auto up=bullishStructure(); std::vector<MqlRates> v=up;
   for(size_t i=0;i<v.size();i++){
-    double oldOpen=bup[i].open,oldClose=bup[i].close,oldHigh=bup[i].high,oldLow=bup[i].low;
-    v[i].open=220.0-oldOpen; v[i].close=220.0-oldClose;
-    v[i].high=220.0-oldLow; v[i].low=220.0-oldHigh;
+    double oo=up[i].open,cc=up[i].close,hh=up[i].high,ll=up[i].low;
+    v[i].open=220.0-oo; v[i].close=220.0-cc;
+    v[i].high=220.0-ll; v[i].low=220.0-hh;
+  }
+  return v;
+}
+// Slow structure remains HH/HL, but the most recent closed flow is already falling.
+// This reproduces the reported "bot buys while the market is selling" class.
+static std::vector<MqlRates> bullishStructureFreshBear(bool breakStructure){
+  std::vector<MqlRates> v(50);
+  for(int i=0;i<(int)v.size();i++){
+    double px=100.0+i*0.25;
+    v[i].time=1000000-i*300; v[i].open=px+0.18; v[i].close=px;
+    v[i].high=px+1.0; v[i].low=px-1.0; v[i].tick_volume=100+i;
+  }
+  v[3].high=114.0; v[8].high=111.0;
+  v[5].low=98.0; v[10].low=95.0;
+  if(breakStructure){v[1].open=96.8;v[1].close=96.0;v[1].high=97.0;v[1].low=95.5;}
+  return v;
+}
+static std::vector<MqlRates> bearishStructureFreshBull(bool breakStructure){
+  auto src=bullishStructureFreshBear(breakStructure); std::vector<MqlRates> v=src;
+  for(size_t i=0;i<v.size();i++){
+    double oo=src[i].open,cc=src[i].close,hh=src[i].high,ll=src[i].low;
+    v[i].open=220.0-oo;v[i].close=220.0-cc;v[i].high=220.0-ll;v[i].low=220.0-hh;
   }
   return v;
 }
 static void emitDirectionAuthorityScenarios(){
-  auto bull5=bullishStructure(), bull15=bullishStructure(), bear5=bearishStructure(), bear15=bearishStructure();
-  DirectionAuthority buy=EvaluateDirectionAuthority(bull5,bull15,2.0,70.0,30.0);
-  row(StringFormat("{\"test\":\"direction_strong_buy\",\"dir\":%d,\"tier\":%d,\"transition\":%s,\"m5\":%d,\"m15\":%d,\"buyAllowed\":%s,\"sellAllowed\":%s}",
-    buy.dir,buy.tier,b(buy.transition).c_str(),buy.m5Seq,buy.m15Seq,b(DirectionPermits(buy,1,false)).c_str(),b(DirectionPermits(buy,-1,false)).c_str()));
-  DirectionAuthority sell=EvaluateDirectionAuthority(bear5,bear15,2.0,30.0,70.0);
-  row(StringFormat("{\"test\":\"direction_strong_sell\",\"dir\":%d,\"tier\":%d,\"transition\":%s,\"m5\":%d,\"m15\":%d,\"buyAllowed\":%s,\"sellAllowed\":%s}",
-    sell.dir,sell.tier,b(sell.transition).c_str(),sell.m5Seq,sell.m15Seq,b(DirectionPermits(sell,1,false)).c_str(),b(DirectionPermits(sell,-1,false)).c_str()));
-  DirectionAuthority conflict=EvaluateDirectionAuthority(bull5,bear15,2.0,65.0,35.0);
-  row(StringFormat("{\"test\":\"direction_conflict_wait\",\"dir\":%d,\"tier\":%d,\"transition\":%s,\"buyAllowed\":%s,\"sellAllowed\":%s}",
-    conflict.dir,conflict.tier,b(conflict.transition).c_str(),b(DirectionPermits(conflict,1,true)).c_str(),b(DirectionPermits(conflict,-1,true)).c_str()));
-  DirectionAuthority neutral{}; neutral.dir=0; neutral.tier=1; neutral.transition=false; neutral.m5Bos=1; neutral.pressureGap=16.0;
-  row(StringFormat("{\"test\":\"direction_neutral_breakout_exception\",\"breakoutBuy\":%s,\"trendBuy\":%s,\"sell\":%s}",
-    b(DirectionPermits(neutral,1,true)).c_str(),b(DirectionPermits(neutral,1,false)).c_str(),b(DirectionPermits(neutral,-1,true)).c_str()));
+  auto bull5=bullishStructure(), bull15=bullishStructure(), bull30=bullishStructure();
+  auto bear5=bearishStructure(), bear15=bearishStructure(), bear30=bearishStructure();
+  DirectionAuthority buy=EvaluateDirectionAuthority(bull5,bull15,bull30,2.0,70.0,30.0);
+  row(StringFormat("{\"test\":\"direction_strong_buy\",\"dir\":%d,\"tier\":%d,\"freshDir\":%d,\"freshTier\":%d,\"transition\":%s,\"m5\":%d,\"m15\":%d,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    buy.dir,buy.tier,buy.freshDir,buy.freshTier,b(buy.transition).c_str(),buy.m5Seq,buy.m15Seq,b(DirectionPermits(buy,1,false)).c_str(),b(DirectionPermits(buy,-1,false)).c_str()));
+  DirectionAuthority sell=EvaluateDirectionAuthority(bear5,bear15,bear30,2.0,30.0,70.0);
+  row(StringFormat("{\"test\":\"direction_strong_sell\",\"dir\":%d,\"tier\":%d,\"freshDir\":%d,\"freshTier\":%d,\"transition\":%s,\"m5\":%d,\"m15\":%d,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    sell.dir,sell.tier,sell.freshDir,sell.freshTier,b(sell.transition).c_str(),sell.m5Seq,sell.m15Seq,b(DirectionPermits(sell,1,false)).c_str(),b(DirectionPermits(sell,-1,false)).c_str()));
+
+  // Slow HH/HL but all fresh timeframes are selling. Without a fresh bearish BOS this MUST wait.
+  auto staleBull5=bullishStructureFreshBear(false),staleBull15=bullishStructureFreshBear(false),staleBull30=bullishStructureFreshBear(false);
+  DirectionAuthority staleBuy=EvaluateDirectionAuthority(staleBull5,staleBull15,staleBull30,2.0,35.0,65.0);
+  row(StringFormat("{\"test\":\"stale_bull_fresh_bear_wait\",\"structDir\":%d,\"freshDir\":%d,\"freshTier\":%d,\"dir\":%d,\"transition\":%s,\"buyAllowed\":%s,\"sellAllowed\":%s,\"m5Bos\":%d,\"m15Bos\":%d}",
+    staleBuy.structuralDir,staleBuy.freshDir,staleBuy.freshTier,staleBuy.dir,b(staleBuy.transition).c_str(),b(DirectionPermits(staleBuy,1,false)).c_str(),b(DirectionPermits(staleBuy,-1,false)).c_str(),staleBuy.m5Bos,staleBuy.m15Bos));
+
+  // Once fresh bearish flow is unanimous AND a real structural break occurs, reversal SELL is legal.
+  auto rev5=bullishStructureFreshBear(true),rev15=bullishStructureFreshBear(false),rev30=bullishStructureFreshBear(false);
+  DirectionAuthority revSell=EvaluateDirectionAuthority(rev5,rev15,rev30,2.0,30.0,70.0);
+  row(StringFormat("{\"test\":\"stale_bull_fresh_bear_bos_sell\",\"structDir\":%d,\"freshDir\":%d,\"freshTier\":%d,\"dir\":%d,\"transition\":%s,\"buyAllowed\":%s,\"sellAllowed\":%s,\"m5Bos\":%d,\"m15Bos\":%d}",
+    revSell.structuralDir,revSell.freshDir,revSell.freshTier,revSell.dir,b(revSell.transition).c_str(),b(DirectionPermits(revSell,1,false)).c_str(),b(DirectionPermits(revSell,-1,false)).c_str(),revSell.m5Bos,revSell.m15Bos));
+
+  // Symmetric stale-bear / fresh-bull guard.
+  auto staleBear5=bearishStructureFreshBull(false),staleBear15=bearishStructureFreshBull(false),staleBear30=bearishStructureFreshBull(false);
+  DirectionAuthority staleSell=EvaluateDirectionAuthority(staleBear5,staleBear15,staleBear30,2.0,65.0,35.0);
+  row(StringFormat("{\"test\":\"stale_bear_fresh_bull_wait\",\"structDir\":%d,\"freshDir\":%d,\"freshTier\":%d,\"dir\":%d,\"transition\":%s,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    staleSell.structuralDir,staleSell.freshDir,staleSell.freshTier,staleSell.dir,b(staleSell.transition).c_str(),b(DirectionPermits(staleSell,1,false)).c_str(),b(DirectionPermits(staleSell,-1,false)).c_str()));
+
+  // M5/M15 say up but M30 says down: partial consensus is not enough to trade.
+  DirectionAuthority tfConflict=EvaluateDirectionAuthority(bull5,bull15,bear30,2.0,60.0,40.0);
+  row(StringFormat("{\"test\":\"fresh_m30_conflict_wait\",\"freshDir\":%d,\"freshTier\":%d,\"dir\":%d,\"transition\":%s,\"buyAllowed\":%s,\"sellAllowed\":%s}",
+    tfConflict.freshDir,tfConflict.freshTier,tfConflict.dir,b(tfConflict.transition).c_str(),b(DirectionPermits(tfConflict,1,true)).c_str(),b(DirectionPermits(tfConflict,-1,true)).c_str()));
 }
 
 //=============== v3.8.8 UnlimitedFromL3 ======================================

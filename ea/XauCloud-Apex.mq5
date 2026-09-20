@@ -2754,8 +2754,8 @@ DirectionAuthority EvaluateDirectionAuthority(MqlRates &m5[],MqlRates &m15[],Mql
      {d.transition=true;d.reason=StringFormat("FRESH_DIRECTION_WAIT struct=%d fresh=%d pressureGap=%.1f %s",d.structuralDir,d.freshDir,d.pressureGap,d.freshReason);return d;}
    if(d.structuralDir==d.freshDir&&d.structuralTier>=2)
      {d.dir=d.freshDir;d.tier=MathMax(2,MathMin(3,d.structuralTier));d.transition=false;d.reason=StringFormat("ALIGNED_%s structTier=%d freshTier=%d %s",d.dir>0?"BUY":"SELL",d.structuralTier,d.freshTier,d.freshReason);return d;}
-   if(d.structuralDir==0&&!structuralTransition)
-     {d.dir=d.freshDir;d.tier=2;d.transition=false;d.reason=StringFormat("FRESH_%s_WITH_NEUTRAL_STRUCTURE %s",d.dir>0?"BUY":"SELL",d.freshReason);return d;}
+   if(d.structuralDir==0&&!structuralTransition&&d.freshTier>=3)
+     {d.dir=d.freshDir;d.tier=2;d.transition=false;d.reason=StringFormat("FULL_FRESH_%s_WITH_NEUTRAL_STRUCTURE %s",d.dir>0?"BUY":"SELL",d.freshReason);return d;}
    // Fresh reversal is allowed only after the market has actually broken structure in
    // the fresh direction. Until then Apex waits instead of trading the stale old trend.
    if(freshBos&&d.freshTier>=3)
@@ -2859,10 +2859,13 @@ void EmitSetupTelemetry(const Snap &s,double threshold)
       ",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"%s\",\"setupFamily\":\"%s\",\"regime\":\"%s\",\"score\":%.2f,\"requiredScore\":%.2f,"
       "\"buyPressure\":%.2f,\"sellPressure\":%.2f,\"activePressure\":%.2f,\"trendStrength\":%.2f,\"candleQuality\":%.2f,\"compressionScore\":%.2f,\"pullbackQuality\":%.2f,"
       "\"contextOk\":%s,\"ignition\":%s,\"liveTrigger\":%s,\"waitReason\":\"%s\",\"triggerKind\":\"%s\",\"breakoutLevel\":%.5f,\"invalidationLevel\":%.5f,\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d,"
-      "\"directionBias\":%d,\"directionTier\":%d,\"m5Structure\":%d,\"m15Structure\":%d,\"m5Bos\":%d,\"m15Bos\":%d,\"directionScoreGap\":%.2f,\"pressureGap\":%.2f,\"directionReason\":\"%s\"",
+      "\"directionBias\":%d,\"directionTier\":%d,\"structuralBias\":%d,\"freshDirection\":%d,\"freshDirectionTier\":%d,"
+      "\"m5Flow\":%d,\"m15Flow\":%d,\"m30Flow\":%d,\"m5FlowStrength\":%.2f,\"m15FlowStrength\":%.2f,\"m30FlowStrength\":%.2f,"
+      "\"m5Structure\":%d,\"m15Structure\":%d,\"m5Bos\":%d,\"m15Bos\":%d,\"directionScoreGap\":%.2f,\"pressureGap\":%.2f,\"directionReason\":\"%s\",\"freshDirectionReason\":\"%s\"",
       S.id,S.dir,SetupStateText(),s.setupFamily,s.regime,s.score,threshold,s.buyPressure,s.sellPressure,s.activePressure,s.trendStrength,s.candleQuality,s.compressionScore,s.pullbackQuality,
       BoolJson(s.contextOk),BoolJson(s.ignition),BoolJson(s.liveTrigger),waitReason,s.triggerKind,s.breakoutLevel,S.extreme,s.triggerPrice,(long)s.triggerBarTime,
-      s.directionBias,s.directionTier,s.m5Structure,s.m15Structure,s.m5Bos,s.m15Bos,s.directionScoreGap,s.pressureGap,s.directionReason));
+      s.directionBias,s.directionTier,s.structuralBias,s.freshDirection,s.freshDirectionTier,s.m5Flow,s.m15Flow,s.m30Flow,s.m5FlowStrength,s.m15FlowStrength,s.m30FlowStrength,
+      s.m5Structure,s.m15Structure,s.m5Bos,s.m15Bos,s.directionScoreGap,s.pressureGap,s.directionReason,s.freshDirectionReason));
   }
 Snap Observe()
   {

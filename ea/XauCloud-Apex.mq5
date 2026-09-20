@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.9.1 "DirectionAuthority"                              |
+//|  XauCloud Apex v3.9.2 "FreshDirection"                              |
 //|                                                                   |
 //|  EXECUTION BASE = v3.8.8. Basket handling, sizing, cloud link,     |
 //|  recovery, ratchet, SL/BE, broker preflight and restart hardening  |
@@ -14,15 +14,15 @@
 //|  NORMAL sizing is byte-for-byte the v3.8.2 engine and ladder.     |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
-#property version   "3.910"
+#property version   "3.920"
 #property strict
-#property description "XauCloud Apex v3.9.1 DirectionAuthority"
+#property description "XauCloud Apex v3.9.2 FreshDirection"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.9.1-DirectionAuthority"
-#define APEX_BUILD_ID      "3.9.1"
+#define APEX_VERSION       "XauCloud-Apex_v3.9.2-FreshDirection"
+#define APEX_BUILD_ID      "3.9.2"
 #define APEX_MAGIC         8620260903
 #define APEX_STATE_SCHEMA  4
 #define APEX_CONFIG_SCHEMA 2
@@ -406,8 +406,9 @@ struct Snap
    double breakoutLevel,compressionScore,pullbackQuality;
    bool contextOk,ignition,liveTrigger;
    int directionBias,directionTier,m5Structure,m15Structure,m5Bos,m15Bos;
-   double directionScoreGap,pressureGap;
-   string directionReason;
+   int structuralBias,freshDirection,freshDirectionTier,m5Flow,m15Flow,m30Flow;
+   double directionScoreGap,pressureGap,m5FlowStrength,m15FlowStrength,m30FlowStrength;
+   string directionReason,freshDirectionReason;
   };
 
 struct AddCandidate
@@ -422,13 +423,16 @@ struct AddCandidate
 
 struct DirectionAuthority
   {
-   int dir;               // -1 SELL, +1 BUY, 0 WAIT/NEUTRAL
-   int tier;              // 3 STRONG, 2 MEDIUM, 1 WEAK, 0 NONE
+   int dir;               // FINAL tactical permission: -1 SELL, +1 BUY, 0 WAIT
+   int tier;              // 3 STRONG, 2 CONFIRMED, 1 WEAK, 0 NONE
+   int structuralDir,structuralTier;
+   int freshDir,freshTier,m5Flow,m15Flow,m30Flow;
    int m5Seq,m15Seq,m5Bos,m15Bos;
    bool transition;
    double bullScore,bearScore,scoreGap,pressureGap;
+   double m5FlowStrength,m15FlowStrength,m30FlowStrength;
    double m5SwingHigh,m5SwingLow,m15SwingHigh,m15SwingLow;
-   string reason;
+   string reason,freshReason;
   };
 
 int      hAtr=INVALID_HANDLE;
@@ -2677,67 +2681,95 @@ int StructureBreakDir(MqlRates &r[],double swingHigh,double swingLow,double atr)
    if(swingLow>0&&c<swingLow-b)return -1;
    return 0;
   }
-DirectionAuthority EvaluateDirectionAuthority(MqlRates &m5[],MqlRates &m15[],double atr,double buyPressure,double sellPressure)
+double ClosedEMA(MqlRates &r[],int period,int startShift)
   {
-   DirectionAuthority d;d.dir=0;d.tier=0;d.m5Seq=0;d.m15Seq=0;d.m5Bos=0;d.m15Bos=0;d.transition=false;
-   d.bullScore=0;d.bearScore=0;d.scoreGap=0;d.pressureGap=buyPressure-sellPressure;d.reason="NO_DIRECTION_EDGE";
+   int n=ArraySize(r);if(period<2||startShift<1||n<=startShift+period+4)return 0;
+   int oldest=MathMin(n-1,startShift+period*2);double ema=r[oldest].close;double k=2.0/(period+1.0);
+   for(int i=oldest-1;i>=startShift;i--)ema=r[i].close*k+ema*(1.0-k);
+   return ema;
+  }
+int FreshFlowDir(MqlRates &r[],double &strength,string &why)
+  {
+   strength=0;why="FLOW_NEUTRAL";if(ArraySize(r)<30)return 0;
+   double ar=MathMax(_Point,AverageRange(r,1,14));
+   double fast=ClosedEMA(r,8,1),slow=ClosedEMA(r,21,1),fastPrev=ClosedEMA(r,8,2);
+   if(fast<=0||slow<=0||fastPrev<=0)return 0;
+   double gap=(fast-slow)/ar,slope=(fast-fastPrev)/ar,move4=(r[1].close-r[5].close)/ar,move8=(r[1].close-r[9].close)/ar;
+   int bull=0,bear=0;for(int i=1;i<=5;i++){if(r[i].close>r[i].open)bull++;else if(r[i].close<r[i].open)bear++;}
+   double bullPts=0,bearPts=0;
+   if(gap>.05)bullPts+=2;else if(gap<-.05)bearPts+=2;
+   if(slope>.015)bullPts+=1.5;else if(slope<-.015)bearPts+=1.5;
+   if(move4>.18)bullPts+=1.5;else if(move4<-.18)bearPts+=1.5;
+   if(move8>.35)bullPts+=1.5;else if(move8<-.35)bearPts+=1.5;
+   if(r[1].close>fast)bullPts+=1;else if(r[1].close<fast)bearPts+=1;
+   if(bull>=3)bullPts+=1;else if(bear>=3)bearPts+=1;
+   double edge=bullPts-bearPts;strength=clamp(MathAbs(edge)*14.0,0,100);
+   if(edge>=3.0){why=StringFormat("FLOW_BUY gap=%.2f slope=%.2f m4=%.2f m8=%.2f bodies=%d/%d",gap,slope,move4,move8,bull,bear);return 1;}
+   if(edge<=-3.0){why=StringFormat("FLOW_SELL gap=%.2f slope=%.2f m4=%.2f m8=%.2f bodies=%d/%d",gap,slope,move4,move8,bull,bear);return -1;}
+   why=StringFormat("FLOW_NEUTRAL gap=%.2f slope=%.2f m4=%.2f m8=%.2f bodies=%d/%d",gap,slope,move4,move8,bull,bear);return 0;
+  }
+void ResolveFreshConsensus(MqlRates &m5[],MqlRates &m15[],MqlRates &m30[],DirectionAuthority &d)
+  {
+   string w5="",w15="",w30="";d.m5Flow=FreshFlowDir(m5,d.m5FlowStrength,w5);d.m15Flow=FreshFlowDir(m15,d.m15FlowStrength,w15);d.m30Flow=FreshFlowDir(m30,d.m30FlowStrength,w30);
+   d.freshDir=0;d.freshTier=0;
+   // Entry timing must not fight the immediate M5 flow. M15 is the tactical anchor;
+   // M30 is context. This specifically blocks dead-cat M1/M5 bounces inside a sell move.
+   if(d.m5Flow!=0&&d.m15Flow!=0&&d.m5Flow==d.m15Flow)
+     {
+      if(d.m30Flow==0||d.m30Flow==d.m5Flow){d.freshDir=d.m5Flow;d.freshTier=(d.m30Flow==d.m5Flow?3:2);}
+     }
+   else if(d.m5Flow==0&&d.m15Flow!=0&&d.m30Flow==d.m15Flow)
+     {d.freshDir=d.m15Flow;d.freshTier=2;}
+   d.freshReason=StringFormat("M5=%d(%.0f) M15=%d(%.0f) M30=%d(%.0f)",d.m5Flow,d.m5FlowStrength,d.m15Flow,d.m15FlowStrength,d.m30Flow,d.m30FlowStrength);
+  }
+DirectionAuthority EvaluateDirectionAuthority(MqlRates &m5[],MqlRates &m15[],MqlRates &m30[],double atr,double buyPressure,double sellPressure)
+  {
+   DirectionAuthority d;d.dir=0;d.tier=0;d.structuralDir=0;d.structuralTier=0;d.freshDir=0;d.freshTier=0;d.m5Flow=d.m15Flow=d.m30Flow=0;
+   d.m5Seq=0;d.m15Seq=0;d.m5Bos=0;d.m15Bos=0;d.transition=false;d.bullScore=0;d.bearScore=0;d.scoreGap=0;d.pressureGap=buyPressure-sellPressure;
+   d.m5FlowStrength=d.m15FlowStrength=d.m30FlowStrength=0;d.reason="NO_DIRECTION_EDGE";d.freshReason="NO_FRESH_FLOW";
    d.m5SwingHigh=d.m5SwingLow=d.m15SwingHigh=d.m15SwingLow=0;
-   double oH=0,oL=0;string w5="",w15="";
-   double atr5=MathMax(_Point,AverageRange(m5,1,14));
-   double atr15=MathMax(_Point,AverageRange(m15,1,14));
+   double oH=0,oL=0;string w5="",w15="";double atr5=MathMax(_Point,AverageRange(m5,1,14)),atr15=MathMax(_Point,AverageRange(m15,1,14));
    d.m5Seq=SwingSequenceDir(m5,38,atr5,d.m5SwingHigh,oH,d.m5SwingLow,oL,w5);
    d.m15Seq=SwingSequenceDir(m15,30,atr15,d.m15SwingHigh,oH,d.m15SwingLow,oL,w15);
-   d.m5Bos=StructureBreakDir(m5,d.m5SwingHigh,d.m5SwingLow,atr5);
-   d.m15Bos=StructureBreakDir(m15,d.m15SwingHigh,d.m15SwingLow,atr15);
-
-   if(d.m5Seq>0)d.bullScore+=28;else if(d.m5Seq<0)d.bearScore+=28;
-   if(d.m15Seq>0)d.bullScore+=32;else if(d.m15Seq<0)d.bearScore+=32;
-   if(d.m5Bos>0)d.bullScore+=24;else if(d.m5Bos<0)d.bearScore+=24;
-   if(d.m15Bos>0)d.bullScore+=26;else if(d.m15Bos<0)d.bearScore+=26;
+   d.m5Bos=StructureBreakDir(m5,d.m5SwingHigh,d.m5SwingLow,atr5);d.m15Bos=StructureBreakDir(m15,d.m15SwingHigh,d.m15SwingLow,atr15);
+   if(d.m5Seq>0)d.bullScore+=28;else if(d.m5Seq<0)d.bearScore+=28;if(d.m15Seq>0)d.bullScore+=32;else if(d.m15Seq<0)d.bearScore+=32;
+   if(d.m5Bos>0)d.bullScore+=24;else if(d.m5Bos<0)d.bearScore+=24;if(d.m15Bos>0)d.bullScore+=26;else if(d.m15Bos<0)d.bearScore+=26;
    if(d.pressureGap>0)d.bullScore+=MathMin(18.0,d.pressureGap*.60);else d.bearScore+=MathMin(18.0,-d.pressureGap*.60);
-   if(ArraySize(m5)>7)
-     {
-      double m5Range=MathMax(_Point,AverageRange(m5,1,8));
-      double move=(m5[1].close-m5[6].close)/m5Range;
-      // Slope is supporting evidence only. Structure remains authoritative, but the
-      // existing cloud setting still has real meaning rather than becoming a dead knob.
-      if(move>=C.trendSlopeMinAtr)d.bullScore+=MathMin(10.0,move*6.0);
-      else if(move<=-C.trendSlopeMinAtr)d.bearScore+=MathMin(10.0,-move*6.0);
-     }
-
-   bool seqConflict=d.m5Seq!=0&&d.m15Seq!=0&&d.m5Seq!=d.m15Seq;
-   bool m5AgainstM15=d.m15Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m15Seq;
-   bool m15AgainstM5=d.m5Seq!=0&&d.m15Bos!=0&&d.m15Bos!=d.m5Seq;
-   bool m5Choch=d.m5Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m5Seq;
-   bool m15Choch=d.m15Seq!=0&&d.m15Bos!=0&&d.m15Bos!=d.m15Seq;
-   d.transition=seqConflict||m5AgainstM15||m15AgainstM5||m5Choch||m15Choch;
    d.scoreGap=d.bullScore-d.bearScore;
-   if(d.transition)
+   bool seqConflict=d.m5Seq!=0&&d.m15Seq!=0&&d.m5Seq!=d.m15Seq;
+   bool m5AgainstM15=d.m15Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m15Seq,m15AgainstM5=d.m5Seq!=0&&d.m15Bos!=0&&d.m15Bos!=d.m5Seq;
+   bool m5Choch=d.m5Seq!=0&&d.m5Bos!=0&&d.m5Bos!=d.m5Seq,m15Choch=d.m15Seq!=0&&d.m15Bos!=0&&d.m15Bos!=d.m15Seq;
+   bool structuralTransition=seqConflict||m5AgainstM15||m15AgainstM5||m5Choch||m15Choch;
+   if(!structuralTransition)
      {
-      d.dir=0;d.tier=0;
-      d.reason=StringFormat("TRANSITION m5Seq=%d m15Seq=%d m5Bos=%d m15Bos=%d pressureGap=%.1f",d.m5Seq,d.m15Seq,d.m5Bos,d.m15Bos,d.pressureGap);
-      return d;
+      if(d.scoreGap>=35&&d.bullScore>=55){d.structuralDir=1;d.structuralTier=3;}
+      else if(d.scoreGap>=20&&d.bullScore>=42){d.structuralDir=1;d.structuralTier=2;}
+      else if(d.scoreGap<=-35&&d.bearScore>=55){d.structuralDir=-1;d.structuralTier=3;}
+      else if(d.scoreGap<=-20&&d.bearScore>=42){d.structuralDir=-1;d.structuralTier=2;}
      }
-   if(d.scoreGap>=35&&d.bullScore>=55){d.dir=1;d.tier=3;d.reason=StringFormat("STRONG_BUY m5=%s m15=%s bos=%d/%d gap=%.1f",w5,w15,d.m5Bos,d.m15Bos,d.pressureGap);}
-   else if(d.scoreGap>=20&&d.bullScore>=42){d.dir=1;d.tier=2;d.reason=StringFormat("MEDIUM_BUY m5=%s m15=%s bos=%d/%d gap=%.1f",w5,w15,d.m5Bos,d.m15Bos,d.pressureGap);}
-   else if(d.scoreGap<=-35&&d.bearScore>=55){d.dir=-1;d.tier=3;d.reason=StringFormat("STRONG_SELL m5=%s m15=%s bos=%d/%d gap=%.1f",w5,w15,d.m5Bos,d.m15Bos,d.pressureGap);}
-   else if(d.scoreGap<=-20&&d.bearScore>=42){d.dir=-1;d.tier=2;d.reason=StringFormat("MEDIUM_SELL m5=%s m15=%s bos=%d/%d gap=%.1f",w5,w15,d.m5Bos,d.m15Bos,d.pressureGap);}
-   else {d.dir=0;d.tier=1;d.reason=StringFormat("WEAK_OR_NEUTRAL bull=%.1f bear=%.1f m5=%s m15=%s",d.bullScore,d.bearScore,w5,w15);}
-   return d;
+   ResolveFreshConsensus(m5,m15,m30,d);
+   bool freshPressureOk=d.freshDir>0?d.pressureGap>=4.0:d.freshDir<0?d.pressureGap<=-4.0:false;
+   bool freshBos=d.freshDir>0?(d.m5Bos>0||d.m15Bos>0):d.freshDir<0?(d.m5Bos<0||d.m15Bos<0):false;
+   if(d.freshDir==0||d.freshTier<2||!freshPressureOk)
+     {d.transition=true;d.reason=StringFormat("FRESH_DIRECTION_WAIT struct=%d fresh=%d pressureGap=%.1f %s",d.structuralDir,d.freshDir,d.pressureGap,d.freshReason);return d;}
+   if(d.structuralDir==d.freshDir&&d.structuralTier>=2)
+     {d.dir=d.freshDir;d.tier=MathMax(2,MathMin(3,d.structuralTier));d.transition=false;d.reason=StringFormat("ALIGNED_%s structTier=%d freshTier=%d %s",d.dir>0?"BUY":"SELL",d.structuralTier,d.freshTier,d.freshReason);return d;}
+   if(d.structuralDir==0&&!structuralTransition)
+     {d.dir=d.freshDir;d.tier=2;d.transition=false;d.reason=StringFormat("FRESH_%s_WITH_NEUTRAL_STRUCTURE %s",d.dir>0?"BUY":"SELL",d.freshReason);return d;}
+   // Fresh reversal is allowed only after the market has actually broken structure in
+   // the fresh direction. Until then Apex waits instead of trading the stale old trend.
+   if(freshBos&&d.freshTier>=3)
+     {d.dir=d.freshDir;d.tier=2;d.transition=false;d.reason=StringFormat("FRESH_REVERSAL_CONFIRMED_%s BOS=%d/%d %s",d.dir>0?"BUY":"SELL",d.m5Bos,d.m15Bos,d.freshReason);return d;}
+   d.transition=true;d.reason=StringFormat("SLOW_FRESH_CONFLICT_WAIT struct=%d fresh=%d BOS=%d/%d %s",d.structuralDir,d.freshDir,d.m5Bos,d.m15Bos,d.freshReason);return d;
   }
 bool DirectionPermits(const DirectionAuthority &d,int dir,bool breakout)
   {
-   if(d.transition)return false;
-   if(d.dir==dir&&d.tier>=2)return true;
-   // A genuinely fresh breakout may establish direction from neutral, but never against
-   // an established opposite authority. It needs a closed structural break and a real pressure gap.
-   if(breakout&&d.dir==0&&d.tier<=1)
-     {
-      bool bos=(dir>0?(d.m5Bos>0||d.m15Bos>0):(d.m5Bos<0||d.m15Bos<0));
-      bool pressure=(dir>0?d.pressureGap>=15.0:d.pressureGap<=-15.0);
-      return bos&&pressure;
-     }
-   return false;
+   if(dir==0||d.transition||d.dir!=dir||d.tier<2)return false;
+   if(d.freshDir!=dir||d.freshTier<2)return false;
+   // Breakout entries need current pressure in the same direction too. Trend entries
+   // already require fresh-flow alignment above and their own pressure/ignition gate.
+   if(breakout){if(dir>0&&d.pressureGap<8.0)return false;if(dir<0&&d.pressureGap>-8.0)return false;}
+   return true;
   }
 bool StructuralBreakoutContext(MqlRates &m1[],MqlRates &m5[],MqlRates &m15[],int dir,double atr,double price,double &level,int &touches,double &compression,double &extensionAtr)
   {
@@ -2837,11 +2869,11 @@ Snap Observe()
    Snap s;s.valid=false;s.dir=0;s.score=0;s.atr=ATR();s.price=0;s.extreme=0;s.impulseMult=0;s.sweepMult=0;s.wickRatio=0;s.swept=false;s.rejected=false;s.microBreak=false;
    s.m3Color=false;s.m5Color=false;s.m3Fresh=false;s.continuation=false;s.pullbackFail=false;s.sig="NONE";s.reason="";s.bosKind="NONE";s.triggerBarTime=0;s.triggerPrice=0;
    s.setupFamily="NONE";s.regime="UNKNOWN";s.triggerKind="NONE";s.buyPressure=50;s.sellPressure=50;s.activePressure=50;s.trendStrength=0;s.candleQuality=0;s.breakoutLevel=0;s.compressionScore=0;s.pullbackQuality=0;s.contextOk=false;s.ignition=false;s.liveTrigger=false;
-   s.directionBias=0;s.directionTier=0;s.m5Structure=0;s.m15Structure=0;s.m5Bos=0;s.m15Bos=0;s.directionScoreGap=0;s.pressureGap=0;s.directionReason="";
-   if(s.atr<=0){s.reason="NO_ATR";return s;}MqlRates m1[],m5[],m15[];if(!Rates(PERIOD_M1,90,m1)){s.reason="NO_M1_HISTORY";return s;}if(!Rates(PERIOD_M5,60,m5)||!Rates(PERIOD_M15,45,m15)){s.reason="NO_CONTEXT_HISTORY";return s;}
+   s.directionBias=0;s.directionTier=0;s.m5Structure=0;s.m15Structure=0;s.m5Bos=0;s.m15Bos=0;s.structuralBias=0;s.freshDirection=0;s.freshDirectionTier=0;s.m5Flow=0;s.m15Flow=0;s.m30Flow=0;s.directionScoreGap=0;s.pressureGap=0;s.m5FlowStrength=0;s.m15FlowStrength=0;s.m30FlowStrength=0;s.directionReason="";s.freshDirectionReason="";
+   if(s.atr<=0){s.reason="NO_ATR";return s;}MqlRates m1[],m5[],m15[],m30[];if(!Rates(PERIOD_M1,90,m1)){s.reason="NO_M1_HISTORY";return s;}if(!Rates(PERIOD_M5,60,m5)||!Rates(PERIOD_M15,50,m15)||!Rates(PERIOD_M30,50,m30)){s.reason="NO_CONTEXT_HISTORY";return s;}
    MqlTick tk;if(!SymbolInfoTick(_Symbol,tk)||tk.bid<=0||tk.ask<=0){s.reason="NO_FRESH_QUOTE";return s;}double velocity=0;CalculatePressure(m1,s.atr,s.buyPressure,s.sellPressure,velocity);
-   DirectionAuthority da=EvaluateDirectionAuthority(m5,m15,s.atr,s.buyPressure,s.sellPressure);
-   s.directionBias=da.dir;s.directionTier=da.tier;s.m5Structure=da.m5Seq;s.m15Structure=da.m15Seq;s.m5Bos=da.m5Bos;s.m15Bos=da.m15Bos;s.directionScoreGap=da.scoreGap;s.pressureGap=da.pressureGap;s.directionReason=da.reason;
+   DirectionAuthority da=EvaluateDirectionAuthority(m5,m15,m30,s.atr,s.buyPressure,s.sellPressure);
+   s.directionBias=da.dir;s.directionTier=da.tier;s.structuralBias=da.structuralDir;s.freshDirection=da.freshDir;s.freshDirectionTier=da.freshTier;s.m5Flow=da.m5Flow;s.m15Flow=da.m15Flow;s.m30Flow=da.m30Flow;s.m5Structure=da.m5Seq;s.m15Structure=da.m15Seq;s.m5Bos=da.m5Bos;s.m15Bos=da.m15Bos;s.directionScoreGap=da.scoreGap;s.pressureGap=da.pressureGap;s.m5FlowStrength=da.m5FlowStrength;s.m15FlowStrength=da.m15FlowStrength;s.m30FlowStrength=da.m30FlowStrength;s.directionReason=da.reason;s.freshDirectionReason=da.freshReason;
 
    if(S.state==SETUP_WATCHING||S.state==SETUP_CONFIRMED)
      {
@@ -2849,7 +2881,7 @@ Snap Observe()
       else
         {
          bool bad=S.dir>0?(tk.bid<=S.extreme):(tk.ask>=S.extreme);
-         bool directionFlipped=da.transition||(da.dir!=0&&da.tier>=2&&da.dir!=S.dir);
+         bool directionFlipped=(da.dir!=0&&da.tier>=2&&da.dir!=S.dir)||(da.freshDir!=0&&da.freshTier>=2&&da.freshDir!=S.dir);
          if(directionFlipped){S.state=SETUP_INVALIDATED;SetupReset("DIRECTION_AUTHORITY_FLIPPED");}
          else if(bad){S.state=SETUP_INVALIDATED;SetupReset("THESIS_INVALIDATION_LEVEL_BREACHED");}
         }
@@ -2889,7 +2921,7 @@ Snap Observe()
    if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason=da.transition?"DIRECTION_TRANSITION_WAIT":"NO_QUALIFIED_CONTEXT";return s;}
    string activeFamily=FamilyFromSig(S.sig);
    s.dir=S.dir;s.sig=S.sig;s.extreme=S.extreme;s.price=S.dir>0?tk.ask:tk.bid;s.triggerPrice=s.price;s.triggerBarTime=m1[1].time;s.setupFamily=activeFamily;s.regime=S.sig;s.activePressure=S.dir>0?s.buyPressure:s.sellPressure;
-   s.trendStrength=MathAbs(da.scoreGap);
+   s.trendStrength=MathMax(MathAbs(da.scoreGap),MathMax(da.m5FlowStrength,da.m15FlowStrength));
    double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
    bool stillAllowed=DirectionPermits(da,S.dir,activeFamily=="BREAKOUT");
    if(!stillAllowed)
@@ -2905,7 +2937,7 @@ Snap Observe()
       bool broke=S.dir>0?(tk.ask>=S.prior+C.breakoutBufferAtr*s.atr):(tk.bid<=S.prior-C.breakoutBufferAtr*s.atr);
       double opp=S.dir>0?s.sellPressure:s.buyPressure;ign=ctx&&broke&&IgnitionPattern(m1,S.dir,s.atr,s.activePressure,opp,C.breakoutPressureMin,cq,kind);
       s.breakoutLevel=S.prior;s.compressionScore=comp;
-      s.score=clamp(10+s.activePressure*.20+cq*.20+comp*.10+MathMin(8.0,(double)touches*2.0)+MathMin(24.0,MathAbs(da.scoreGap)*.35)+(broke?10:0),0,100);
+      s.score=clamp(8+s.activePressure*.18+cq*.20+comp*.08+MathMin(8.0,(double)touches*2.0)+MathMin(18.0,MathAbs(da.scoreGap)*.28)+MathMin(14.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.14)+(broke?10:0),0,100);
      }
    else
      {
@@ -2914,11 +2946,11 @@ Snap Observe()
       s.score=0;
      }
    if(s.setupFamily=="TREND_CONTINUATION")
-      s.score=clamp(10+s.activePressure*.20+cq*.20+MathMin(28.0,MathAbs(da.scoreGap)*.40)+s.pullbackQuality*.18+(ign?10:0),0,100);
+      s.score=clamp(8+s.activePressure*.18+cq*.20+MathMin(20.0,MathAbs(da.scoreGap)*.30)+MathMin(16.0,MathMax(da.m5FlowStrength,da.m15FlowStrength)*.16)+s.pullbackQuality*.14+(ign?10:0),0,100);
    s.contextOk=ctx;s.ignition=ign;s.liveTrigger=ign;s.candleQuality=cq;s.triggerKind=kind;s.bosKind=kind;s.rejected=ctx;s.microBreak=ign;s.continuation=s.setupFamily=="TREND_CONTINUATION";
    s.valid=ctx&&ign&&stillAllowed&&s.candleQuality>=58&&s.score>=threshold;s.reason=s.valid?"DIRECTION_ALIGNED_SIGNAL_CONFIRMED":SetupWaitReason(s,threshold);bool fresh=s.valid&&S.state==SETUP_WATCHING;
    if(fresh){S.state=SETUP_CONFIRMED;S.confirmedAt=TimeCurrent();S.triggerBarTime=s.triggerBarTime;S.triggerPrice=s.triggerPrice;S.bosKind=kind;}EmitSetupTelemetry(s,threshold);
-   if(fresh)Emit("SETUP_CONFIRMED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"setupFamily\":\"%s\",\"regime\":\"%s\",\"score\":%.2f,\"requiredScore\":%.2f,\"directionTier\":%d,\"m5Structure\":%d,\"m15Structure\":%d,\"pressureGap\":%.2f,\"directionReason\":\"%s\",\"triggerKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d",S.id,S.dir,s.setupFamily,s.regime,s.score,threshold,s.directionTier,s.m5Structure,s.m15Structure,s.pressureGap,s.directionReason,kind,s.triggerPrice,(long)s.triggerBarTime));
+   if(fresh)Emit("SETUP_CONFIRMED",StringFormat(",\"setupId\":\"%s\",\"setupDir\":%d,\"setupState\":\"CONFIRMED\",\"setupFamily\":\"%s\",\"regime\":\"%s\",\"score\":%.2f,\"requiredScore\":%.2f,\"directionTier\":%d,\"structuralBias\":%d,\"freshDirection\":%d,\"freshDirectionTier\":%d,\"m5Flow\":%d,\"m15Flow\":%d,\"m30Flow\":%d,\"m5Structure\":%d,\"m15Structure\":%d,\"pressureGap\":%.2f,\"directionReason\":\"%s\",\"freshDirectionReason\":\"%s\",\"triggerKind\":\"%s\",\"triggerPrice\":%.5f,\"triggerBarTime\":%I64d",S.id,S.dir,s.setupFamily,s.regime,s.score,threshold,s.directionTier,s.structuralBias,s.freshDirection,s.freshDirectionTier,s.m5Flow,s.m15Flow,s.m30Flow,s.m5Structure,s.m15Structure,s.pressureGap,s.directionReason,s.freshDirectionReason,kind,s.triggerPrice,(long)s.triggerBarTime));
    return s;
   }
 
@@ -3339,6 +3371,12 @@ bool IsSizeOnlyRejection(uint rc,int mt5err)
 bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPrice,
                double atr,datetime triggerBar,bool enforceReclaim)
   {
+   if(dir==0||(campDir!=0&&dir!=campDir)||(layers==0&&S.dir!=0&&dir!=S.dir))
+     {
+      Emit("DIRECTION_CONTRACT_BLOCK",StringFormat(",\"signalDir\":%d,\"campaignDir\":%d,\"setupDir\":%d,\"reason\":\"OPEN_LAYER_DIRECTION_MISMATCH\",\"why\":\"%s\"",dir,campDir,S.dir,why));
+      Print("APEX DIRECTION CONTRACT BLOCK | OpenLayer dir=",dir," camp=",campDir," setup=",S.dir," why=",why);
+      return false;
+     }
    g_preflightBlock=ComputePreflight();
    if(g_preflightBlock!="")
      {Emit("ENTRY_BLOCKED",StringFormat(",\"reason\":\"%s\",\"stage\":\"PREFLIGHT\",\"why\":\"%s\"",g_preflightBlock,why));return false;}
@@ -3628,6 +3666,14 @@ string NewCampaignId()
 
 void Start(Snap &s)
   {
+   // Direction contract: analysis, setup and execution must all name the same side.
+   // If this invariant is ever false, fail closed instead of submitting an opposite trade.
+   if(s.dir==0||s.directionBias==0||s.dir!=s.directionBias||s.freshDirection!=s.dir)
+     {
+      Emit("DIRECTION_CONTRACT_BLOCK",StringFormat(",\"signalDir\":%d,\"authorityDir\":%d,\"freshDir\":%d,\"reason\":\"START_DIRECTION_MISMATCH\"",s.dir,s.directionBias,s.freshDirection));
+      Print("APEX DIRECTION CONTRACT BLOCK | signal=",s.dir," authority=",s.directionBias," fresh=",s.freshDirection);
+      return;
+     }
    // Provisional identity; the campaign only becomes ACTIVE once a fill is confirmed.
    campDir=s.dir;layers=0;
    cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
@@ -3679,10 +3725,10 @@ void Start(Snap &s)
 AddCandidate BuildAddCandidate()
   {
    AddCandidate a;a.addEligible=false;a.family="NONE";a.score=0;a.atr=ATR();a.reason="NO_NEW_CONFIRMATION";a.triggerId="";a.triggerBarTime=0;a.dir=campDir;
-   if(a.atr<=0)return a;MqlRates m1[],m5[],m15[];if(!Rates(PERIOD_M1,30,m1)||!Rates(PERIOD_M5,60,m5)||!Rates(PERIOD_M15,45,m15)){a.reason="NO_CONFIRMATION_HISTORY";return a;}
+   if(a.atr<=0)return a;MqlRates m1[],m5[],m15[],m30[];if(!Rates(PERIOD_M1,30,m1)||!Rates(PERIOD_M5,60,m5)||!Rates(PERIOD_M15,50,m15)||!Rates(PERIOD_M30,50,m30)){a.reason="NO_CONFIRMATION_HISTORY";return a;}
    datetime bar=m1[1].time;a.triggerBarTime=bar;if(bar<=campStart){a.reason="WAIT_NEW_CLOSED_BAR_AFTER_L1";return a;}
-   double buy=50,sell=50,velocity=0;CalculatePressure(m1,a.atr,buy,sell,velocity);DirectionAuthority da=EvaluateDirectionAuthority(m5,m15,a.atr,buy,sell);
-   if(da.transition||da.dir!=campDir||da.tier<2){a.reason="DIRECTION_AUTHORITY_NO_LONGER_CONFIRMS_CAMPAIGN";return a;}
+   double buy=50,sell=50,velocity=0;CalculatePressure(m1,a.atr,buy,sell,velocity);DirectionAuthority da=EvaluateDirectionAuthority(m5,m15,m30,a.atr,buy,sell);
+   if(da.transition||da.dir!=campDir||da.tier<2||da.freshDir!=campDir||da.freshTier<2){a.reason="FRESH_DIRECTION_NO_LONGER_CONFIRMS_CAMPAIGN";return a;}
    double pressure=campDir>0?buy:sell,opp=campDir>0?sell:buy,cq=DirectionalCandleQuality(m1[1],campDir,a.atr);
    bool closeBreak=campDir>0?m1[1].close>m1[2].high:m1[1].close<m1[2].low;bool continuation=campDir>0?(m1[1].close>m1[1].open&&m1[1].close>m1[2].close):(m1[1].close<m1[1].open&&m1[1].close<m1[2].close);
    bool m5Aligned=campDir>0?m5[1].close>=m5[2].close:m5[1].close<=m5[2].close;double pressureMin=layers<=1?C.trendPressureMin:C.breakoutPressureMin;bool structure=layers<=1?(closeBreak&&continuation):(closeBreak&&m5Aligned);
@@ -4035,7 +4081,7 @@ int OnInit()
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | strategy=BREAKOUT_TREND_DIRECTION_AUTHORITY | entry=live-ignition-v3.9.1");
+      " | strategy=FRESH_DIRECTION_BREAKOUT_TREND | entry=live-ignition-v3.9.2");
    return INIT_SUCCEEDED;
   }
 

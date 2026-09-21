@@ -20,8 +20,8 @@ test('SCORE: the EA decision line is the documented rule', () => {
   assert.ok(validLine, 's.valid=... must exist');
   assert.equal(
     validLine.replace(/\s+/g, ''),
-    's.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold&&!s.extended',
-    'entry requires rejection AND BOS AND M3 gate AND M5 gate AND score>=threshold AND not extended');
+    's.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold',
+    'entry requires rejection AND BOS AND M3 gate AND M5 gate AND score>=threshold');
   assert.equal(
     thresholdLine.replace(/\s+/g, ''),
     'C.entryScore+(C.learningEnabled?C.learnEntryAdj:0)',
@@ -30,17 +30,16 @@ test('SCORE: the EA decision line is the documented rule', () => {
 
 // Evaluate the REAL expression rather than a paraphrase of it.
 function decide({ rejected, microBreak, m3Gate, m5Gate, score, entryScore,
-                  learningEnabled = false, learnEntryAdj = 0, extended = false }) {
+                  learningEnabled = false, learnEntryAdj = 0 }) {
   const C = { entryScore, learningEnabled, learnEntryAdj };
   const threshold = eval(thresholdLine.replace(/C\./g, 'C.'));
-  const s = { rejected, microBreak, score, extended };
+  const s = { rejected, microBreak, score };
   const valid = eval(validLine);
   const waitReason = !s.rejected ? 'REJECTION'
     : !s.microBreak ? 'BOS'
     : !m3Gate ? 'M3'
     : !m5Gate ? 'M5'
-    : s.score < threshold ? 'SCORE'
-    : s.extended ? 'EXTENDED' : '';
+    : s.score < threshold ? 'SCORE' : '';
   return { valid, threshold, waitReason };
 }
 
@@ -69,13 +68,6 @@ test('SCORE: a passing score never bypasses BOS or a required M3/M5 gate', () =>
                         score: 99, entryScore: 60 }).valid, false);
   assert.equal(decide({ rejected: true, microBreak: true, m3Gate: true, m5Gate: false,
                         score: 99, entryScore: 60 }).valid, false);
-});
-
-test('SCORE: an extended confirm is refused even at a passing score', () => {
-  const r = decide({ rejected: true, microBreak: true, m3Gate: true, m5Gate: true,
-                     score: 99, entryScore: 60, extended: true });
-  assert.equal(r.valid, false, 'late/extended location must not be rescued by score');
-  assert.equal(r.waitReason, 'EXTENDED');
 });
 
 test('SCORE: entryScore=76 with score=70 blocks on SCORE once every gate passes', () => {

@@ -7,12 +7,12 @@
 //|  (if(s.valid) Start(s)) -> profit-side pyramiding -> basket exit  |
 //|  on target / ratchet / master SL / recovery-to-entry.             |
 //|                                                                   |
-//|  v3.8.8 changes UNLIMITED sizing ONLY:                            |
+//|  v3.8.8 sizing remains UnlimitedFromL3:                           |
 //|    L1  = 15% of SIMULATED 1:200 capacity                          |
 //|    L2  = 50% of SIMULATED 1:200 capacity (re-derived fresh)       |
-//|    L3  = 100% of actual UNLIMITED executable capacity             |
-//|    L4+ = 100% of actual UNLIMITED executable capacity (profit-fed)|
-//|  NORMAL sizing is byte-for-byte the v3.8.2 engine and ladder.     |
+//|    L3+ = 100% of actual UNLIMITED executable capacity             |
+//|  Replay fix: rejection candle wick/body must be >= 0.10.          |
+//|  No other signal, sizing, pyramid, stop or exit rule is changed.  |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
 #property version   "3.880"
@@ -30,6 +30,7 @@ CTrade trade;
 #define APEX_SCORE_BASE    25.0    // constant, non-discriminating ranking offset -- see APEX-AUDIT-006
 #define APEX_MAX_TRIGGERS  32
 #define APEX_EVENTQ_MAX    2048
+#define APEX_REJECTION_WICK_BODY_MIN 0.10 // replay-backed v3.8.8 rejection-quality floor
 
 // v3.8.8 UNLIMITED layer state machine (owner rule, see PlanLayerSizing):
 //   L1  -> SIMULATED 1:200 capacity x 15%
@@ -2685,11 +2686,21 @@ Snap Observe()
       double up=m1[i].high-MathMax(m1[i].open,m1[i].close);
       double lo=MathMin(m1[i].open,m1[i].close)-m1[i].low;
       if(s.dir<0)
-        {bestW=MathMax(bestW,up/body);
-         if(m1[i].high>=S.extreme-C.rejectionZoneAtr*s.atr&&m1[i].close<S.prior)rej=true;}
+        {
+         double rejectionWickRatio=up/body;
+         bestW=MathMax(bestW,rejectionWickRatio);
+         if(m1[i].high>=S.extreme-C.rejectionZoneAtr*s.atr&&
+            m1[i].close<S.prior&&
+            rejectionWickRatio>=APEX_REJECTION_WICK_BODY_MIN)rej=true;
+        }
       else
-        {bestW=MathMax(bestW,lo/body);
-         if(m1[i].low<=S.extreme+C.rejectionZoneAtr*s.atr&&m1[i].close>S.prior)rej=true;}
+        {
+         double rejectionWickRatio=lo/body;
+         bestW=MathMax(bestW,rejectionWickRatio);
+         if(m1[i].low<=S.extreme+C.rejectionZoneAtr*s.atr&&
+            m1[i].close>S.prior&&
+            rejectionWickRatio>=APEX_REJECTION_WICK_BODY_MIN)rej=true;
+        }
      }
 
    // --- APEX-AUDIT-006: explicit, truthfully-named confirmation predicate.

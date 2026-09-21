@@ -167,9 +167,9 @@ test('SITE-001+SITE-009 HTTP: arm without bridge is not DELIVERED; NORMAL cannot
     assert.equal(escalate.status,403);
     assert.equal(escalate.body.error,'UNLIMITED_NOT_ENTITLED');
     const health=await request(base,'/health');
-    assert.equal(health.body.version,'3.8.9');
+    assert.equal(health.body.version,'3.9.0');
     assert.equal(health.body.webRequestOrigin,'https://xaucloud.io');
-    assert.equal(health.body.eaVersion,'XauCloud-Apex_v3.8.9-BreakfastTiming');
+    assert.equal(health.body.eaVersion,'XauCloud-Apex_v3.9.0-FailedBreakout');
   }finally{
     await new Promise(ok=>httpMod.server.close(ok));
     await fs.rm(dir,{recursive:true,force:true});

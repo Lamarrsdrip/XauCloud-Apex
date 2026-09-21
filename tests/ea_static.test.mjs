@@ -168,14 +168,14 @@ test('failed/unconfirmed broker submissions cannot increment Apex layer state', 
     'layers++ must occur only after confirmed/partial broker fill');
 });
 
-test('v3.8.6 keeps v3.8.2 confirmation-is-entry: if(s.valid) Start(s), no origin box', () => {
+test('v3.9.0 keeps v3.8.2 confirmation-is-entry; dead-thesis is allowed, MODEL C is not', () => {
   assert.match(s, /if\(s\.valid\) Start\(s\);/);
   assert.doesNotMatch(s, /if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.doesNotMatch(s, /WAITING_FOR_ENTRY_LOCATION/);
   assert.doesNotMatch(s, /RETEST_EXECUTABLE/);
   assert.doesNotMatch(s, /ComputeExecRegion/);
   assert.doesNotMatch(s, /PRICE_LEFT_ORIGIN_BOX/);
-  assert.doesNotMatch(s, /DeadThesisBlocks/);
+  assert.match(s, /DeadThesisBlocks/);
   assert.doesNotMatch(s, /ApplyLegacySchemaGuard/);
   assert.match(s, /entry=confirm-then-start v3\.8\.2/);
 });

@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.9",
-  "buildId": "3.8.9-breakfast-timing",
-  "eaVersion": "XauCloud-Apex_v3.8.9-BreakfastTiming",
+  "version": "3.9.0",
+  "buildId": "3.9.0-failed-breakout",
+  "eaVersion": "XauCloud-Apex_v3.9.0-FailedBreakout",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.9-BreakfastTiming.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.9.0-FailedBreakout.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.9-BreakfastTiming). Versioned copy is ea/XauCloud-Apex-v3.8.9-BreakfastTiming.mq5. v3.8.9 changes setup TIMING only: nearby swing liquidity, failed-hold rejection, M1 displacement may bypass a lagging M3 colour gate, and a confirm already >1.50 ATR from the swept extreme is refused. Score stays 76. UNLIMITED/NORMAL sizing is unchanged from v3.8.8. Compile ea/XauCloud-Apex.mq5."
+  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.9.0-FailedBreakout). v3.8.9 faded grind pullbacks (failedHold + M3 bypass + re-arm on every new high). v3.9.0: rejection must close back through the nearby swing pool, M3 is a hard gate, same-run higher-highs are dead-thesis. Sizing unchanged from v3.8.8. Compile ea/XauCloud-Apex.mq5."
 }

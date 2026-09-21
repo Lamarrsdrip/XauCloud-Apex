@@ -1,37 +1,36 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.9.0 "FailedBreakout"                            |
+//|  XauCloud Apex v3.8.8 "UnlimitedFromL3"                           |
 //|                                                                   |
-//|  TRADING BASE = v3.8.2 CapacityTruth + v3.8.8 UnlimitedFromL3     |
-//|  sizing. Same strategy: impulse -> sweep -> rejection -> BOS.     |
+//|  TRADING BASE = v3.8.2 CapacityTruth + v3.8.6 live-platform       |
+//|  hardening. Strategy/entries/exits are unchanged: impulse ->      |
+//|  sweep -> rejection -> micro BOS -> first probe on confirmation   |
+//|  (if(s.valid) Start(s)) -> profit-side pyramiding -> basket exit  |
+//|  on target / ratchet / master SL / recovery-to-entry.             |
 //|                                                                   |
-//|  v3.8.9 was TOO LOOSE. Tester on 25 Aug 05:00 sold every dip in   |
-//|  a grind higher (failedHold of the wick + M3 bypass + re-arm on   |
-//|  each new high), then pyramided the loser. 3.8.8 was better.      |
-//|                                                                   |
-//|  v3.9.0 keeps 3.8.9's useful bits and kills the grind-fade:       |
-//|    - nearby swing pool (not 70-bar prior)                         |
-//|    - rejection = close BACK THROUGH that pool, not a 1-bar dip    |
-//|    - M3 colour is a hard gate again (no bypass)                   |
-//|    - a SELL invalidated by a higher high cannot re-arm this run   |
-//|    - still refuse a confirm already >1.50 ATR from the extreme    |
-//|  Score stays 76. Sizing unchanged from v3.8.8.                    |
+//|  v3.8.8 sizing remains UnlimitedFromL3:                           |
+//|    L1  = 15% of SIMULATED 1:200 capacity                          |
+//|    L2  = 50% of SIMULATED 1:200 capacity (re-derived fresh)       |
+//|    L3+ = 100% of actual UNLIMITED executable capacity             |
+//|  Replay fix: rejection candle wick/body must be >= 0.10.          |
+//|  No other signal, sizing, pyramid, stop or exit rule is changed.  |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
-#property version   "3.900"
+#property version   "3.880"
 #property strict
-#property description "XauCloud Apex v3.9.0 FailedBreakout"
+#property description "XauCloud Apex v3.8.8 UnlimitedFromL3"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.9.0-FailedBreakout"
-#define APEX_BUILD_ID      "3.9.0"
+#define APEX_VERSION       "XauCloud-Apex_v3.8.8-UnlimitedFromL3"
+#define APEX_BUILD_ID      "3.8.8"
 #define APEX_MAGIC         8620260903
 #define APEX_STATE_SCHEMA  4
 #define APEX_CONFIG_SCHEMA 2
 #define APEX_SCORE_BASE    25.0    // constant, non-discriminating ranking offset -- see APEX-AUDIT-006
 #define APEX_MAX_TRIGGERS  32
 #define APEX_EVENTQ_MAX    2048
+#define APEX_REJECTION_WICK_BODY_MIN 0.10 // replay-backed v3.8.8 rejection-quality floor
 
 // v3.8.8 UNLIMITED layer state machine (owner rule, see PlanLayerSizing):
 //   L1  -> SIMULATED 1:200 capacity x 15%
@@ -381,7 +380,7 @@ struct Snap
    int    dir;
    double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;
    bool   swept,rejected,microBreak,m3Color,m5Color,m3Fresh;
-   bool   continuation,pullbackFail,m3Bypass,extended;
+   bool   continuation,pullbackFail;
    string sig,reason,bosKind;
    datetime triggerBarTime;
    double triggerPrice;
@@ -815,8 +814,8 @@ void Defaults()
    C.minMarginLevelPct=InpMinMarginLevelPct;
    C.marginReservePct=InpMarginReservePct;
    C.baseMarginPct=100;C.layerMultiplier=2;C.maxLayers=0;C.entryScore=76;C.addScore=70;
-   C.impulseAtr=1.8;C.sweepAtr=.05;C.rejectionBars=8;C.watchExpiryMinutes=20;
-   C.addSpacingAtr=.22;C.rejectionZoneAtr=.25;C.cooldownMinutes=0;C.requireM3Confirm=true;
+   C.impulseAtr=1.8;C.sweepAtr=.05;C.rejectionBars=5;C.watchExpiryMinutes=12;
+   C.addSpacingAtr=.22;C.rejectionZoneAtr=.12;C.cooldownMinutes=0;C.requireM3Confirm=true;
    C.requireM5Context=false;C.learningEnabled=true;C.learnEntryAdj=0;C.learnAddAdj=0;
    C.revision=0;C.configHash="";
   }
@@ -2487,27 +2486,6 @@ bool Rates(ENUM_TIMEFRAMES tf,int n,MqlRates &r[])
   {ArraySetAsSeries(r,true);return CopyRates(_Symbol,tf,0,n,r)>=n-2;}
 
 //====================== setup lifecycle (APEX-AUDIT-003) ==============
-// v3.9.0: a SELL that dies because price made a NEW high is the same grind, not a
-// new breakfast. Do not re-arm that direction until an opposite impulse prints.
-int      g_deadDir=0;
-double   g_deadExtreme=0;
-
-void ClearDeadThesis()
-  {
-   g_deadDir=0;g_deadExtreme=0;
-  }
-void RememberDeadThesis(int dir,double extreme)
-  {
-   g_deadDir=dir;g_deadExtreme=extreme;
-  }
-bool DeadThesisBlocks(int dir,double newExtreme)
-  {
-   if(g_deadDir==0 || dir!=g_deadDir) return false;
-   if(dir<0 && newExtreme>=g_deadExtreme) return true;
-   if(dir>0 && newExtreme<=g_deadExtreme) return true;
-   return false;
-  }
-
 void SetupReset(string reason)
   {
    // SETUP-TELEMETRY-001: terminal setup transitions must be observable BEFORE
@@ -2574,7 +2552,6 @@ string SetupWaitReason(const Snap &s,bool m3Available,bool m5Available,
    if(!m3Gate) return "M3_CONFIRM";
    if(!m5Gate) return "M5_CONTEXT";
    if(s.score<threshold) return "SCORE";
-   if(s.extended) return "EXTENDED";
    return "READY";
   }
 
@@ -2628,45 +2605,22 @@ void EmitSetupTelemetry(const Snap &s,bool m3Available,bool m5Available,
          " | bos=",s.microBreak?"PASS":"WAIT",
          " | m3=",C.requireM3Confirm?(m3Gate?"PASS":"WAIT"):"OPTIONAL",
          " | m5=",C.requireM5Context?(m5Gate?"PASS":"WAIT"):"OPTIONAL",
-         " | extended=",s.extended?"YES":"NO",
          " | waiting=",waitReason);
   }
 
 //====================== observation ===================================
-// Family is still impulse -> sweep -> rejection -> BOS (v3.7.1 / breakfast).
-// v3.9.0: failed BREAKOUT of the nearby pool. A 1-bar dip below the wick is not
-// a breakfast (that is what made 3.8.9 fade the 25 Aug grind). M3 is mandatory.
-// Same-run higher-highs are dead-thesis, not a fresh SELL.
-void LiquidityRefs(MqlRates &m1[],double &ph,double &pl)
-  {
-   ph=-DBL_MAX;pl=DBL_MAX;
-   int n=ArraySize(m1);
-   double swingH=-DBL_MAX,swingL=DBL_MAX;
-   bool haveH=false,haveL=false;
-   int last=MathMin(n-3,40);
-   for(int i=9;i<=last;i++)
-     {
-      if(m1[i].high>=m1[i-1].high&&m1[i].high>=m1[i-2].high&&
-         m1[i].high>=m1[i+1].high&&m1[i].high>=m1[i+2].high)
-        {if(!haveH||m1[i].high>swingH){swingH=m1[i].high;haveH=true;}}
-      if(m1[i].low<=m1[i-1].low&&m1[i].low<=m1[i-2].low&&
-         m1[i].low<=m1[i+1].low&&m1[i].low<=m1[i+2].low)
-        {if(!haveL||m1[i].low<swingL){swingL=m1[i].low;haveL=true;}}
-     }
-   double rollH=-DBL_MAX,rollL=DBL_MAX;
-   int rollLast=MathMin(n-1,40);
-   for(int i=9;i<=rollLast;i++){rollH=MathMax(rollH,m1[i].high);rollL=MathMin(rollL,m1[i].low);}
-   ph=haveH?swingH:rollH;
-   pl=haveL?swingL:rollL;
-  }
-
+// The detector itself is UNCHANGED from v3.7.1 (impulse -> sweep -> rejection -> BOS).
+// What changed:
+//   003  a new extreme beyond the watched one RE-ARMS a fresh setup instead of leaving
+//        the dead one frozen until its timer runs out;
+//   006  the BOS predicate is explicit and its kind is reported truthfully;
+//   007  missing M3/M5 history is no longer a hard dependency when the filter is off.
 Snap Observe()
   {
    Snap s;
    s.valid=false;s.dir=0;s.score=0;s.atr=ATR();s.price=0;s.extreme=0;
    s.impulseMult=0;s.sweepMult=0;s.wickRatio=0;s.swept=false;s.rejected=false;s.microBreak=false;
    s.m3Color=false;s.m5Color=false;s.m3Fresh=false;s.continuation=false;s.pullbackFail=false;
-   s.m3Bypass=false;s.extended=false;
    s.sig="NONE";s.reason="";s.bosKind="NONE";s.triggerBarTime=0;s.triggerPrice=0;
    if(s.atr<=0){s.reason="NO_ATR";return s;}
 
@@ -2686,8 +2640,8 @@ Snap Observe()
    for(int i=1;i<=7;i++)
       if((imp>0&&m1[i].close>m1[i].open)||(imp<0&&m1[i].close<m1[i].open))directional++;
 
-   double ph=0,pl=0;
-   LiquidityRefs(m1,ph,pl);
+   double ph=-DBL_MAX,pl=DBL_MAX;
+   for(int i=9;i<80;i++){ph=MathMax(ph,m1[i].high);pl=MathMin(pl,m1[i].low);}
 
    // --- APEX-AUDIT-003: a watch whose premise the market has destroyed must die, and a
    // --- genuinely new sweep must be able to take its place immediately.
@@ -2705,27 +2659,16 @@ Snap Observe()
             if(S.dir<0&&m1[i].high>S.extreme){newExtreme=true;break;}
             if(S.dir>0&&m1[i].low<S.extreme){newExtreme=true;break;}
            }
-         if(newExtreme)
-           {
-            RememberDeadThesis(S.dir,S.extreme);
-            S.state=SETUP_INVALIDATED;SetupReset("NEW_EXTREME_BEYOND_SWEPT_LEVEL");
-           }
+         if(newExtreme){S.state=SETUP_INVALIDATED;SetupReset("NEW_EXTREME_BEYOND_SWEPT_LEVEL");}
         }
      }
-
-   // Opposite impulse of the dead thesis (a real reversal) clears it.
-   // The grind that killed the watch is the SAME impulse, so it must NOT clear.
-   if(g_deadDir!=0 && imp==g_deadDir && s.impulseMult>=C.impulseAtr)
-      ClearDeadThesis();
 
    bool canArm=(S.state==SETUP_NONE);
    if(canArm&&s.impulseMult>=C.impulseAtr&&directional>=5)
      {
       double ex=imp>0?m1[1].high:m1[1].low;
       bool swept=imp>0?ex>=ph+C.sweepAtr*s.atr:ex<=pl-C.sweepAtr*s.atr;
-      int watchDir=-imp;
-      if(swept && !DeadThesisBlocks(watchDir,ex))
-         ArmSetup(watchDir,m1[1].time,ex,imp>0?ph:pl,s.atr,s.impulseMult);
+      if(swept) ArmSetup(-imp,m1[1].time,ex,imp>0?ph:pl,s.atr,s.impulseMult);
      }
 
    if(S.state!=SETUP_WATCHING&&S.state!=SETUP_CONFIRMED){s.reason="NO_ACTIVE_SETUP";return s;}
@@ -2734,13 +2677,8 @@ Snap Observe()
    s.impulseMult=MathAbs(m1[1].close-m1[8].close)/s.atr;
    s.price=s.dir>0?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
 
-   // Failed breakout: some bar after the sweep still tagged the pool, AND a
-   // (possibly later) bar closed back through S.prior. Two-bar is allowed so we
-   // do not need 3.8.8's same-candle V-reversal of the whole impulse. A close
-   // merely below the wick tip (3.8.9 failedHold) is NOT enough — that is the
-   // 25 Aug grind fade.
-   int rb=MathMax(1,MathMin(C.rejectionBars,12));
-   bool tagged=false,closedThroughPrior=false;double bestW=0;
+   int rb=MathMax(1,MathMin(C.rejectionBars,8));
+   bool rej=false;double bestW=0;
    for(int i=1;i<=rb;i++)
      {
       if(m1[i].time<=S.sweepBarTime)continue;
@@ -2749,18 +2687,21 @@ Snap Observe()
       double lo=MathMin(m1[i].open,m1[i].close)-m1[i].low;
       if(s.dir<0)
         {
-         bestW=MathMax(bestW,up/body);
-         if(m1[i].high>=S.extreme-C.rejectionZoneAtr*s.atr) tagged=true;
-         if(m1[i].close<S.prior && m1[i].close<m1[i].open) closedThroughPrior=true;
+         double rejectionWickRatio=up/body;
+         bestW=MathMax(bestW,rejectionWickRatio);
+         if(m1[i].high>=S.extreme-C.rejectionZoneAtr*s.atr&&
+            m1[i].close<S.prior&&
+            rejectionWickRatio>=APEX_REJECTION_WICK_BODY_MIN)rej=true;
         }
       else
         {
-         bestW=MathMax(bestW,lo/body);
-         if(m1[i].low<=S.extreme+C.rejectionZoneAtr*s.atr) tagged=true;
-         if(m1[i].close>S.prior && m1[i].close>m1[i].open) closedThroughPrior=true;
+         double rejectionWickRatio=lo/body;
+         bestW=MathMax(bestW,rejectionWickRatio);
+         if(m1[i].low<=S.extreme+C.rejectionZoneAtr*s.atr&&
+            m1[i].close>S.prior&&
+            rejectionWickRatio>=APEX_REJECTION_WICK_BODY_MIN)rej=true;
         }
      }
-   bool rej=tagged && closedThroughPrior;
 
    // --- APEX-AUDIT-006: explicit, truthfully-named confirmation predicate.
    // BOS_V371_CLOSE_OR_WICK is byte-for-byte the v3.7.1 rule; nothing is removed by default.
@@ -2797,7 +2738,6 @@ Snap Observe()
                +clamp(bestW*2,0,5);
    s.score=clamp(score,0,100);
 
-   s.m3Bypass=false;
    bool m3Gate=(!C.requireM3Confirm)||(s.m3Color&&(!InpRequireFreshM3||s.m3Fresh));
    bool m5Gate=(!C.requireM5Context)||s.m5Color;
    double threshold=C.entryScore+(C.learningEnabled?C.learnEntryAdj:0);
@@ -2816,13 +2756,8 @@ Snap Observe()
       return s;
      }
 
-   double distFromExtreme=0;
-   if(s.atr>0 && S.extreme>0)
-      distFromExtreme=s.dir<0 ? (S.extreme-m1[1].close) : (m1[1].close-S.extreme);
-   s.extended=(s.atr>0 && distFromExtreme>InpMaxEntryExtensionAtr*s.atr);
-   s.valid=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold&&!s.extended;
-   s.reason=s.valid?"CONFIRMED_EXHAUSTION_REVERSAL":
-            (s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold?"CONFIRMED_BUT_EXTENDED_FROM_EXTREME":"WATCHING_FOR_REJECTION_AND_BOS");
+   s.valid=s.rejected&&s.microBreak&&m3Gate&&m5Gate&&s.score>=threshold;
+   s.reason=s.valid?"CONFIRMED_EXHAUSTION_REVERSAL":"WATCHING_FOR_REJECTION_AND_BOS";
    bool newlyConfirmed=s.valid&&S.state==SETUP_WATCHING;
    if(newlyConfirmed)
      {
@@ -2840,9 +2775,7 @@ Snap Observe()
          S.armedAt>0?(int)MathMax(0,(double)(TimeCurrent()-S.armedAt)):0));
       Print("APEX SETUP CONFIRMED | ",S.dir>0?"BUY":"SELL"," | id=",S.id,
             " | score=",DoubleToString(s.score,1),"/",DoubleToString(threshold,1),
-            " | bos=",S.bosKind,
-            " | m3=","PASS",
-            " | submitting on existing v3.8.2 rule");
+            " | bos=",S.bosKind," | submitting on existing v3.8.2 rule");
      }
    return s;
   }
@@ -4004,7 +3937,7 @@ int OnInit()
       " | accountTradeAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false",
       " | accountExpertAllowed=",(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT)?"true":"false",
       " | preflight=",(g_preflightBlock==""?"OK":g_preflightBlock),
-      " | entry=confirm-then-start v3.8.2 + failed-breakout v3.9.0");
+      " | entry=confirm-then-start v3.8.2");
    return INIT_SUCCEEDED;
   }
 

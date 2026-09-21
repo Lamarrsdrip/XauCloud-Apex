@@ -1,10 +1,10 @@
 {
   "product": "XauCloud Apex",
-  "version": "3.8.8",
-  "buildId": "3.8.8-unlimited-from-l3",
-  "eaVersion": "XauCloud-Apex_v3.8.8-UnlimitedFromL3",
+  "version": "3.8.9",
+  "buildId": "3.8.9-breakfast-timing",
+  "eaVersion": "XauCloud-Apex_v3.8.9-BreakfastTiming",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.8.9-BreakfastTiming.mq5",
   "configSchema": 2,
   "stateSchema": 4,
   "webRequestOrigin": "https://xaucloud.io",
@@ -13,5 +13,5 @@
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.8-UnlimitedFromL3). Versioned copy is ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5. Trading logic is unchanged from v3.8.7; v3.8.8 changes UNLIMITED sizing only: L1 = 15% and L2 = 50% of the account's SIMULATED 1:200 capacity (re-derived per layer, existing exposure re-priced at 1:200), L3 and every later layer = 100% of the actual UNLIMITED executable capacity. A server size rejection keeps the layer's engine and percentage. NORMAL sizing is unchanged. Compile ea/XauCloud-Apex.mq5. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 / v3.8.7 sources."
+  "notes": "Main bot is ea/XauCloud-Apex.mq5 (XauCloud-Apex_v3.8.9-BreakfastTiming). Versioned copy is ea/XauCloud-Apex-v3.8.9-BreakfastTiming.mq5. v3.8.9 changes setup TIMING only: nearby swing liquidity, failed-hold rejection, M1 displacement may bypass a lagging M3 colour gate, and a confirm already >1.50 ATR from the swept extreme is refused. Score stays 76. UNLIMITED/NORMAL sizing is unchanged from v3.8.8. Compile ea/XauCloud-Apex.mq5."
 }

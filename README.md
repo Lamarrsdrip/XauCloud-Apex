@@ -1,20 +1,20 @@
-# XauCloud Apex v3.8.6 — HardenedCapacity
+# XauCloud Apex v3.8.9 — BreakfastTiming
 
 > **Current strategy reference:** the protected v3.8.8 baseline and the seven-video Breakfast Setup analysis are documented in [docs/REFERENCE_TRADER_BREAKFAST_SETUP.md](docs/REFERENCE_TRADER_BREAKFAST_SETUP.md). Future strategy work must read that playbook before modifying setup/confirmation logic.
 
 **Main bot:** `ea/XauCloud-Apex.mq5`  
-**Identity:** `XauCloud-Apex_v3.8.6-HardenedCapacity`  
+**Identity:** `XauCloud-Apex_v3.8.9-BreakfastTiming`  
 **Compile that file.** The Expert name in MT5 is `XauCloud-Apex`.
 
-Trading behavior is v3.8.2 CapacityTruth (`if(s.valid) Start(s)` on confirmation).
-v3.8.6 only adds 24 non-strategy live-platform hardenings. It is **not** the
+Trading behavior is still v3.8.2 confirmation-is-entry (`if(s.valid) Start(s)`).
+v3.8.9 only changes **when** a breakfast setup confirms (see docs/APEX_V389_BREAKFAST_TIMING.md). Sizing is unchanged from v3.8.8. It is **not** the
 XauCloud trading strategy and does not consume XauCloud Outlook, Manual Trading
 Intelligence, TradeBrain, Global Brain or the XauCloud M10 strategy.
 
 ## Canonical architecture
 
 - Main / canonical EA: `ea/XauCloud-Apex.mq5`
-- Versioned release copy: `ea/XauCloud-Apex-v3.8.6-HardenedCapacity.mq5` (byte-identical)
+- Versioned release copy: `ea/XauCloud-Apex-v3.8.9-BreakfastTiming.mq5` (byte-identical)
 - Historical v3.8.2 snapshot (do **not** compile): `ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5` and `ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`
 - Canonical MT5 WebRequest origin: **`https://xaucloud.io`** (never `https://apex.xaucloud.io`)
 - XauCloud is the Apex **infrastructure bridge only**: licensing, configuration, heartbeat and events.

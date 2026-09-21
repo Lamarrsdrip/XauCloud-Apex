@@ -13,16 +13,16 @@ test('the canonical and versioned EA files are byte-identical',()=>{
   const canonical=fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5',import.meta.url));
   const versioned=fs.readFileSync(new URL('../'+version.versionedEaFile,import.meta.url));
   assert.equal(version.eaFile,'ea/XauCloud-Apex.mq5');
-  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5');
+  assert.equal(version.versionedEaFile,'ea/XauCloud-Apex-v3.8.9-BreakfastTiming.mq5');
   assert.equal(sha(canonical),sha(versioned),
     `${version.eaFile} and ${version.versionedEaFile} must be identical`);
 });
 
 test('version.json, the EA banner and #property version all agree',()=>{
-  assert.equal(version.version,'3.8.8');
+  assert.equal(version.version,'3.8.9');
   assert.ok(ea.includes(version.eaVersion),'EA must define the version.json eaVersion string');
   const prop=ea.match(/#property version\s+"([\d.]+)"/)?.[1];
-  assert.equal(prop,'3.880');
+  assert.equal(prop,'3.890');
 });
 function floorStep(v,step=0.01){return Math.floor((v+1e-12)/step)*step;}
 function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0.01}){
@@ -33,13 +33,15 @@ function normalVolume({free=1000,price=4420,contract=100,leverage=500,pct,step=0
   return Math.min(byCapacity,byMoney);
 }
 
-test('canonical EA is v3.8.8 UnlimitedFromL3 with v3.8.2 CapacityTruth trading intact',()=>{
-  assert.match(ea,/#property version\s+"3\.880"/);
-  assert.match(ea,/XauCloud-Apex_v3\.8\.8-UnlimitedFromL3/);
+test('canonical EA is v3.8.9 BreakfastTiming with v3.8.2 CapacityTruth trading intact',()=>{
+  assert.match(ea,/#property version\s+"3\.890"/);
+  assert.match(ea,/XauCloud-Apex_v3\.8\.9-BreakfastTiming/);
   assert.match(ea,/if\(s\.valid\) Start\(s\);/);
   assert.doesNotMatch(ea,/if\(s\.valid&&s\.inLocation\) Start\(s\)/);
   assert.match(ea,/TrustedMarginPerLot/);
   assert.match(ea,/NORMAL_REFERENCE_LEVERAGE/);
+  assert.match(ea,/LiquidityRefs/);
+  assert.match(ea,/failedHold/);
 });
 
 test('NORMAL 15/50/100 is monetary margin semantics, not SYMBOL_VOLUME_MAX percentages',()=>{

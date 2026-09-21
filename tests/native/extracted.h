@@ -68,7 +68,7 @@ struct Snap
    int    dir;
    double score,atr,price,extreme,impulseMult,sweepMult,wickRatio;
    bool   swept,rejected,microBreak,m3Color,m5Color,m3Fresh;
-   bool   continuation,pullbackFail;
+   bool   continuation,pullbackFail,m3Bypass,extended;
    string sig,reason,bosKind;
    datetime triggerBarTime;
    double triggerPrice;

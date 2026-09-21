@@ -1,58 +1,48 @@
-# XauCloud Apex v3.9.0 — FailedBreakout
-
-> **Current strategy reference:** the protected v3.8.8 baseline and the seven-video Breakfast Setup analysis are documented in [docs/REFERENCE_TRADER_BREAKFAST_SETUP.md](docs/REFERENCE_TRADER_BREAKFAST_SETUP.md). Future strategy work must read that playbook before modifying setup/confirmation logic.
+# XauCloud Apex v3.8.8 — UnlimitedFromL3 + Rejection Quality
 
 **Main bot:** `ea/XauCloud-Apex.mq5`  
-**Identity:** `XauCloud-Apex_v3.9.0-FailedBreakout`  
-**Compile that file.** The Expert name in MT5 is `XauCloud-Apex`.
+**Identity:** `XauCloud-Apex_v3.8.8-UnlimitedFromL3`  
+**MT5 property:** `#property version "3.880"`
 
-Trading behavior is still v3.8.2 confirmation-is-entry (`if(s.valid) Start(s)`).
-v3.9.0 confirms a failed breakout of the nearby pool and will not re-sell a grind that just made a new high (see docs/APEX_V390_FAILED_BREAKOUT.md). Sizing is unchanged from v3.8.8. It is **not** the
-XauCloud trading strategy and does not consume XauCloud Outlook, Manual Trading
-Intelligence, TradeBrain, Global Brain or the XauCloud M10 strategy.
+The active strategy is the original v3.8.8 confirmation-is-entry family:
+`impulse -> sweep -> rejection -> micro BOS -> Start(s)`.
+
+The only replay-backed strategy patch is:
+
+`rejection_wick / max(candle_body, point) >= 0.10`
+
+It is evaluated on the actual candle that satisfies the rejection predicate. No
+v3.8.9 BreakfastTiming or v3.9.0 FailedBreakout logic is active in the canonical EA.
+See `docs/APEX_V388_REPLAY_IMPROVEMENTS_2026-09-22.md`.
 
 ## Canonical architecture
 
-- Main / canonical EA: `ea/XauCloud-Apex.mq5`
-- Versioned release copy: `ea/XauCloud-Apex-v3.9.0-FailedBreakout.mq5` (byte-identical)
-- Historical v3.8.2 snapshot (do **not** compile): `ea/XauCloud-Apex-v3.8.2-CapacityTruth.mq5` and `ea/archive/XauCloud-Apex-v3.8.2-CapacityTruth.mq5`
-- Canonical MT5 WebRequest origin: **`https://xaucloud.io`** (never `https://apex.xaucloud.io`)
-- XauCloud is the Apex **infrastructure bridge only**: licensing, configuration, heartbeat and events.
+- Main EA: `ea/XauCloud-Apex.mq5`
+- Versioned copy: `ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5` (byte-identical)
+- WebRequest origin: **`https://xaucloud.io`**
 - Heartbeat: `POST /api/cloud/monitor/heartbeat`
 - Config: `GET /api/cloud/apex/config`
-- Event/ACK telemetry: `POST /api/cloud/apex/event`
-- Customer enters only the Apex license in `InpApexLicense`.
-
-Do **not** reconnect the EA to `apex.xaucloud.io`. The website talks to XauCloud through
-`APEX_BRIDGE_SECRET`. The EA talks to XauCloud through WebRequest.
+- Event telemetry: `POST /api/cloud/apex/event`
 
 ## Account profiles
 
-`NORMAL` is the default. `UNLIMITED` is a **license entitlement**, not a customer toggle.
-A broker offering 1:500 leverage does not automatically make an account UNLIMITED.
+`NORMAL` remains unchanged.
 
-NORMAL keeps the approved confirmation-first ladder (default L1 15%, L2 50%, L3+ 100%).
-UNLIMITED each valid add uses **100% of CURRENT executable remaining capacity**.
-The old "UNLIMITED Profile Multiplier" UI field is a no-op under `baseMarginPct=100`
-and is hidden. Sizing semantics are unchanged from v3.8.2 CapacityTruth.
+For `UNLIMITED`: L1 = 15% of simulated 1:200 capacity; L2 = 50% of freshly
+re-derived simulated 1:200 capacity; L3+ = 100% of actual current Unlimited
+executable capacity. The rejection patch does not change sizing, pyramiding,
+SL, break-even, ratchet or exits.
 
 ## MT5 setup
 
-1. In MetaEditor open and compile **`ea/XauCloud-Apex.mq5`** (`#property version "3.860"`).
-   That produces `XauCloud-Apex.ex5`. Do not compile v3.8.2 / v3.8.3 / v3.8.4 / v3.8.5 files.
-2. MT5 -> Tools -> Options -> Expert Advisors.
-3. Enable Allow WebRequest for listed URL.
-4. Add **`https://xaucloud.io`**. Do not add `https://apex.xaucloud.io` for WebRequest.
-5. Attach **XauCloud-Apex** to XAUUSD/XAUUSDm. Remove any old CapacityTruth / 3.8.3 / 3.8.4 / 3.8.5 chart Expert.
-6. Enter the Apex license in `InpApexLicense`.
-7. Enable Algo Trading.
-8. Arm the correct license/account from the Apex dashboard.
-9. Confirm Experts log `APEX_READY XauCloud-Apex_v3.8.6-HardenedCapacity`.
-10. Dashboard pills must show **desired** vs **applied** revision. A local save is not "Apex armed".
+1. Compile **`ea/XauCloud-Apex.mq5`** and confirm MetaEditor reports 0 errors, 0 warnings.
+2. Allow WebRequest for **`https://xaucloud.io`**.
+3. Attach **XauCloud-Apex** to XAUUSD/XAUUSDm.
+4. Enter `InpApexLicense`, enable Algo Trading and arm the correct account.
+5. Confirm the Experts log identifies **`XauCloud-Apex_v3.8.8-UnlimitedFromL3`**.
+6. Confirm dashboard desired/applied revisions match the EA heartbeat.
 
-Expected EA identity:
-
-`XauCloud-Apex_v3.8.6-HardenedCapacity`
+Do not compile the untested v3.9.0 snapshot as the production bot.
 
 ## Production
 

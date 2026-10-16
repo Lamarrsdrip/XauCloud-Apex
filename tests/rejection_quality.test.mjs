@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {extract} from './native/extract.mjs';
 
 const ea = fs.readFileSync(new URL('../ea/XauCloud-Apex.mq5', import.meta.url), 'utf8');
 const versioned = fs.readFileSync(new URL('../ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5', import.meta.url), 'utf8');
@@ -17,10 +18,10 @@ function qualifies({ dir, extreme, prior, zone, bar }) {
   return structure && ratio >= 0.10;
 }
 
-test('canonical strategy is patched v3.8.8 and release copy is identical', () => {
-  assert.match(ea, /XauCloud-Apex_v3\.8\.8-UnlimitedFromL3/);
-  assert.match(ea, /#property version\s+"3\.880"/);
-  assert.equal(ea, versioned);
+test('immutable patched v3.8.8 detector remains the exact native fallback', () => {
+  assert.match(versioned, /XauCloud-Apex_v3\.8\.8-UnlimitedFromL3/);
+  assert.match(versioned, /#property version\s+"3\.880"/);
+  assert.equal(extract(ea,'Observe'),extract(versioned,'Observe'));
   assert.doesNotMatch(ea, /BreakfastTiming|FailedBreakout/);
 });
 

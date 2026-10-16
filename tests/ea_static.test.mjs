@@ -18,7 +18,7 @@ test('EA uses the canonical XauCloud infrastructure bridge', () => {
   assert.match(s, /\/api\/cloud\/apex\/config\?license_key=/);
   assert.match(s, /\/api\/cloud\/apex\/event/);
   assert.match(s, /StringToUpper\(s\);StringReplace\(s," ",""\)/);
-  assert.doesNotMatch(s, /https:\/\/apex\.xaucloud\.io/);
+  assert.match(s, /InpAstraBackendURL="https:\/\/apex\.xaucloud\.io"/);
   assert.doesNotMatch(s, /api\.apex\.xaucloud\.io/);
   assert.doesNotMatch(s, /InpEaToken/);
 });
@@ -272,8 +272,8 @@ test('v3.8.7: server-proven capacity evidence survives a restart', () => {
   assert.match(load, /JNumOr\("srvRejectedVol",0\)/);
 });
 
-test('v3.8.6: schema 4 persists setup, pending submit and cloud lease', () => {
-  assert.match(s, /#define APEX_STATE_SCHEMA\s+4/);
+test('LifestyleAstra schema 7 persists native setup/pending/lease and reads prior schemas', () => {
+  assert.match(s, /#define APEX_STATE_SCHEMA\s+7/);
   assert.match(s, /CAMP_SUBMITTING=3/);
   const save = section('void SaveState()', 'void ClearState()');
   assert.match(save, /\\"setup\\":\{\\"state\\":/);
@@ -282,7 +282,7 @@ test('v3.8.6: schema 4 persists setup, pending submit and cloud lease', () => {
   assert.doesNotMatch(save, /waitingLocationSince/);
   assert.doesNotMatch(save, /\\"deadThesis\\":\{\\"active\\":/);
   const load = section('int LoadState()', '//====================== volume sizing');
-  assert.match(load, /\(int\)sch!=APEX_STATE_SCHEMA&&\(int\)sch!=3&&\(int\)sch!=5/);
+  assert.match(load, /\(int\)sch!=APEX_STATE_SCHEMA&&\(int\)sch!=3&&\(int\)sch!=4&&\(int\)sch!=5&&\(int\)sch!=6/);
   assert.match(load, /SetupSnapshotValidToRestore/);
   assert.match(load, /g_pending\.active=JBoolOr\("active"/);
 });

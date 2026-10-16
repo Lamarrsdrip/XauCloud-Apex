@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import { createNotificationEngine } from './notifications.mjs';
 import { resolvePersistentDataDir, preparePersistentRuntimeData } from './runtime-data.mjs';
 import { fileURLToPath } from 'node:url';
+import { createAstraService } from './astra/service.mjs';
+import { strategyFixtures } from './astra/fixtures.mjs';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'),'utf8'));
@@ -100,6 +102,7 @@ const OUTBOX=path.join(DATA,'bridge-outbox.ndjson');
 const MANAGER_LEASES=path.join(DATA,'manager-leases.json');
 const APEX_PUBLIC_ORIGIN=String(process.env.APEX_PUBLIC_ORIGIN||'https://apex.xaucloud.io').trim().replace(/\/+$/,'');
 const NOTIFICATIONS=createNotificationEngine({dataDir:DATA,origin:APEX_PUBLIC_ORIGIN,logger:console});
+const ASTRA=createAstraService({dataDir:DATA,emit:appendEvent});
 const XAUCLOUD_BASE_URL=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
 const APEX_BRIDGE_SECRET=String(process.env.APEX_BRIDGE_SECRET||'');
 // APEX-AUDIT-021: every remote call is deadline-bounded.
@@ -895,9 +898,10 @@ export function projectSetupStatus(events,now=Date.now()){
 export function projectCampaign(events){
   let c=null;
   for(const e of sortEvents(events)){
+    if(c&&e.campaignId===c.campaignId&&['ASTRA','LIFESTYLE_NATIVE'].includes(e.strategyOwner))c.strategyOwner=e.strategyOwner;
     switch(e.type){
       case 'CAMPAIGN_START':
-        c={campaignId:e.campaignId||null,direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
+        c={campaignId:e.campaignId||null,strategyOwner:e.strategyOwner==='ASTRA'?'ASTRA':'LIFESTYLE_NATIVE',direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
            startedAt:e.ts,state:'ACTIVE',layers:Number(e.layers||1),signature:e.signature||null,
            entryPrice:e.entryPrice??null,targetEquity:e.targetEquity??null,cycleStart:e.cycleStart??null,
            setupId:e.setupId||null,bosKind:e.bosKind||null,score:e.score??null,
@@ -905,7 +909,7 @@ export function projectCampaign(events){
            closingOutcome:null,closingReason:null,earnedFloorPct:0,lastEventAt:e.ts};
         break;
       case 'CAMPAIGN_RECOVERED':
-        if(!c)c={campaignId:e.campaignId||null,direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
+        if(!c)c={campaignId:e.campaignId||null,strategyOwner:e.strategyOwner==='ASTRA'?'ASTRA':'LIFESTYLE_NATIVE',direction:e.direction>0?'BUY':e.direction<0?'SELL':null,
                  startedAt:e.ts,state:e.campaignState==='CLOSING'?'CLOSING':'ACTIVE',layers:Number(e.layers||0),
                  signature:e.signature||'RECOVERED',anchorsKnown:e.anchorsKnown!==false,lastEventAt:e.ts};
         break;
@@ -932,6 +936,7 @@ export function projectCampaign(events){
 export function decorateCampaign(projected, hb={}, lastSeen=null){
   if(!projected && !(hb && (hb.campaign_active||hb.campaignActive))) return null;
   const c=projected?{...projected}:{};
+  if(['ASTRA','LIFESTYLE_NATIVE'].includes(hb.strategy_owner||hb.strategyOwner))c.strategyOwner=hb.strategy_owner||hb.strategyOwner;
   if(!projected){
     c.campaignId=hb.campaign_id||hb.campaignId||null;
     c.state=String(hb.campaign_state||hb.campaignState||'ACTIVE');
@@ -1224,6 +1229,7 @@ async function buildMe(key){
       tradeMode:known3(lic.tradeMode)
     },
     campaign,setupStatus,history:buildHistory(events),learning:learningShape(events),
+    astra:await ASTRA.status(key).catch(()=>({status:'AI_ERROR',lastFallbackReason:'ASTRA_STORAGE_UNAVAILABLE'})),
     recentHuman:recentHumanEvents(events,30),
     effectiveConfig:{
       eaVersion:hb?.ea_version||lic.eaVersion||null,
@@ -1298,6 +1304,23 @@ const server=http.createServer(async(req,res)=>{
         link:'command-center-style'});
 
     // --- EA routes. One binding/expiry policy for all of them (APEX-AUDIT-022). ---
+    if(u.pathname.startsWith('/api/apex/astra/')){
+      const b=req.method==='POST'?await body(req):{};
+      // EA credentials are accepted only in POST bodies; never in loggable URLs.
+      if(req.method!=='POST')return json(res,405,{status:'AI_ERROR',fallbackReason:'POST_REQUIRED'});
+      const v=await validateEa(b.license??b.license_key,b.account??b.account_number);
+      if(!v.ok)return json(res,403,{status:'AI_ERROR',fallbackReason:v.status});
+      if(u.pathname==='/api/apex/astra/status')
+        return json(res,200,await ASTRA.status(v.key));
+      if(u.pathname==='/api/apex/astra/decision')
+        return json(res,200,await ASTRA.decision(v.key,String(b.requestId||'')));
+      if(u.pathname==='/api/apex/astra/context'){
+        if(!throttle('astra-context:'+v.key,ip,40,60_000))return json(res,429,{status:'RATE_LIMITED',fallbackReason:'REQUEST_RATE_LIMIT'});
+        try{return json(res,200,await ASTRA.submit(v.key,b.snapshot));}
+        catch{return json(res,200,{status:'AI_ERROR',fallbackReason:'INVALID_OR_UNAVAILABLE_CONTEXT'});}
+      }
+      return json(res,404,{status:'AI_ERROR',fallbackReason:'UNKNOWN_ASTRA_ROUTE'});
+    }
     if(req.method==='POST'&&u.pathname==='/api/apex/heartbeat'){
       const b=await body(req),v=await validateEa(b.license??b.license_key,b.account??b.account_number);
       if(!v.ok){
@@ -1401,6 +1424,22 @@ const server=http.createServer(async(req,res)=>{
     }
 
     // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
+    if(u.pathname.startsWith('/api/session/astra')){
+      const s=await notificationSession(req,res);if(!s)return;
+      if(req.method==='GET'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.settings(s.lic));
+      if(req.method!=='GET'){
+        if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
+        if(!String(req.headers['content-type']||'').startsWith('application/json'))return json(res,415,{error:'json_required'});
+        if(!throttle('astra-settings:'+s.lic,ip,12,60_000))return json(res,429,{error:'too_many_astra_requests'});
+      }
+      if(req.method==='POST'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.configure(s.lic,await body(req)));
+      if(req.method==='DELETE'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.remove(s.lic));
+      if(req.method==='POST'&&u.pathname==='/api/session/astra/test'){
+        const b=await body(req),fixtures=strategyFixtures();
+        return json(res,200,b.scope==='strategy'?await ASTRA.test(s.lic,fixtures,{scope:'STRATEGY'}):await ASTRA.test(s.lic,[fixtures.find(x=>x.name==='TOO_EARLY')],{scope:'CONNECTION'}));
+      }
+      return json(res,404,{error:'not_found'});
+    }
     if(req.method==='GET'&&u.pathname==='/api/notifications/key'){
       const s=await notificationSession(req,res);if(!s)return;
       return json(res,200,{ok:true,publicKey:await NOTIFICATIONS.publicKey()});
@@ -1521,9 +1560,9 @@ const server=http.createServer(async(req,res)=>{
         licenses:(await readLicenses()),configs:(await readLicenseConfigs())});
     }
 
-    if(req.method==='GET'&&['/push-sw.js','/manifest.webmanifest','/apex-icon.svg','/notifications-ui.js'].includes(u.pathname)){
+    if(req.method==='GET'&&['/push-sw.js','/manifest.webmanifest','/apex-icon.svg','/notifications-ui.js','/astra-ui.js'].includes(u.pathname)){
       const file=u.pathname.slice(1);
-      const types={'push-sw.js':'application/javascript; charset=utf-8','notifications-ui.js':'application/javascript; charset=utf-8','manifest.webmanifest':'application/manifest+json; charset=utf-8','apex-icon.svg':'image/svg+xml'};
+      const types={'push-sw.js':'application/javascript; charset=utf-8','notifications-ui.js':'application/javascript; charset=utf-8','astra-ui.js':'application/javascript; charset=utf-8','manifest.webmanifest':'application/manifest+json; charset=utf-8','apex-icon.svg':'image/svg+xml'};
       const data=await fs.readFile(path.join(__dirname,'public',file));
       res.writeHead(200,{'content-type':types[file]||'application/octet-stream','cache-control':file==='push-sw.js'?'no-cache':'public, max-age=300'});
       return res.end(data);

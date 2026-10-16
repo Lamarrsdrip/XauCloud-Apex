@@ -11,3 +11,10 @@ data/notification-preferences.json
 data/notification-outbox.json
 data/notification-delivery-state.json
 data/vapid.json
+data/astra-master.key
+data/astra-vault.json
+data/astra-runtime.json
+data/astra-usage.json
+data/astra-*.tmp-*
+.env.local
+*.ex5

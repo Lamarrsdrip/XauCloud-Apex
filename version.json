@@ -1,17 +1,20 @@
 {
-  "product": "XauCloud Apex",
-  "version": "3.8.8",
-  "buildId": "3.8.8-unlimited-from-l3-rejection-quality",
-  "eaVersion": "XauCloud-Apex_v3.8.8-UnlimitedFromL3",
+  "product": "XauCloud Apex Lifestyle + Astra Brain",
+  "version": "3.10.0",
+  "buildId": "3.10.0-lifestyle-astra-brain",
+  "eaVersion": "XauCloud-Apex_v3.10.0-LifestyleAstra",
   "eaFile": "ea/XauCloud-Apex.mq5",
-  "versionedEaFile": "ea/XauCloud-Apex-v3.8.8-UnlimitedFromL3.mq5",
+  "versionedEaFile": "ea/XauCloud-Apex-v3.10.0-LifestyleAstra.mq5",
   "configSchema": 2,
-  "stateSchema": 4,
+  "stateSchema": 7,
   "webRequestOrigin": "https://xaucloud.io",
   "eaRoutes": [
     "POST /api/cloud/monitor/heartbeat",
     "GET  /api/cloud/apex/config",
     "POST /api/cloud/apex/event"
   ],
-  "notes": "Canonical bot is v3.8.8 UnlimitedFromL3. The only strategy change is the replay-backed rejection-quality guard: the actual rejection candle must have rejection wick/body >= 0.10. No v3.8.9 or v3.9.0 timing/failed-breakout logic is active. UNLIMITED sizing remains L1 15% simulated 1:200, L2 50% fresh simulated 1:200, L3+ 100% actual executable Unlimited capacity. Compile ea/XauCloud-Apex.mq5."
+  "astraOrigin": "https://apex.xaucloud.io",
+  "strategyKnowledgeVersion": "tradingcartel-breakfast-v1",
+  "nativeBaselineCommit": "a48fffe",
+  "notes": "Astra strategy authority is opt-in per user; absent/unavailable keys preserve native patched v3.8.8 Lifestyle. L1/L2/L3 sizing and native protections are preserved. Historical v3.8.8 remains immutable. Astra superiority and real user-key model checks require independent forward/replay validation. Compile canonical EA with AstraBridge.mqh."
 }

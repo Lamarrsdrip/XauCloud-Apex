@@ -241,6 +241,7 @@ button{cursor:pointer}
 
 <div class="toast" id="toast"></div>
 
+<script src="/astra-ui.js"></script>
 <script>
 (function(){
 'use strict';
@@ -454,16 +455,18 @@ function renderPage(){
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
+  if(STATE.page==='settings'&&window.AstraUI)window.AstraUI.bind(async function(){STATE.me=await api('/api/auth/me');renderPage();});
 }
 
 // ---------- Dashboard ----------
 function pageDashboard(me){
   if (!me.dataAvailable){
-    return '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview</p>' + dataUnavailableCard(me);
+    return '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview</p>' + (window.AstraUI?window.AstraUI.card(me,false):'') + dataUnavailableCard(me);
   }
   var acc = me.account || {};
   var camp = me.campaign;
   var html = '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview · updated '+esc(fmtAgo(acc.asOf))+'</p>';
+  if(window.AstraUI)html+=window.AstraUI.card(me,false);
 
   html += '<div class="card"><div class="acct-strip">'
     + '<div class="item"><div class="k">Account Profile</div><div class="v">'+esc(me.accountProfile||'—')+'</div></div>'
@@ -812,6 +815,7 @@ function pageSettings(me){
   var disabled = !me.settings;
   var lic = me.license || {};
   var html = '<h1 class="page-title">Settings</h1><p class="page-sub">How Apex trades your account</p>';
+  if(window.AstraUI)html+=window.AstraUI.card(me,true);
   html += '<div class="card"><h3>License</h3>'
     + '<div class="row"><span class="k">Current License</span><span class="v" style="font-size:12px">'+esc(lic.key||'—')+'</span></div>'
     + '<div class="field" style="margin-top:14px"><label>Change License</label>'

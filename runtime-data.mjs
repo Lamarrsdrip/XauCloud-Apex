@@ -52,7 +52,7 @@ export async function backupRuntimeData({ dataDir, reason = 'startup' } = {}) {
   const files = [
     'licenses.json', 'license-configs.json', 'config.json', 'events.ndjson', 'bridge-outbox.ndjson',
     'push-subscriptions.json', 'notification-preferences.json', 'notification-outbox.json',
-    'notification-delivery-state.json', 'vapid.json'
+    'notification-delivery-state.json', 'vapid.json', 'astra-master.key', 'astra-vault.json'
   ];
   const backupDir = path.join(dataDir, 'backups', `${stamp()}-${reason.replace(/[^a-z0-9_-]+/gi, '-')}`);
   let copied = 0;
@@ -82,7 +82,7 @@ export async function preparePersistentRuntimeData({ dataDir, legacyDataDir, log
 
     // Copy append-only/supporting files only if persistent copy is absent.
     for (const name of ['config.json', 'events.ndjson', 'bridge-outbox.ndjson', 'push-subscriptions.json',
-      'notification-preferences.json', 'notification-outbox.json', 'notification-delivery-state.json', 'vapid.json']) {
+      'notification-preferences.json', 'notification-outbox.json', 'notification-delivery-state.json', 'vapid.json', 'astra-master.key', 'astra-vault.json']) {
       await copyIfMissing(path.join(legacy, name), path.join(dest, name));
     }
     logger.info?.(`APEX_PERSISTENT_DATA_READY path=${dest} legacy=${legacy} licenses=${licenses.destEntries} configs=${licenseConfigs.destEntries}`);

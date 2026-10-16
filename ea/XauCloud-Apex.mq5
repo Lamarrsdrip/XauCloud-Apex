@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|  XauCloud Apex v3.8.8 "UnlimitedFromL3"                           |
+//|  XauCloud Apex Lifestyle + Astra Brain v3.10.0                    |
 //|                                                                   |
 //|  TRADING BASE = v3.8.2 CapacityTruth + v3.8.6 live-platform       |
-//|  hardening. Strategy/entries/exits are unchanged: impulse ->      |
+//|  hardening. Native fallback retains: impulse ->                   |
 //|  sweep -> rejection -> micro BOS -> first probe on confirmation   |
 //|  (if(s.valid) Start(s)) -> profit-side pyramiding -> basket exit  |
 //|  on target / ratchet / master SL / recovery-to-entry.             |
@@ -12,20 +12,21 @@
 //|    L2  = 50% of SIMULATED 1:200 capacity (re-derived fresh)       |
 //|    L3+ = 100% of actual UNLIMITED executable capacity             |
 //|  Replay fix: rejection candle wick/body must be >= 0.10.          |
-//|  No other signal, sizing, pyramid, stop or exit rule is changed.  |
+//|  Astra owns its campaign strategy; native execution/protection   |
+//|  and the archived v3.8.8 release remain preserved.                |
 //+------------------------------------------------------------------+
 #property copyright "XauCloud Apex"
-#property version   "3.880"
+#property version   "3.100"
 #property strict
-#property description "XauCloud Apex v3.8.8 UnlimitedFromL3"
+#property description "XauCloud Apex Lifestyle + Astra Brain v3.10.0"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define APEX_VERSION       "XauCloud-Apex_v3.8.8-UnlimitedFromL3"
-#define APEX_BUILD_ID      "3.8.8"
+#define APEX_VERSION       "XauCloud-Apex_v3.10.0-LifestyleAstra"
+#define APEX_BUILD_ID      "3.10.0-lifestyle-astra-brain"
 #define APEX_MAGIC         8620260903
-#define APEX_STATE_SCHEMA  4
+#define APEX_STATE_SCHEMA  7
 #define APEX_CONFIG_SCHEMA 2
 #define APEX_SCORE_BASE    25.0    // constant, non-discriminating ranking offset -- see APEX-AUDIT-006
 #define APEX_MAX_TRIGGERS  32
@@ -64,6 +65,12 @@ input bool   InpCloudDiagnostics=true;
 input int    InpScanMilliseconds=250;
 input bool   InpRequireRemoteArm=true;
 input long   InpMagic=APEX_MAGIC;
+input bool   InpAstraBridge=true;                       // Dashboard owns enable/key/model; no OpenAI credential in MT5
+input string InpAstraBackendURL="https://apex.xaucloud.io";
+input int    InpAstraTransportTimeoutMs=600;              // One bounded bridge operation after protections
+input bool   InpAstraExportContexts=false;                // Strategy Tester only: causal NDJSON export, no provider calls
+input int    InpAstraTesterBrokerUTCOffsetMinutes=0;      // Export only: historical broker time offset, set explicitly
+input string InpTesterAccountProfile="NORMAL";            // Strategy Tester only: NORMAL|UNLIMITED. Live profile always comes from the dashboard
 
 // --- Fallback seeds. Once a config poll (or the last-good local cache) is applied,
 // --- C.* is authoritative for every one of these. APEX-AUDIT-012.
@@ -411,6 +418,17 @@ ulong    masterTicket=0;
 int      masterGuardStage=0;
 datetime campStart=0;
 string   campId="",campSig="";
+string   strategyOwner="LIFESTYLE_NATIVE";              // Frozen ownership; ASTRA may fall back once, never regain mid-campaign
+bool     g_astraStopAdding=false;
+bool     g_astraSubmitting=false;
+bool     g_astraRestartTakeover=false;
+double   g_astraCampaignInvalidation=0;
+bool AstraManage();
+bool AstraService();
+bool AstraEntryAuthority();
+bool AstraSubmissionValid();
+void AstraResetAfterFlat();
+void AstraLateFill(bool firstEntry);
 // APEX-AUDIT-010 closing intent
 string   closingOutcome="",closingReason="";
 datetime closingSince=0;
@@ -1321,7 +1339,7 @@ void SaveState()
    if(g_observerOnly&&!IsTester()) return;
    string j=StringFormat(
      "{\"schema\":%d,\"build\":\"%s\",\"ownerKey\":\"%s\",\"account\":%I64d,\"symbol\":\"%s\",\"magic\":%I64d,"
-     "\"campState\":%d,\"campId\":\"%s\",\"campSig\":\"%s\",\"campDir\":%d,\"layers\":%d,"
+     "\"campState\":%d,\"campId\":\"%s\",\"campSig\":\"%s\",\"campDir\":%d,\"layers\":%d,\"strategyOwner\":\"%s\",\"astraStopAdding\":%s,\"astraInvalidationPrice\":%.5f,"
      "\"cycleStart\":%.2f,\"targetEq\":%.2f,\"campStart\":%I64d,\"lastAdd\":%.5f,\"mfe\":%.2f,\"mae\":%.2f,"
      "\"peakProfitPct\":%.4f,\"earnedFloorPct\":%.4f,\"ratchetArmed\":%s,"
      "\"firstEntryPrice\":%.5f,\"firstSLPrice\":%.5f,\"firstInitialSLPrice\":%.5f,"
@@ -1345,7 +1363,7 @@ void SaveState()
      "\"masterBreakEvenEnabled\":%s,\"masterBreakEvenTriggerPct\":%.4f,\"recoveryExitEnabled\":%s,"
      "\"recoveryExitArmPctOfSL\":%.4f,\"normalFixedSLGoldMove\":%.4f}}",
      APEX_STATE_SCHEMA,APEX_BUILD_ID,OwnerKey(),AccountInfoInteger(ACCOUNT_LOGIN),_Symbol,InpMagic,
-     (int)campState,campId,campSig,campDir,layers,cycleStart,targetEq,(long)campStart,lastAdd,mfe,mae,
+     (int)campState,campId,campSig,campDir,layers,strategyOwner,BoolJson(g_astraStopAdding),g_astraCampaignInvalidation,cycleStart,targetEq,(long)campStart,lastAdd,mfe,mae,
      peakProfitPct,earnedFloorPct,BoolJson(ratchetArmed),
      firstEntryPrice,firstSLPrice,firstInitialSLPrice,
      BoolJson(recoveryExitArmed),BoolJson(anchorsKnown),masterTicket,masterGuardStage,
@@ -1374,7 +1392,7 @@ int LoadState()
    if(rc<=0) return rc;
    if(!JsonParseObject(payload)) return -1;
    double sch=0;
-   if(!JNumStrict("schema",sch)||((int)sch!=APEX_STATE_SCHEMA&&(int)sch!=3&&(int)sch!=5)) return -1;
+   if(!JNumStrict("schema",sch)||((int)sch!=APEX_STATE_SCHEMA&&(int)sch!=3&&(int)sch!=4&&(int)sch!=5&&(int)sch!=6)) return -1;
    string owner="";
    if(!JStrStrict("ownerKey",owner)||owner!=OwnerKey()) return -1;   // wrong account/broker/symbol/magic
 
@@ -1382,6 +1400,13 @@ int LoadState()
    campState = JNumStrict("campState",v)?(CampState)(int)v:CAMP_IDLE;
    campId    = JStrOr("campId","");
    campSig   = JStrOr("campSig","RECOVERED");
+   strategyOwner=JStrOr("strategyOwner","LIFESTYLE_NATIVE");
+   g_astraStopAdding=JBoolOr("astraStopAdding",false);
+   g_astraCampaignInvalidation=JNumOr("astraInvalidationPrice",0);
+   // Remote decisions/TTL cannot survive process restart. One-way takeover is
+   // persisted before trading resumes; returning AI never acquires this campaign.
+   if(strategyOwner=="ASTRA")g_astraRestartTakeover=true;
+   if(strategyOwner!="LIFESTYLE_NATIVE") strategyOwner="LIFESTYLE_NATIVE";
    campDir   = (int)JNumOr("campDir",0);
    layers    = (int)JNumOr("layers",0);
    cycleStart= JNumOr("cycleStart",0);
@@ -2996,6 +3021,7 @@ void PromotePendingFill()
      }
    Emit("ORDER_FILLED_LATE",StringFormat(",\"order\":%I64u,\"layers\":%d,\"isFirstEntry\":%s",
         g_pending.order,layers,BoolJson(g_pending.isFirstEntry)));
+   if(strategyOwner=="ASTRA")AstraLateFill(g_pending.isFirstEntry);
    g_pending.active=false;
    SaveState();
   }
@@ -3268,6 +3294,9 @@ bool OpenLayer(int dir,double score,string why,double invalidLevel,double refPri
          sl=NormalizeDouble(dir>0?g.price-C.normalFixedSLGoldMove:g.price+C.normalFixedSLGoldMove,digits);
 
       submittedAt=GetTickCount64();
+      // Sizing/OrderCheck can take time. Recheck the complete Astra envelope at
+      // EVERY actual submit, including the first and server-size retries.
+      if(g_astraSubmitting&&!AstraSubmissionValid()) return false;
       e=SubmitMarket(dir,vol,sl,com);
       settledAt=GetTickCount64();
       if(e.cls==EXEC_FILLED||e.cls==EXEC_PARTIAL){NoteServerFilledVolume(e.filledVolume>0?e.filledVolume:vol);break;}
@@ -3442,6 +3471,8 @@ void FinalizeClose()
    campState=CAMP_IDLE;campDir=0;layers=0;lastAdd=0;peakProfitPct=0;earnedFloorPct=0;ratchetArmed=false;
    firstEntryPrice=0;firstSLPrice=0;firstInitialSLPrice=0;recoveryExitArmed=false;anchorsKnown=true;
    masterTicket=0;masterGuardStage=0;lastEnd=TimeCurrent();campId="";campSig="";
+   strategyOwner="LIFESTYLE_NATIVE";g_astraStopAdding=false;
+   AstraResetAfterFlat();
    closingOutcome="";closingReason="";closingSince=0;closeAttempts=0;
    ClearTriggers();
    SetupReset("CAMPAIGN_ENDED");
@@ -3489,8 +3520,9 @@ string NewCampaignId()
       Fnv1a(g_instanceId+IntegerToString((int)GetTickCount())+IntegerToString(MathRand())+_Symbol));
   }
 
-void Start(Snap &s)
+void Start(Snap &s,string requestedOwner="LIFESTYLE_NATIVE")
   {
+   strategyOwner=requestedOwner;g_astraStopAdding=false;
    // Provisional identity; the campaign only becomes ACTIVE once a fill is confirmed.
    campDir=s.dir;layers=0;
    cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
@@ -3519,6 +3551,7 @@ void Start(Snap &s)
          return;
         }
       campState=CAMP_IDLE;campId="";campSig="";campDir=0;
+      strategyOwner="LIFESTYLE_NATIVE";
       ClearState();
       return;
      }
@@ -3728,6 +3761,9 @@ void Manage()
    SaveState();
 
    // --- ADDITIONS -------------------------------------------------------------
+   // Shared native hard exits above always run. Astra owns strategy decisions only
+   // for its own campaign; unavailable brain permanently hands this one to native.
+   if(strategyOwner=="ASTRA"&&AstraManage()) return;
    if(!C.armed) return;
    if(C.maxLayers>0&&layers>=C.maxLayers) return;
    if(p<=0) return;                             // never add into a losing basket
@@ -3849,6 +3885,7 @@ void ReconcileAgainstBroker()
    // Positions exist but there is no usable state file: adopt them under PROTECTIVE
    // management only. Unknown historical anchors are explicit and block new exposure.
    campState=CAMP_ACTIVE;
+   strategyOwner="LIFESTYLE_NATIVE";
    campDir=nDir;layers=nCount;
    cycleStart=AccountInfoDouble(ACCOUNT_BALANCE);
    targetEq=C.targetMode=="EQUITY"
@@ -3876,6 +3913,8 @@ void ReconcileAgainstBroker()
      layers,firstEntryPrice,firstSLPrice,masterTicket));
   }
 
+#include "AstraBridge.mqh"
+
 //====================== lifecycle =====================================
 int OnInit()
   {
@@ -3883,6 +3922,8 @@ int OnInit()
    g_instanceId=StringFormat("%I64d.%d.%08x",AccountInfoInteger(ACCOUNT_LOGIN),
                              (int)ChartID(),Fnv1a(_Symbol+IntegerToString(MathRand())+IntegerToString((int)GetTickCount())));
    Defaults();
+   // Tester has no dashboard; this lets replays exercise the real UNLIMITED sizing branch.
+   if(IsTester()&&InpTesterAccountProfile=="UNLIMITED") C.accountProfile="UNLIMITED";
    SnapshotPolicy();
    SetupReset("INIT");
    ArrayResize(g_eventQ,APEX_EVENTQ_MAX);
@@ -3988,8 +4029,12 @@ void OnTimer()
    // 2/3. Telemetry OR cloud, never both on the same tick, never before Manage.
    ulong t0=GetTickCount64();
    bool cloudDue=(now-lastCfg>=InpConfigPollSeconds);
-   if(cloudDue){CloudSync();lastCfg=now;}
-   else FlushEventQueue();
+   bool astraNetwork=(!g_observerOnly&&AstraService());
+   if(!astraNetwork)
+     {
+      if(cloudDue){CloudSync();lastCfg=now;}
+      else FlushEventQueue();
+     }
    ulong used=GetTickCount64()-t0;
    if(used>(ulong)MathMax(400,InpCloudTickBudgetMs))
       Print("APEX CLOUD TICK BUDGET | usedMs=",used," cloudDue=",cloudDue?"true":"false");
@@ -4002,6 +4047,7 @@ void OnTimer()
    g_preflightBlock=ComputePreflight();
    if(g_preflightBlock!="") return;
 
+   if(AstraEntryAuthority()) return;
    Snap s=Observe();
    if(s.valid) Start(s);
   }

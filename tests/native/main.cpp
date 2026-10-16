@@ -623,5 +623,17 @@ int main(){
   }
 
   runV388Scenarios();
+  // Astra and native share these exact economic functions. This is a mock-broker
+  // capacity matrix, never a historical trading/performance comparison.
+  for(double initial: {50.0,100.0,1000.0}){
+    for(int accountCase=0;accountCase<3;accountCase++){
+      const char *profile=accountCase==2?"UNLIMITED":"NORMAL";
+      resetV388(profile);BRK.balance=BRK.equity=BRK.freeMargin=initial;
+      BRK.leverage=accountCase==0?200:accountCase==1?500:2000000000;
+      BRK.bid=BRK.ask=4400.0;BRK.marginPerLot=accountCase==2?0.0:440000.0/BRK.leverage;
+      C.normalReferenceLeverage=accountCase==2?0:BRK.leverage;
+      emitLayer(StringFormat("astra_capacity_%.0f_%d",initial,accountCase),0,-1);
+    }
+  }
   return 0;
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const MAX_EX5_BYTES = 900_000;
+const MAX_EX5_BYTES = 700_000;
 const MIN_EX5_BYTES = 8_192;
 
 function fail(message, httpStatus = 400) {

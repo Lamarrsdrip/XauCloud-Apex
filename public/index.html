@@ -947,32 +947,39 @@ function pageSettings(me){
     + '</select><div class="hint">'+(lic.unlimitedEntitled
         ? 'NORMAL closes the whole basket at a fixed target/ratchet and starts fresh. UNLIMITED is an entitlement on this license: each valid add uses 100% of CURRENT executable remaining capacity.'
         : 'This license is NORMAL. UNLIMITED is an admin entitlement, not a customer toggle.')+'</div></div>'
-    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). The Profit Ratchet below is the intended exit — a hard TP would close the basket before the ratchet can activate. Set above 0 to activate a hard target instead.</div></div>'
+    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). A fixed target may close the basket before profit protection has time to activate. Set above 0 to activate a hard target instead.</div></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save Settings</button></div>'
     + '</div>';
 
+  html+=settingsDetailsStart('margin','Position sizing','Adjust the size of each new trade as Apex confirms an opportunity.');
   html += '<div class="card"><h3>Margin Allocation (NORMAL)</h3>'
-    + '<div class="hint" style="margin-bottom:14px">Apex still requires its existing add conditions (a fresh continuation/confirmation signal) before opening L2 or L3+ — these layers do not all open immediately.</div>'
+    + '<div class="hint" style="margin-bottom:14px">These are sizing limits, not instructions to open multiple trades at once. Apex only adds a position after a valid new confirmation.</div>'
     + '<div class="field-grid">'
     + '<div class="field"><label>Confirmation / L1 Margin (%)</label><input type="number" step="any" id="f-normalL1MarginPct" value="'+esc(s.normalL1MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Small confirmation trade used to test whether the setup is behaving correctly.</div></div>'
     + '<div class="field"><label>Confirmed / L2 Margin (%)</label><input type="number" step="any" id="f-normalL2MarginPct" value="'+esc(s.normalL2MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Larger confirmed add after Apex receives another valid continuation/add signal.</div></div>'
     + '<div class="field"><label>Full Exposure / L3+ Margin (%)</label><input type="number" step="any" id="f-normalL3PlusMarginPct" value="'+esc(s.normalL3PlusMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Use up to the configured percentage of currently available margin after further valid confirmation. Every later add (L4, L5, ...) recalculates this against the margin available at that moment.</div></div>'
     + '<div class="field"><label>NORMAL Reference Leverage</label><select id="f-normalReferenceLeverage" '+(disabled?'disabled':'')+'>'
       + [0,100,200,500,1000,2000].map(function(v){return '<option value="'+v+'"'+(Number(s.normalReferenceLeverage||0)===v?' selected':'')+'>'+(v===0?'AUTO (use the broker\'s own margin model)':'1:'+v)+'</option>';}).join('')
-      + '</select><div class="hint">Economic leverage NORMAL sizes against when the broker/terminal reports an unusable margin model (for example 1:2000000000 with margin-per-lot 0). AUTO is only valid while the broker model is trustworthy; if it is not, Apex blocks new exposure with NORMAL_REFERENCE_LEVERAGE_REQUIRED rather than guessing. UNLIMITED accounts ignore this setting.</div></div>'
+      + '</select><div class="hint">Usually leave this on Auto. If your broker reports incorrect margin information, a reference leverage may be needed. Apex blocks new trades rather than guess. This does not apply to Unlimited licenses.</div></div>'
     + '</div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-margin" '+(disabled?'disabled':'')+'>Save Margin Allocation</button></div>'
     + '</div>';
 
+  html+='</div></details></section>';
+  html+=startSettingsPanel('protection','Protecting your account','Set how Apex limits exposure and protects profit. These controls affect real trading risk.');
+  html+='<div class="settings-note">Changing protection settings can increase risk. Start with the defaults unless you understand the effect on your account.</div>';
+  html+=settingsDetailsStart('stop','Stop loss & position limits','Choose the stop-loss distance and maximum number of positions Apex can open.');
   html += '<div class="card"><h3>Fixed Master SL &amp; Layer Cap</h3>'
     + '<div class="field-grid">'
     + '<div class="field"><label>Fixed Master SL — Gold Move</label><input type="number" step="any" id="f-normalFixedSLGoldMove" value="'+esc(s.normalFixedSLGoldMove)+'" '+(disabled?'disabled':'')+'><div class="hint">XAU price distance from the first (master) entry, not pips or account money. 0 = no broker stop-loss on the master position.</div></div>'
     + '<div class="field"><label>Max Layers</label><input type="number" id="f-maxLayers" value="'+esc(s.maxLayers)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = broker/margin limited (no software cap)</div></div>'
     + '</div>'
-    + '<div class="hint" style="margin-top:8px">UNLIMITED sizing: each valid add uses 100% of CURRENT executable remaining capacity. The old multiplier field is a no-op while baseMarginPct is capped at 100, so it is not shown.</div>'
+    + '<div class="hint" style="margin-top:8px">Unlimited accounts may use all remaining available margin on each valid additional entry. This increases risk significantly.</div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-sl" '+(disabled?'disabled':'')+'>Save</button></div>'
     + '</div>';
 
+  html+='</div></details>';
+  html+=settingsDetailsStart('breakeven','Move stop to entry','After enough campaign profit, Apex can tighten the first trade stop to its entry price.');
   html += '<div class="card"><h3>Master Break-Even Protection</h3>'
     + '<div class="toggle-row"><div><div class="lbl">Master Break-Even</div><div class="hint">When the whole Apex campaign reaches the trigger profit relative to campaign-start balance, the L1/master stop-loss is tightened to the original L1 entry price. One-way — it is never widened back out.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-masterBreakEvenEnabled" '+(s.masterBreakEvenEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
@@ -980,13 +987,17 @@ function pageSettings(me){
     + '<div class="form-row"><button class="btn btn-primary" id="save-be" '+(disabled?'disabled':'')+'>Save Break-Even</button></div>'
     + '</div>';
 
+  html+='</div></details>';
+  html+=settingsDetailsStart('recovery','Close after a recovery','If a trade moves badly against you and then returns to entry, Apex can close the basket.');
   html += '<div class="card"><h3>Recovery-To-Entry Protection</h3>'
-    + '<div class="toggle-row"><div><div class="lbl">Recovery-To-Entry Protection</div><div class="hint">If the L1/master trade moves 40% or more toward its original stop-loss, Apex marks the setup as damaged. If price later recovers to the original L1 entry, the whole basket closes so Apex can wait for a fresh setup.</div></div>'
+    + '<div class="toggle-row"><div><div class="lbl">Recovery-To-Entry Protection</div><div class="hint">If the first trade moves too far toward its original stop, Apex can close the full basket if price later returns to entry. The trigger is adjustable below.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-recoveryExitEnabled" '+(s.recoveryExitEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
     + '<div class="field" style="margin-top:14px"><label>Arm after adverse move reaches (% of Master SL)</label><input type="number" step="any" id="f-recoveryExitArmPctOfSL" value="'+esc(s.recoveryExitArmPctOfSL)+'" '+(disabled?'disabled':'')+'><div class="hint">% of the ORIGINAL fixed master SL distance, measured from the L1 entry price at campaign start.</div></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-recovery" '+(disabled?'disabled':'')+'>Save Recovery-To-Entry</button></div>'
     + '</div>';
 
+  html+='</div></details>';
+  html+=settingsDetailsStart('profit','Protect earned profit','Lock a rising amount of basket profit as the campaign grows.');
   html += '<div class="card"><h3>Profit Ratchet</h3>'
     + '<div class="toggle-row"><div><div class="lbl">Profit Ratchet</div><div class="hint">Protects basket profit in stages as it grows. The floor only ever moves up — it never decreases when profit retraces.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-profitRatchetEnabled" '+(s.profitRatchetEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
@@ -1000,11 +1011,16 @@ function pageSettings(me){
     + '<div class="form-row"><button class="btn btn-primary" id="save-ratchet" '+(disabled?'disabled':'')+'>Save Profit Ratchet</button></div>'
     + '</div>';
 
+  html+='</div></details></section>';
+  html+=startSettingsPanel('astra','Astra AI','Optional AI-powered trade decisions. Apex still has its native trading strategy when Astra is off or unavailable.');
+  if(window.AstraUI)html+=window.AstraUI.card(me,true);
+  html+='</section>';
+  html+=startSettingsPanel('more','More preferences','Notifications and specialist strategy controls.');
   html += '<div id="apex-notifications-card"></div>';
 
-  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Advanced Strategy</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
+  html += '<div class="card"><button class="details-toggle" type="button" id="advanced-toggle" aria-expanded="false" aria-controls="advanced-body" style="width:100%;background:none;border:0;text-align:left;color:inherit"><h3 style="margin:0">Advanced strategy controls</h3><span class="chev" id="advanced-chev">&#9662;</span></button>'
     + '<div id="advanced-body">'
-    + '<div class="warn-banner">Advanced settings affect Apex setup recognition. Only change them if you understand the strategy.</div>'
+    + '<div class="warn-banner">These controls change which trading setups Apex will consider. Keep the defaults unless you have tested changes on a demo account.</div>'
     + '<div class="field-grid">'
     + advField('Entry Score', 'entryScore', adv.entryScore, disabled)
     + advField('Add Score', 'addScore', adv.addScore, disabled)
@@ -1019,6 +1035,7 @@ function pageSettings(me){
     + '<div class="toggle-row"><div class="lbl">Require M5 Context</div><label class="switch"><input type="checkbox" id="f-requireM5Context" '+(adv.requireM5Context?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-advanced" '+(disabled?'disabled':'')+'>Save Advanced Settings</button></div>'
     + '</div></div>';
+  html+='</section>';
   return html;
 }
 function advField(label, id, value, disabled){

@@ -497,39 +497,64 @@ function releaseCard(me){
 
 // ---------- Dashboard ----------
 function pageDashboard(me){
-  if (!me.dataAvailable){
-    return '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview</p>' + releaseCard(me) + (window.AstraUI?window.AstraUI.card(me,false):'') + dataUnavailableCard(me);
+  var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{};
+  var broker=acc.broker||'Broker not reported', account=acc.account||lic.account||'Not connected';
+  var html='<div class="overview-top"><div><div class="overview-eyebrow">XauCloud Apex</div>'
+    +'<h1 class="overview-title">Your overview</h1>'
+    +'<div class="overview-desc">Your gold trading activity, account balance and Apex status in one place.</div></div>'
+    +'<div class="overview-meta">Last account update: '+esc(fmtAgo(acc.asOf||mt5.lastSeen))+'</div></div>';
+  if(!me.dataAvailable){
+    html+=dataUnavailableCard(me);
+    if(lic.status==='ACTIVE')html+='<div class="overview-inline-control"><div><div class="control-title">Get Apex connected</div>'
+      +'<div class="control-desc">Install the bot in MT5, then connect your license. The full setup is in Settings.</div></div>'
+      +'<button type="button" class="btn btn-primary" style="width:auto" id="overview-open-setup">Setup guide</button></div>';
+    return html;
   }
-  var acc = me.account || {};
-  var camp = me.campaign;
-  var html = '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview · updated '+esc(fmtAgo(acc.asOf))+'</p>';
-  html+=releaseCard(me);
-  if(window.AstraUI)html+=window.AstraUI.card(me,false);
-
-  html += '<div class="card"><div class="acct-strip">'
-    + '<div class="item"><div class="k">Account Profile</div><div class="v">'+esc(me.accountProfile||'—')+'</div></div>'
-    + '<div class="item"><div class="k">Broker</div><div class="v">'+esc(acc.broker||'Not reported')+'</div></div>'
-    + '<div class="item"><div class="k">MT5 Account</div><div class="v">'+esc(acc.account||'—')+'</div></div>'
-    + '<div class="item"><div class="k">Currency</div><div class="v">'+esc(acc.currency||'—')+'</div></div>'
-    + '</div></div>';
-
-  html += '<div class="grid-stats">'
-    + statTile('Balance', fmtMoney(acc.balance, acc.currency))
-    + statTile('Equity', fmtMoney(acc.equity, acc.currency))
-    + statTile('Free Margin', fmtMoney(acc.freeMargin, acc.currency))
-    + statTile('Current P/L', camp? fmtMoney(camp.floatingPL, acc.currency): '—', camp && camp.floatingPL!=null? (camp.floatingPL>=0?'pos':'neg'):'')
-    + '</div>';
-
-  if (camp){
-    html += campaignProgressCard(camp, acc.currency);
-    html += campaignSummaryCard(camp, acc.currency, false);
-  } else {
-    html += watchingCard(me);
-  }
-
-  html += recentFeedCard(me.recentHuman||[]);
-  html += armDisarmCard(me);
+  html+='<div class="overview-layout">'
+    +'<section class="balance-hero" aria-label="Trading account balances">'
+    +'<div class="balance-label">Account balance</div>'
+    +'<div class="balance-figure">'+esc(fmtMoney(acc.balance,acc.currency))+'</div>'
+    +'<div class="balance-meta">'+esc(broker)+'<span aria-hidden="true">·</span> MT5 '+esc(account)+'</div>'
+    +'<div class="balance-divider"></div>'
+    +'<div class="balance-support"><div><div class="label">Equity</div><div class="value">'+esc(fmtMoney(acc.equity,acc.currency))+'</div></div>'
+    +'<div><div class="label">Open trade P/L</div><div class="value '+(camp&&camp.floatingPL!=null?(camp.floatingPL>=0?'pos':'neg'):'')+'">'+esc(camp?fmtMoney(camp.floatingPL,acc.currency):'—')+'</div></div></div>'
+    +'</section>'
+    +'<section class="summary-card" aria-label="Account details"><div>'
+    +'<div class="summary-card-title">Account at a glance</div><div class="summary-card-sub">The essentials, without the trading jargon.</div>'
+    +'<div class="summary-metric"><span>Account type</span><strong>'+esc(me.accountProfile||'Normal')+'</strong></div>'
+    +'<div class="summary-metric"><span>Available margin</span><strong>'+esc(fmtMoney(acc.freeMargin,acc.currency))+'</strong></div>'
+    +'<div class="summary-metric"><span>Open trades</span><strong>'+(camp&&camp.layers!=null?esc(camp.layers):camp?'—':'0')+'</strong></div>'
+    +'</div><button type="button" id="overview-view-account" class="text-link summary-action">View account details →</button></section></div>';
+  html+='<section class="overview-section" aria-label="Trading status">'
+    +'<div class="overview-section-head"><h2>Trading status</h2><button type="button" id="overview-view-settings" class="text-link">Manage settings →</button></div>'
+    +armDisarmCard(me)
+    +overviewTradingCard(me)
+    +'</section>';
+  html+='<section class="overview-section" aria-label="Activity">'
+    +'<div class="overview-section-head"><h2>Recent activity</h2><button type="button" class="text-link" id="overview-view-history">Trade history →</button></div>'
+    +recentFeedCard(me.recentHuman||[])+'</section>';
   return html;
+}
+
+function overviewTradingCard(me){
+  var camp=me.campaign, setup=me.setupStatus||{}, currency=(me.account||{}).currency;
+  var desired=(me.control&&me.control.desired||{}).armed===true;
+  var connected=(me.mt5||{}).status==='CONNECTED', title,description,extra='',tone='off',status='';
+  if(camp){
+    var side=camp.direction==='BUY'?'buy':camp.direction==='SELL'?'sell':'active';
+    title='A '+side+' position is open';
+    description='Apex is managing '+(camp.layers==null?'your active positions':(Number(camp.layers)===1?'1 position':esc(camp.layers)+' positions'))+'. Review the details before making changes.';
+    status='Open trade';tone='ok';
+    extra='<div class="settings-subtle" style="margin-top:10px">Unrealised P/L: <strong>'+esc(fmtMoney(camp.floatingPL,currency))+'</strong></div>';
+  }else if(!connected){title='Not connected to MT5';description='Open MetaTrader 5 and make sure Apex is attached to your gold chart.';status='Offline';}
+  else if(!desired){title='New entries are paused';description='Apex will not open new trades until you enable trading. Any existing positions remain managed.';status='Paused';}
+  else if(setup.active){
+    title='Checking a possible '+(setup.direction==='BUY'?'buy':setup.direction==='SELL'?'sell':'gold')+' setup';
+    description='Apex is waiting for its entry conditions before making a trade.';status='Reviewing setup';
+  }else{title='Watching the gold market';description='No open trade right now. Apex is checking for an opportunity that meets its rules.';status='Monitoring';}
+  return '<div class="card overview-trading"><div><div class="state-title">'+title+'</div><div class="state-desc">'+description+'</div>'+extra+'</div>'
+    +'<div style="display:flex;align-items:center;gap:15px;flex-wrap:wrap"><span class="overview-pill '+tone+'">'+status+'</span>'
+    +'<button class="text-link" type="button" id="overview-view-trades">View trades →</button></div></div>';
 }
 
 function dataUnavailableCard(me){
@@ -678,28 +703,30 @@ function watchingCard(me){
 }
 
 function recentFeedCard(items){
-  if (!items.length) return '';
-  var html = '<div class="card"><h3>Recent Activity</h3>';
-  items.slice(0,8).forEach(function(e){
-    html += '<div class="feed-item"><span class="t">'+esc(fmtAgo(e.ts))+'</span><span class="txt">'+esc(e.text)+'</span></div>';
+  if(!items.length)return '<div class="overview-feed"><div class="settings-subtle">No recent trading activity to show yet. Updates will appear here when Apex reports them.</div></div>';
+  var html='<div class="overview-feed">';
+  items.slice(0,3).forEach(function(event){
+    html+='<div class="feed-item"><span class="t">'+esc(fmtAgo(event.ts))+'</span><span class="txt">'+esc(event.text||'Account activity')+'</span></div>';
   });
-  html += '</div>';
-  return html;
+  return html+'</div>';
 }
 
 function armDisarmCard(me){
-  var ctrl = me.control||{};
-  var desired = ctrl.desired||{};
-  var applied = ctrl.applied||{};
-  var hint = 'When disarmed, Apex will not start new campaigns or add new layers. Active positions are still managed.';
-  if (applied.inSync===true) hint = 'EA applied revision '+(applied.revision||desired.revision||'—')+'. '+hint;
-  else if (desired.revision) hint = 'Desired revision '+(desired.revision)+' — EA applied '+(applied.revision||'nothing yet')+'. '+hint;
-  return '<div class="card"><div class="toggle-row"><div><div class="lbl">Apex Armed (desired)</div><div class="hint">'+esc(hint)+'</div></div>'
-    + '<label class="switch"><input type="checkbox" id="arm-toggle" '+(desired.armed||me.armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div>'
-    + '<div class="row"><span class="k">Desired revision</span><span class="v">'+(desired.revision==null?'—':desired.revision)+'</span></div>'
-    + '<div class="row"><span class="k">Applied revision</span><span class="v">'+(applied.revision==null?'—':applied.revision)+'</span></div>'
-    + '<div class="row"><span class="k">In sync</span><span class="v">'+(applied.inSync===true?'yes':applied.inSync===false?'no':'unknown')+'</span></div></div>';
+  var ctrl=me.control||{},desired=ctrl.desired||{},applied=ctrl.applied||{};
+  var hasDesired=typeof desired.armed==='boolean',armed=hasDesired?desired.armed:me.armed===true;
+  var mt5=(me.mt5||{}).status==='CONNECTED';
+  var label=armed?'Allow new trades':'Pause new trades';
+  var text=armed
+    ?'Apex can open new trades only when its conditions are met.'
+    :'Apex will not open new trades or add layers. Open positions stay managed.';
+  var sync=applied.inSync===true?'Settings applied to MT5':
+    !mt5?'Will apply when MT5 reconnects':'Waiting for MT5 to apply this change';
+  return '<div class="overview-inline-control" aria-label="Apex trading control">'
+    +'<div><div class="control-title">'+label+'</div><div class="control-desc">'+text+'</div>'
+    +'<div class="settings-subtle" style="margin-top:7px">'+esc(sync)+'</div></div>'
+    +'<label class="switch" title="Allow Apex to open new trades"><input type="checkbox" id="arm-toggle" aria-label="Allow Apex to open new trades" '+(armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div>';
 }
+
 function configSyncCard(me){
   var ec = me.effectiveConfig;
   var acc = me.account || {};

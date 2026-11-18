@@ -483,7 +483,7 @@ function renderPage(){
   if(STATE.page==='settings'&&window.AstraUI)window.AstraUI.bind(async function(){STATE.me=await api('/api/auth/me');renderPage();});
 }
 
-// ---------- Compiled Apex release (shown even before first MT5 heartbeat) ----------
+// ---------- Compiled Apex release — Settings only ----------
 function releaseCard(me){
   var release=me.release||{},ready=release.available===true;
   var html='<section class="card release-card" aria-label="Apex bot download"><div class="release-head">'
@@ -494,8 +494,7 @@ function releaseCard(me){
     ? 'Download the latest Apex bot for Windows MT5. AstraBridge is already included in the compiled .ex5; you only need one file.'
     : 'The latest compiled Apex bot has not been published yet. Your dashboard will show the download as soon as the official .ex5 is available.')+'</p>';
   if(ready){
-    html+='<div class="release-actions"><a class="btn btn-primary" href="/api/session/bot/download" download>Download Apex .ex5</a>'
-      +'<button class="btn btn-ghost" style="width:auto" onclick="location.hash=\'account\'">Installation guide</button></div>'
+    html+='<div class="release-actions"><a class="btn btn-primary" href="/api/session/bot/download" download>Download Apex .ex5</a></div>'
       +'<div class="release-meta" style="margin-top:14px">SHA-256: '+esc(release.sha256||'')+' · Published '+esc(fmtDate(release.publishedAt))+'</div>';
   }else{
     html+='<div class="release-actions"><button class="btn btn-primary" disabled>Compiled bot not published</button></div>';

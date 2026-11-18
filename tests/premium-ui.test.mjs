@@ -77,7 +77,7 @@ test('Settings separates common setup from risk controls and optional AI',()=>{
   assert.match(settings,/https:\/\/xaucloud\.io/);
   assert.match(settings,/https:\/\/apex\.xaucloud\.io/);
   assert.match(settings,/id="astra-control"/);
-  assert.match(settings,/type="password"|input type="password"/);
+  assert.match(astra,/id="astra-key" type="password"/);
   assert.match(settings,/settings-details/);
 });
 

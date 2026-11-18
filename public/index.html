@@ -576,44 +576,53 @@ function statTile(label, value, cls){
   return '<div class="stat-tile"><div class="label">'+esc(label)+'</div><div class="value'+(cls?' '+cls:'')+'">'+value+'</div></div>';
 }
 
-function campaignProgressCard(camp, cur){
-  var pct = (camp.progressPct===undefined||camp.progressPct===null||!isFinite(camp.progressPct)) ? null : Math.round(camp.progressPct);
-  return '<div class="card"><h3>Target Progress</h3>'
-    + '<div class="row"><span class="k">Starting Equity</span><span class="v">'+fmtMoney(camp.startEquity,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Current Equity</span><span class="v">'+fmtMoney(camp.currentEquity,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Target Equity</span><span class="v">'+fmtMoney(camp.targetEquity,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Campaign Profit</span><span class="v">'+fmtPct(camp.profitPct)+'</span></div>'
-    + '<div class="row"><span class="k">Target progress</span><span class="v">'+(pct===null?'—':pct+'%')+'</span></div>'
-    + '<div class="progress-wrap"><div class="progress-big">'+(pct===null?'—':pct+'%')+'</div>'
-    + '<div class="progress-track"><div class="progress-fill" style="width:'+(pct===null?0:Math.min(100,Math.max(0,pct)))+'%"></div></div></div>'
-    + '</div>';
-}
-
-function campaignSummaryCard(camp, cur, showLayers){
-  var dirLabel = camp.direction==='BUY'?'ACTIVE BUY CAMPAIGN':camp.direction==='SELL'?'ACTIVE SELL CAMPAIGN':'ACTIVE CAMPAIGN';
-  var badgeCls = camp.direction==='BUY'?'badge-buy':camp.direction==='SELL'?'badge-sell':'badge-target';
-  var badge = '<span class="badge '+badgeCls+'">'+esc(dirLabel)+'</span>';
-  var vol = (camp.totalVolume===undefined||camp.totalVolume===null||!isFinite(camp.totalVolume)) ? '—' : Number(camp.totalVolume).toFixed(2);
-  var html = '<div class="card"><h3>Active Campaign</h3>'
-    + '<div style="margin-bottom:10px">'+badge+'</div>'
-    + '<div class="row"><span class="k">State</span><span class="v">'+esc(camp.campaignState||camp.state||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Closing</span><span class="v">'+esc(camp.closingState||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Started</span><span class="v">'+esc(fmtDate(camp.startedAt))+'</span></div>'
-    + '<div class="row"><span class="k">First entry</span><span class="v">'+esc(camp.firstEntry==null?'—':Number(camp.firstEntry).toFixed(2))+'</span></div>'
-    + '<div class="row"><span class="k">Total Lots</span><span class="v">'+vol+'</span></div>'
-    + '<div class="row"><span class="k">Layers</span><span class="v">'+(camp.layers==null?'—':esc(camp.layers))+'</span></div>'
-    + '<div class="row"><span class="k">Floating P/L</span><span class="v">'+fmtMoney(camp.floatingPL,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Profit floor</span><span class="v">'+(camp.profitFloor==null?'—':fmtPct(camp.profitFloor))+'</span></div>'
-    + '<div class="row"><span class="k">Last live update</span><span class="v">'+esc(fmtAgo(camp.lastLiveUpdate))+'</span></div>'
-    + '<div class="row"><span class="k">Campaign ID</span><span class="v" style="font-size:11px;color:var(--text-faint)">'+esc(camp.campaignId||'—')+'</span></div>';
-  if (showLayers && camp.layerDetail && camp.layerDetail.length){
-    html += '<div class="layer-list"><h3 style="margin-top:14px">Open Layers</h3>';
-    camp.layerDetail.forEach(function(l){
-      html += '<div class="layer-row"><span>Layer '+esc(l.layer)+' · '+Number(l.volume||0).toFixed(2)+' lots</span><span style="color:var(--text-faint)">@ '+Number(l.price||0).toFixed(2)+'</span></div>';
-    });
-    html += '</div>';
+function campaignProgressCard(camp,cur){
+  var target=Number(camp.targetEquity),current=Number(camp.currentEquity),start=Number(camp.startEquity);
+  var hasTarget=camp.targetEquity!=null&&Number.isFinite(target)&&target>0;
+  var pct=Number(camp.progressPct),known=camp.progressPct!=null&&Number.isFinite(pct);
+  if(!hasTarget){
+    return '<div class="card"><h3>Campaign progress</h3>'
+      +'<p class="settings-section-intro">This campaign does not report a fixed equity target. Check Protection in Settings to see your current exit rules.</p>'
+      +'<div class="row"><span class="k">Campaign profit</span><span class="v">'+esc(fmtPct(camp.profitPct))+'</span></div>'
+      +'<div class="row"><span class="k">Current equity</span><span class="v">'+esc(fmtMoney(camp.currentEquity,cur))+'</span></div></div>';
   }
-  html += '</div>';
+  var value=known?Math.round(pct):null;
+  return '<div class="card"><h3>Progress toward the target</h3>'
+    +'<p class="settings-section-intro">How close this active campaign is to its configured equity target.</p>'
+    +'<div class="progress-big">'+(value===null?'—':value+'%')+'</div>'
+    +'<div class="progress-wrap"><div class="progress-track" role="progressbar" aria-label="Progress toward equity target" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+(value===null?0:Math.max(0,Math.min(100,value)))+'">'
+    +'<div class="progress-fill" style="width:'+(value===null?0:Math.max(0,Math.min(100,value)))+'%"></div></div></div>'
+    +'<div class="row"><span class="k">Current equity</span><span class="v">'+esc(fmtMoney(camp.currentEquity,cur))+'</span></div>'
+    +'<div class="row"><span class="k">Target equity</span><span class="v">'+esc(fmtMoney(camp.targetEquity,cur))+'</span></div>'
+    +'<div class="row"><span class="k">Campaign profit</span><span class="v">'+esc(fmtPct(camp.profitPct))+'</span></div></div>';
+}
+function campaignSummaryCard(camp,cur,showLayers){
+  var side=camp.direction==='BUY'?'Buy':camp.direction==='SELL'?'Sell':'Active';
+  var volume=camp.totalVolume!=null&&Number.isFinite(Number(camp.totalVolume))?Number(camp.totalVolume).toFixed(2):'—';
+  var count=camp.layers==null?'—':String(camp.layers);
+  var html='<div class="card"><div class="release-head"><div><h3 style="margin:0">Current trade</h3>'
+    +'<div class="settings-subtle" style="margin-top:5px">'+esc(side)+' campaign · '+esc(fmtDate(camp.startedAt))+'</div></div>'
+    +'<span class="overview-pill ok">In progress</span></div>'
+    +'<div class="grid-stats" style="margin-top:21px">'
+    +statTile('Unrealised P/L',fmtMoney(camp.floatingPL,cur),camp.floatingPL>=0?'pos':'neg')
+    +statTile('Open positions',count)
+    +'</div>'
+    +'<details class="settings-details" style="margin-top:12px"><summary><span>'
+    +'<span class="details-name">Trade details</span><span class="details-desc" style="display:block">Prices, volume, exits and live campaign information.</span>'
+    +'</span></summary><div class="details-content">'
+    +'<div class="row"><span class="k">First entry</span><span class="v">'+(camp.firstEntry==null?'—':esc(Number(camp.firstEntry).toFixed(2)))+'</span></div>'
+    +'<div class="row"><span class="k">Total volume</span><span class="v">'+volume+' lots</span></div>'
+    +'<div class="row"><span class="k">Profit floor</span><span class="v">'+esc(fmtPct(camp.profitFloor))+'</span></div>'
+    +'<div class="row"><span class="k">Trade status</span><span class="v">'+esc((camp.campaignState||camp.state||'—').replace(/_/g,' '))+'</span></div>'
+    +'<div class="row"><span class="k">Closing status</span><span class="v">'+esc((camp.closingState||'—').replace(/_/g,' '))+'</span></div>'
+    +'<div class="row"><span class="k">Last update</span><span class="v">'+esc(fmtAgo(camp.lastLiveUpdate))+'</span></div>';
+  if(showLayers&&Array.isArray(camp.layerDetail)&&camp.layerDetail.length){
+    html+='<h4 style="margin:16px 0 3px">Open positions</h4>';
+    camp.layerDetail.forEach(function(l){
+      html+='<div class="layer-row"><span>Position '+esc(l.layer)+' · '+Number(l.volume||0).toFixed(2)+' lots</span><span>At '+Number(l.price||0).toFixed(2)+'</span></div>';
+    });
+  }
+  html+='</div></details></div>';
   return html;
 }
 
@@ -624,82 +633,34 @@ function setupGatePill(ok, required, available){
 }
 
 function watchingCard(me){
-  var s = me.setupStatus || null;
-  var active = !!(s && s.active && (s.state==='WATCHING'||s.state==='CONFIRMED'));
-  var recentTerminal = !!(s && !s.active && Number.isFinite(Number(s.eventAgeSec)) && Number(s.eventAgeSec)<20*60);
-
-  if (!active && !recentTerminal){
-    return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>APEX IS SCANNING</h4>'
-      + '<p>Waiting for a high-quality setup. When one is armed, this card will show its live score and every confirmation gate.</p></div>'
-      + '<div class="stepper">'
-      + '<div class="step active"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-      + '<div class="step-line"></div>'
-      + '<div class="step"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
-      + '</div></div>';
+  var s=me.setupStatus||{},mt5=(me.mt5||{}).status==='CONNECTED';
+  var armed=(me.control&&me.control.desired||{}).armed===true;
+  var active=s.active&&(s.state==='WATCHING'||s.state==='CONFIRMED');
+  var recent=!s.active&&Number.isFinite(Number(s.eventAgeSec))&&Number(s.eventAgeSec)<1200;
+  var title='',description='',tone='off';
+  if(!mt5){title='Waiting for MetaTrader 5';description='Connect your terminal to see which trading setups Apex is checking.';}
+  else if(!armed){title='New trades are paused';description='Apex is not looking to open a new trade until you enable new entries.';}
+  else if(active){title=s.state==='CONFIRMED'?'Setup confirmed':'Checking a possible '+(s.direction==='BUY'?'buy':s.direction==='SELL'?'sell':'gold')+' opportunity';
+    description=s.state==='CONFIRMED'?'Apex is processing a confirmed setup. A trade is not counted until the broker confirms the order.':
+      'Apex has spotted a possible entry but is checking the required conditions before trading.';tone='ok';}
+  else if(recent){title='Watching for the next opportunity';description='The previous setup '+(s.state==='EXPIRED'?'expired':s.state==='INVALIDATED'?'did not remain valid':'ended')+'. Apex is waiting for a fresh signal.';}
+  else{title='Watching for the next opportunity';description='No setup has qualified yet. Apex only enters when its trading rules are met.';}
+  var html='<div class="card overview-trading"><div><div class="state-title">'+esc(title)+'</div>'
+    +'<div class="state-desc">'+esc(description)+'</div></div>'
+    +'<span class="overview-pill '+tone+'">'+(active?'Evaluating':armed&&mt5?'Monitoring':'Waiting')+'</span></div>';
+  if(active||recent){
+    var score=s.score==null?'—':Number(s.score).toFixed(0);
+    html+='<details class="settings-details"><summary><span><span class="details-name">What Apex is checking</span>'
+      +'<span class="details-desc" style="display:block">Optional technical details about this setup.</span></span></summary><div class="details-content">'
+      +'<div class="row"><span class="k">Direction</span><span class="v">'+esc(s.direction||'—')+'</span></div>'
+      +'<div class="row"><span class="k">Entry score</span><span class="v">'+score+' / '+(s.requiredScore==null?'—':Number(s.requiredScore).toFixed(0))+'</span></div>'
+      +'<div class="row"><span class="k">Price rejection</span><span class="v">'+setupGatePill(!!s.rejected,true,true)+'</span></div>'
+      +'<div class="row"><span class="k">Break of market structure</span><span class="v">'+setupGatePill(!!s.microBreak,true,true)+'</span></div>'
+      +'<div class="row"><span class="k">M3 confirmation</span><span class="v">'+setupGatePill(!!s.m3Gate,!!s.requireM3,s.m3Available!==false)+'</span></div>'
+      +'<div class="row"><span class="k">M5 context</span><span class="v">'+setupGatePill(!!s.m5Gate,!!s.requireM5,s.m5Available!==false)+'</span></div>'
+      +'<div class="row"><span class="k">Current wait reason</span><span class="v">'+esc(String(s.waitReason||s.reason||'—').replace(/_/g,' ').toLowerCase())+'</span></div>'
+      +'</div></details>';
   }
-
-  if (recentTerminal){
-    var terminalText = s.state==='EXPIRED'
-      ? 'The setup did not complete before the configured watch timeout. Apex discarded it and resumed scanning.'
-      : s.state==='INVALIDATED'
-      ? 'Price printed a new extreme beyond the swept level, invalidating the rejection thesis. Apex resumed scanning.'
-      : s.state==='CONSUMED'
-      ? 'This setup was consumed by a campaign. Apex will scan again whenever it is idle.'
-      : 'Apex cancelled this setup and resumed scanning.';
-    return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>SETUP '+esc(s.state)+' — SCANNING AGAIN</h4>'
-      + '<p>'+esc(terminalText)+'</p></div>'
-      + '<div class="row"><span class="k">Direction</span><span class="v">'+esc(s.direction||'—')+'</span></div>'
-      + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>'
-      + '<div class="row"><span class="k">Reason</span><span class="v">'+esc(s.reason||s.state||'—')+'</span></div>'
-      + (s.score==null?'':'<div class="row"><span class="k">Last score</span><span class="v">'+Number(s.score).toFixed(0)+' / '+(s.requiredScore==null?'—':Number(s.requiredScore).toFixed(0))+'</span></div>')
-      + '<div class="stepper">'
-      + '<div class="step active"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-      + '<div class="step-line"></div>'
-      + '<div class="step"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
-      + '</div></div>';
-  }
-
-  var score = s.score==null ? null : Number(s.score);
-  var required = s.requiredScore==null ? null : Number(s.requiredScore);
-  var scorePct = score!=null && required>0 ? Math.min(100,Math.max(0,(score/required)*100)) : 0;
-  var scoreReady = score!=null && required!=null && score>=required;
-  var title = s.state==='CONFIRMED' ? 'SETUP CONFIRMED — SUBMITTING' : 'CONFIRMING '+esc(s.direction||'')+' SETUP';
-
-  var html = '<div class="card"><div class="empty-state" style="padding-bottom:18px"><div class="ic">&#128269;</div><h4>'+title+'</h4>'
-    + '<p>Authoritative EA setup '+esc(s.setupId||'—')+'. This is live strategy telemetry, not a dashboard guess.</p></div>';
-
-  if (score!=null){
-    html += '<div class="progress-wrap"><div class="progress-big">'+score.toFixed(0)+' <span style="font-size:14px;color:var(--text-dim)">/ '+(required==null?'—':required.toFixed(0))+' required</span></div>'
-      + '<div class="progress-track"><div class="progress-fill" style="width:'+scorePct+'%"></div></div></div>';
-  }
-
-  html += '<div class="row"><span class="k">Entry score</span><span class="v">'+(score==null?'—':score.toFixed(0))+' '+(required==null?'':setupGatePill(scoreReady,true,true))+'</span></div>'
-    + '<div class="row"><span class="k">Rejection</span><span class="v">'+setupGatePill(!!s.rejected,true,true)+'</span></div>'
-    + '<div class="row"><span class="k">Micro BOS</span><span class="v">'+setupGatePill(!!s.microBreak,true,true)+'</span></div>'
-    + '<div class="row"><span class="k">M3 confirmation</span><span class="v">'+setupGatePill(!!s.m3Gate,!!s.requireM3,s.m3Available!==false)+'</span></div>'
-    + '<div class="row"><span class="k">M5 context</span><span class="v">'+setupGatePill(!!s.m5Gate,!!s.requireM5,s.m5Available!==false)+'</span></div>'
-    + '<div class="row"><span class="k">Waiting for</span><span class="v">'+esc((s.waitReason||'—').replace(/_/g,' '))+'</span></div>'
-    + '<div class="row"><span class="k">BOS type</span><span class="v">'+esc(s.bosKind||'NONE')+'</span></div>'
-    + '<div class="row"><span class="k">Setup age</span><span class="v">'+(s.setupAgeSec==null?'—':Math.max(0,Math.round(Number(s.setupAgeSec)))+'s')+'</span></div>'
-    + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>';
-
-  if (score!=null){
-    html += '<div style="margin-top:14px"><h3>Score components</h3>'
-      + '<div class="row"><span class="k">Base</span><span class="v">+'+Number(s.basePoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Impulse</span><span class="v">+'+Number(s.impulsePoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Rejection</span><span class="v">+'+Number(s.rejectionPoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Micro BOS</span><span class="v">+'+Number(s.bosPoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">M3</span><span class="v">+'+Number(s.m3Points||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">M5</span><span class="v">+'+Number(s.m5Points||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Wick quality</span><span class="v">+'+Number(s.wickPoints||0).toFixed(1)+'</span></div>'
-      + '</div>';
-  }
-
-  html += '<div class="stepper">'
-    + '<div class="step"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-    + '<div class="step-line active"></div>'
-    + '<div class="step active"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
-    + '</div></div>';
   return html;
 }
 

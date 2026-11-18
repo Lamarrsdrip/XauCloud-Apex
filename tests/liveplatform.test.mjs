@@ -176,11 +176,12 @@ test('SITE-001+SITE-009 HTTP: arm without bridge is not DELIVERED; NORMAL cannot
   }
 });
 
-test('dashboard HTML never tells the customer to allow apex.xaucloud.io WebRequest',async()=>{
+test('customer setup includes both required WebRequest origins without weakening entitlement controls',async()=>{
   const ui=await fs.readFile(new URL('../public/index.html',import.meta.url),'utf8');
-  assert.match(ui,/allow WebRequest for <code>https:\/\/xaucloud\.io<\/code>/);
-  assert.doesNotMatch(ui,/allow WebRequest for <code>https:\/\/apex\.xaucloud\.io<\/code>/);
-  assert.match(ui,/Arm queued — waiting for EA/);
-  assert.match(ui,/UNLIMITED is an entitlement/);
+  // XauCloud is the source of license/config; the separate Apex origin is used by Astra AI.
+  assert.match(ui,/https:\/\/xaucloud\.io/);
+  assert.match(ui,/https:\/\/apex\.xaucloud\.io/);
+  assert.match(ui,/Waiting for MT5 to confirm/);
+  assert.match(ui,/Unlimited is only available on eligible licenses/);
   assert.doesNotMatch(ui,/id="f-layerMultiplier"/);
 });

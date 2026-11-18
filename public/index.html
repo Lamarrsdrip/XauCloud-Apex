@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>XauCloud Apex</title>
 <meta name="theme-color" content="#0a0b0f">
 <style>
@@ -212,6 +212,7 @@ button{cursor:pointer}
 .container{max-width:640px}
 .center-note{text-align:center;color:var(--text-faint);font-size:12.5px;margin-top:18px}
 </style>
+<link rel="stylesheet" href="/premium.css?v=2026-11-18" media="all">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#d8b15a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -238,7 +239,7 @@ button{cursor:pointer}
   <div class="topbar">
     <div class="topbar-inner">
       <div class="topbar-brand"><div class="brand-mark brand-mark-apex" aria-label="Apex">A</div><span>XauCloud Apex</span></div>
-      <div class="pills" id="status-pills"></div>
+      <div class="pills" id="status-pills" aria-live="polite"></div>
     </div>
   </div>
   <div class="layout">
@@ -255,16 +256,32 @@ button{cursor:pointer}
 (function(){
 'use strict';
 
-var STATE = { me:null, page:'dashboard', pollTimer:null, adminToken:null };
+var STATE = { me:null, page:'dashboard', pollTimer:null, adminToken:null, settingsTab:'setup', settingsExpanded:{} };
 
 var NAV = [
-  {id:'dashboard', label:'Dashboard', ic:'&#9679;'},
-  {id:'campaigns', label:'Campaigns', ic:'&#9670;'},
-  {id:'history', label:'History', ic:'&#8635;'},
-  {id:'learning', label:'Learning', ic:'&#9733;'},
-  {id:'settings', label:'Settings', ic:'&#9881;'},
-  {id:'account', label:'Account', ic:'&#9786;'}
+  {id:'dashboard',label:'Overview'},
+  {id:'campaigns',label:'Trades'},
+  {id:'history',label:'History'},
+  {id:'learning',label:'Insights'},
+  {id:'settings',label:'Settings'},
+  {id:'account',label:'Account'}
 ];
+function navIcon(id){
+  var shapes={
+    dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
+    campaigns:'<path d="M3 17l6-6 4 4 8-9"/><path d="M16 6h5v5"/>',
+    history:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    learning:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 2 5-7"/>',
+    settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9L7 7m10 10 2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
+    account:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'
+  };
+  return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+(shapes[id]||shapes.dashboard)+'</svg>';
+}
+function openSettings(tab){
+  STATE.settingsTab=tab||'setup';
+  if(STATE.page==='settings')activateSettingsTab(STATE.settingsTab);
+  else location.hash='#settings';
+}
 
 // ---------- api ----------
 function api(path, opts){
@@ -417,13 +434,13 @@ function route(){
 
 function renderNav(){
   var itemsHtml = NAV.map(function(n){
-    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'"><span class="ic">'+n.ic+'</span><span>'+n.label+'</span></button>';
+    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'"><span class="ic">'+navIcon(n.id)+'</span><span>'+n.label+'</span></button>';
   }).join('');
   var sidebar = document.getElementById('sidebar');
   var bottomnav = document.getElementById('bottomnav');
   sidebar.innerHTML = itemsHtml + '<button class="navitem" id="logout-btn" style="margin-top:auto"><span class="ic">&#10162;</span><span>Sign Out</span></button>';
-  bottomnav.innerHTML = NAV.slice(0,5).map(function(n){
-    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'" style="flex:1"><span class="ic">'+n.ic+'</span><span>'+n.label+'</span></button>';
+  bottomnav.innerHTML = NAV.filter(function(n){return n.id!=='learning';}).map(function(n){
+    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'" style="flex:1"><span class="ic">'+navIcon(n.id)+'</span><span>'+n.label+'</span></button>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('[data-nav]'), function(el){
     el.addEventListener('click', function(){ location.hash = '#'+el.getAttribute('data-nav'); });
@@ -434,23 +451,14 @@ function renderNav(){
 }
 
 function renderStatusPills(){
-  var me = STATE.me || {};
-  var wrap = document.getElementById('status-pills');
-  var parts = [];
-  var desiredArmed = !!(me.control && me.control.desired && me.control.desired.armed);
-  var appliedRev = me.control && me.control.applied ? me.control.applied.revision : null;
-  var desiredRev = me.control && me.control.desired ? me.control.desired.revision : null;
-  var inSync = me.control && me.control.applied ? me.control.applied.inSync : null;
-  if (inSync===true) parts.push(pill(desiredArmed? 'Apex armed — EA applied r'+(appliedRev||'') : 'Apex disarmed — EA applied', desiredArmed?'green':'gray'));
-  else if (desiredArmed) parts.push(pill('Arm queued — waiting for EA r'+(desiredRev||''), 'amber'));
-  else parts.push(pill(me.armed? 'Disarm queued / desired disarmed':'Apex Disarmed', 'gray'));
-  var mt5 = (me.mt5&&me.mt5.status) || 'DISCONNECTED';
-  parts.push(pill('MT5 '+ (mt5==='CONNECTED'?'Connected':mt5==='STALE'?'Stale':'Disconnected'), mt5==='CONNECTED'?'green':mt5==='STALE'?'amber':'red'));
-  var ls = (me.license&&me.license.status) || 'LICENSE_NOT_FOUND';
-  var licMap = {ACTIVE:['License Active','green'], LICENSE_EXPIRED:['License Expired','red'], LICENSE_DISABLED:['License Disabled','red'], ACCOUNT_MISMATCH:['Account Mismatch','amber'], LICENSE_NOT_FOUND:['License Not Found','red']};
-  var lm = licMap[ls] || licMap.LICENSE_NOT_FOUND;
-  parts.push(pill(lm[0], lm[1]));
-  wrap.innerHTML = parts.join('');
+  var me=STATE.me||{}, wrap=document.getElementById('status-pills');
+  var mt5=(me.mt5&&me.mt5.status)||'DISCONNECTED', connected=mt5==='CONNECTED';
+  var control=me.control||{}, desired=control.desired||{}, applied=control.applied||{};
+  var requested=desired.armed===true;
+  var mt5Label=connected?'MT5 connected':mt5==='STALE'?'Connection delayed':'MT5 offline';
+  var actionLabel=!connected?'Waiting for MT5':applied.inSync!==true?'Applying changes':requested?'Trading enabled':'Trading paused';
+  wrap.innerHTML=pill(mt5Label,connected?'green':mt5==='STALE'?'amber':'gray')+
+    pill(actionLabel,!connected?'gray':applied.inSync!==true?'amber':requested?'green':'gray');
 }
 
 // ---------- page render dispatch ----------
@@ -464,10 +472,18 @@ function renderPage(){
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
+  if (STATE.page==='dashboard')wireOverviewControls();
+  if (STATE.page==='history')wireHistoryControls();
+  if (STATE.page==='account'){
+    var setup=document.getElementById('account-setup-link');
+    if(setup)setup.addEventListener('click',function(){openSettings('setup');});
+    var signout=document.getElementById('logout-btn2');
+    if(signout)signout.addEventListener('click',logout);
+  }
   if(STATE.page==='settings'&&window.AstraUI)window.AstraUI.bind(async function(){STATE.me=await api('/api/auth/me');renderPage();});
 }
 
-// ---------- Compiled Apex release (shown even before first MT5 heartbeat) ----------
+// ---------- Compiled Apex release — Settings only ----------
 function releaseCard(me){
   var release=me.release||{},ready=release.available===true;
   var html='<section class="card release-card" aria-label="Apex bot download"><div class="release-head">'
@@ -478,8 +494,7 @@ function releaseCard(me){
     ? 'Download the latest Apex bot for Windows MT5. AstraBridge is already included in the compiled .ex5; you only need one file.'
     : 'The latest compiled Apex bot has not been published yet. Your dashboard will show the download as soon as the official .ex5 is available.')+'</p>';
   if(ready){
-    html+='<div class="release-actions"><a class="btn btn-primary" href="/api/session/bot/download" download>Download Apex .ex5</a>'
-      +'<button class="btn btn-ghost" style="width:auto" onclick="location.hash=\'account\'">Installation guide</button></div>'
+    html+='<div class="release-actions"><a class="btn btn-primary" href="/api/session/bot/download" download>Download Apex .ex5</a></div>'
       +'<div class="release-meta" style="margin-top:14px">SHA-256: '+esc(release.sha256||'')+' · Published '+esc(fmtDate(release.publishedAt))+'</div>';
   }else{
     html+='<div class="release-actions"><button class="btn btn-primary" disabled>Compiled bot not published</button></div>';
@@ -489,39 +504,64 @@ function releaseCard(me){
 
 // ---------- Dashboard ----------
 function pageDashboard(me){
-  if (!me.dataAvailable){
-    return '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview</p>' + releaseCard(me) + (window.AstraUI?window.AstraUI.card(me,false):'') + dataUnavailableCard(me);
+  var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{};
+  var broker=acc.broker||'Broker not reported', account=acc.account||lic.account||'Not connected';
+  var html='<div class="overview-top"><div><div class="overview-eyebrow">XauCloud Apex</div>'
+    +'<h1 class="overview-title">Your overview</h1>'
+    +'<div class="overview-desc">Your gold trading activity, account balance and Apex status in one place.</div></div>'
+    +'<div class="overview-meta">Last account update: '+esc(fmtAgo(acc.asOf||mt5.lastSeen))+'</div></div>';
+  if(!me.dataAvailable){
+    html+=dataUnavailableCard(me);
+    if(lic.status==='ACTIVE')html+='<div class="overview-inline-control"><div><div class="control-title">Get Apex connected</div>'
+      +'<div class="control-desc">Install the bot in MT5, then connect your license. The full setup is in Settings.</div></div>'
+      +'<button type="button" class="btn btn-primary" style="width:auto" id="overview-open-setup">Setup guide</button></div>';
+    return html;
   }
-  var acc = me.account || {};
-  var camp = me.campaign;
-  var html = '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview · updated '+esc(fmtAgo(acc.asOf))+'</p>';
-  html+=releaseCard(me);
-  if(window.AstraUI)html+=window.AstraUI.card(me,false);
-
-  html += '<div class="card"><div class="acct-strip">'
-    + '<div class="item"><div class="k">Account Profile</div><div class="v">'+esc(me.accountProfile||'—')+'</div></div>'
-    + '<div class="item"><div class="k">Broker</div><div class="v">'+esc(acc.broker||'Not reported')+'</div></div>'
-    + '<div class="item"><div class="k">MT5 Account</div><div class="v">'+esc(acc.account||'—')+'</div></div>'
-    + '<div class="item"><div class="k">Currency</div><div class="v">'+esc(acc.currency||'—')+'</div></div>'
-    + '</div></div>';
-
-  html += '<div class="grid-stats">'
-    + statTile('Balance', fmtMoney(acc.balance, acc.currency))
-    + statTile('Equity', fmtMoney(acc.equity, acc.currency))
-    + statTile('Free Margin', fmtMoney(acc.freeMargin, acc.currency))
-    + statTile('Current P/L', camp? fmtMoney(camp.floatingPL, acc.currency): '—', camp && camp.floatingPL!=null? (camp.floatingPL>=0?'pos':'neg'):'')
-    + '</div>';
-
-  if (camp){
-    html += campaignProgressCard(camp, acc.currency);
-    html += campaignSummaryCard(camp, acc.currency, false);
-  } else {
-    html += watchingCard(me);
-  }
-
-  html += recentFeedCard(me.recentHuman||[]);
-  html += armDisarmCard(me);
+  html+='<div class="overview-layout">'
+    +'<section class="balance-hero" aria-label="Trading account balances">'
+    +'<div class="balance-label">Account balance</div>'
+    +'<div class="balance-figure">'+esc(fmtMoney(acc.balance,acc.currency))+'</div>'
+    +'<div class="balance-meta">'+esc(broker)+'<span aria-hidden="true">·</span> MT5 '+esc(account)+'</div>'
+    +'<div class="balance-divider"></div>'
+    +'<div class="balance-support"><div><div class="label">Equity</div><div class="value">'+esc(fmtMoney(acc.equity,acc.currency))+'</div></div>'
+    +'<div><div class="label">Open trade P/L</div><div class="value '+(camp&&camp.floatingPL!=null?(camp.floatingPL>=0?'pos':'neg'):'')+'">'+esc(camp?fmtMoney(camp.floatingPL,acc.currency):'—')+'</div></div></div>'
+    +'</section>'
+    +'<section class="summary-card" aria-label="Account details"><div>'
+    +'<div class="summary-card-title">Account at a glance</div><div class="summary-card-sub">The essentials, without the trading jargon.</div>'
+    +'<div class="summary-metric"><span>Account type</span><strong>'+esc(me.accountProfile==='NORMAL'?'Standard':me.accountProfile==='UNLIMITED'?'Unlimited':me.accountProfile||'Standard')+'</strong></div>'
+    +'<div class="summary-metric"><span>Available margin</span><strong>'+esc(fmtMoney(acc.freeMargin,acc.currency))+'</strong></div>'
+    +'<div class="summary-metric"><span>Open trades</span><strong>'+(camp&&camp.layers!=null?esc(camp.layers):camp?'—':'0')+'</strong></div>'
+    +'</div><button type="button" id="overview-view-account" class="text-link summary-action">View account details →</button></section></div>';
+  html+='<section class="overview-section" aria-label="Trading status">'
+    +'<div class="overview-section-head"><h2>Trading status</h2><button type="button" id="overview-view-settings" class="text-link">Manage settings →</button></div>'
+    +armDisarmCard(me)
+    +overviewTradingCard(me)
+    +'</section>';
+  html+='<section class="overview-section" aria-label="Activity">'
+    +'<div class="overview-section-head"><h2>Recent activity</h2><button type="button" class="text-link" id="overview-view-history">Trade history →</button></div>'
+    +recentFeedCard(me.recentHuman||[])+'</section>';
   return html;
+}
+
+function overviewTradingCard(me){
+  var camp=me.campaign, setup=me.setupStatus||{}, currency=(me.account||{}).currency;
+  var desired=(me.control&&me.control.desired||{}).armed===true;
+  var connected=(me.mt5||{}).status==='CONNECTED', title,description,extra='',tone='off',status='';
+  if(camp){
+    var side=camp.direction==='BUY'?'buy':camp.direction==='SELL'?'sell':'active';
+    title='A '+side+' position is open';
+    description='Apex is managing '+(camp.layers==null?'your active positions':(Number(camp.layers)===1?'1 position':esc(camp.layers)+' positions'))+'. Review the details before making changes.';
+    status='Open trade';tone='ok';
+    extra='<div class="settings-subtle" style="margin-top:10px">Unrealised P/L: <strong>'+esc(fmtMoney(camp.floatingPL,currency))+'</strong></div>';
+  }else if(!connected){title='Not connected to MT5';description='Open MetaTrader 5 and make sure Apex is attached to your gold chart.';status='Offline';}
+  else if(!desired){title='New entries are paused';description='Apex will not open new trades until you enable trading. Any existing positions remain managed.';status='Paused';}
+  else if(setup.active){
+    title='Checking a possible '+(setup.direction==='BUY'?'buy':setup.direction==='SELL'?'sell':'gold')+' setup';
+    description='Apex is waiting for its entry conditions before making a trade.';status='Reviewing setup';
+  }else{title='Watching the gold market';description='No open trade right now. Apex is checking for an opportunity that meets its rules.';status='Monitoring';}
+  return '<div class="card overview-trading"><div><div class="state-title">'+title+'</div><div class="state-desc">'+description+'</div>'+extra+'</div>'
+    +'<div style="display:flex;align-items:center;gap:15px;flex-wrap:wrap"><span class="overview-pill '+tone+'">'+status+'</span>'
+    +'<button class="text-link" type="button" id="overview-view-trades">View trades →</button></div></div>';
 }
 
 function dataUnavailableCard(me){
@@ -535,51 +575,60 @@ function dataUnavailableCard(me){
     }[ls] || 'License is not active.';
     return '<div class="card"><div class="empty-state"><div class="ic">&#128274;</div><h4>'+esc(ls.replace(/_/g,' '))+'</h4><p>'+esc(msg)+'</p></div></div>';
   }
-  return '<div class="card"><div class="empty-state"><div class="ic">&#128225;</div><h4>MT5 DISCONNECTED</h4><p>Waiting for the Apex EA to contact the backend for the first time. Attach the EA in MT5 with your license key to begin.</p></div></div>';
+  return '<div class="card"><div class="empty-state"><div class="ic">&#128225;</div><h4>Connect MetaTrader 5</h4><p>Apex has not received account information yet. Install the bot and connect it using your license to see your balance and trades.</p></div></div>';
 }
 
 function statTile(label, value, cls){
   return '<div class="stat-tile"><div class="label">'+esc(label)+'</div><div class="value'+(cls?' '+cls:'')+'">'+value+'</div></div>';
 }
 
-function campaignProgressCard(camp, cur){
-  var pct = (camp.progressPct===undefined||camp.progressPct===null||!isFinite(camp.progressPct)) ? null : Math.round(camp.progressPct);
-  return '<div class="card"><h3>Target Progress</h3>'
-    + '<div class="row"><span class="k">Starting Equity</span><span class="v">'+fmtMoney(camp.startEquity,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Current Equity</span><span class="v">'+fmtMoney(camp.currentEquity,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Target Equity</span><span class="v">'+fmtMoney(camp.targetEquity,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Campaign Profit</span><span class="v">'+fmtPct(camp.profitPct)+'</span></div>'
-    + '<div class="row"><span class="k">Target progress</span><span class="v">'+(pct===null?'—':pct+'%')+'</span></div>'
-    + '<div class="progress-wrap"><div class="progress-big">'+(pct===null?'—':pct+'%')+'</div>'
-    + '<div class="progress-track"><div class="progress-fill" style="width:'+(pct===null?0:Math.min(100,Math.max(0,pct)))+'%"></div></div></div>'
-    + '</div>';
-}
-
-function campaignSummaryCard(camp, cur, showLayers){
-  var dirLabel = camp.direction==='BUY'?'ACTIVE BUY CAMPAIGN':camp.direction==='SELL'?'ACTIVE SELL CAMPAIGN':'ACTIVE CAMPAIGN';
-  var badgeCls = camp.direction==='BUY'?'badge-buy':camp.direction==='SELL'?'badge-sell':'badge-target';
-  var badge = '<span class="badge '+badgeCls+'">'+esc(dirLabel)+'</span>';
-  var vol = (camp.totalVolume===undefined||camp.totalVolume===null||!isFinite(camp.totalVolume)) ? '—' : Number(camp.totalVolume).toFixed(2);
-  var html = '<div class="card"><h3>Active Campaign</h3>'
-    + '<div style="margin-bottom:10px">'+badge+'</div>'
-    + '<div class="row"><span class="k">State</span><span class="v">'+esc(camp.campaignState||camp.state||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Closing</span><span class="v">'+esc(camp.closingState||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Started</span><span class="v">'+esc(fmtDate(camp.startedAt))+'</span></div>'
-    + '<div class="row"><span class="k">First entry</span><span class="v">'+esc(camp.firstEntry==null?'—':Number(camp.firstEntry).toFixed(2))+'</span></div>'
-    + '<div class="row"><span class="k">Total Lots</span><span class="v">'+vol+'</span></div>'
-    + '<div class="row"><span class="k">Layers</span><span class="v">'+(camp.layers==null?'—':esc(camp.layers))+'</span></div>'
-    + '<div class="row"><span class="k">Floating P/L</span><span class="v">'+fmtMoney(camp.floatingPL,cur)+'</span></div>'
-    + '<div class="row"><span class="k">Profit floor</span><span class="v">'+(camp.profitFloor==null?'—':fmtPct(camp.profitFloor))+'</span></div>'
-    + '<div class="row"><span class="k">Last live update</span><span class="v">'+esc(fmtAgo(camp.lastLiveUpdate))+'</span></div>'
-    + '<div class="row"><span class="k">Campaign ID</span><span class="v" style="font-size:11px;color:var(--text-faint)">'+esc(camp.campaignId||'—')+'</span></div>';
-  if (showLayers && camp.layerDetail && camp.layerDetail.length){
-    html += '<div class="layer-list"><h3 style="margin-top:14px">Open Layers</h3>';
-    camp.layerDetail.forEach(function(l){
-      html += '<div class="layer-row"><span>Layer '+esc(l.layer)+' · '+Number(l.volume||0).toFixed(2)+' lots</span><span style="color:var(--text-faint)">@ '+Number(l.price||0).toFixed(2)+'</span></div>';
-    });
-    html += '</div>';
+function campaignProgressCard(camp,cur){
+  var target=Number(camp.targetEquity),current=Number(camp.currentEquity),start=Number(camp.startEquity);
+  var hasTarget=camp.targetEquity!=null&&Number.isFinite(target)&&target>0;
+  var pct=Number(camp.progressPct),known=camp.progressPct!=null&&Number.isFinite(pct);
+  if(!hasTarget){
+    return '<div class="card"><h3>Campaign progress</h3>'
+      +'<p class="settings-section-intro">This campaign does not report a fixed equity target. Check Protection in Settings to see your current exit rules.</p>'
+      +'<div class="row"><span class="k">Campaign profit</span><span class="v">'+esc(fmtPct(camp.profitPct))+'</span></div>'
+      +'<div class="row"><span class="k">Current equity</span><span class="v">'+esc(fmtMoney(camp.currentEquity,cur))+'</span></div></div>';
   }
-  html += '</div>';
+  var value=known?Math.round(pct):null;
+  return '<div class="card"><h3>Progress toward the target</h3>'
+    +'<p class="settings-section-intro">How close this active campaign is to its configured equity target.</p>'
+    +'<div class="progress-big">'+(value===null?'—':value+'%')+'</div>'
+    +'<div class="progress-wrap"><div class="progress-track" role="progressbar" aria-label="Progress toward equity target" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+(value===null?0:Math.max(0,Math.min(100,value)))+'">'
+    +'<div class="progress-fill" style="width:'+(value===null?0:Math.max(0,Math.min(100,value)))+'%"></div></div></div>'
+    +'<div class="row"><span class="k">Current equity</span><span class="v">'+esc(fmtMoney(camp.currentEquity,cur))+'</span></div>'
+    +'<div class="row"><span class="k">Target equity</span><span class="v">'+esc(fmtMoney(camp.targetEquity,cur))+'</span></div>'
+    +'<div class="row"><span class="k">Campaign profit</span><span class="v">'+esc(fmtPct(camp.profitPct))+'</span></div></div>';
+}
+function campaignSummaryCard(camp,cur,showLayers){
+  var side=camp.direction==='BUY'?'Buy':camp.direction==='SELL'?'Sell':'Active';
+  var volume=camp.totalVolume!=null&&Number.isFinite(Number(camp.totalVolume))?Number(camp.totalVolume).toFixed(2):'—';
+  var count=camp.layers==null?'—':String(camp.layers);
+  var html='<div class="card"><div class="release-head"><div><h3 style="margin:0">Current trade</h3>'
+    +'<div class="settings-subtle" style="margin-top:5px">'+esc(side)+' campaign · '+esc(fmtDate(camp.startedAt))+'</div></div>'
+    +'<span class="overview-pill ok">In progress</span></div>'
+    +'<div class="grid-stats" style="margin-top:21px">'
+    +statTile('Unrealised P/L',fmtMoney(camp.floatingPL,cur),camp.floatingPL>=0?'pos':'neg')
+    +statTile('Open positions',count)
+    +'</div>'
+    +'<details class="settings-details" style="margin-top:12px"><summary><span>'
+    +'<span class="details-name">Trade details</span><span class="details-desc" style="display:block">Prices, volume, exits and live campaign information.</span>'
+    +'</span></summary><div class="details-content">'
+    +'<div class="row"><span class="k">First entry</span><span class="v">'+(camp.firstEntry==null?'—':esc(Number(camp.firstEntry).toFixed(2)))+'</span></div>'
+    +'<div class="row"><span class="k">Total volume</span><span class="v">'+volume+' lots</span></div>'
+    +'<div class="row"><span class="k">Profit floor</span><span class="v">'+esc(fmtPct(camp.profitFloor))+'</span></div>'
+    +'<div class="row"><span class="k">Trade status</span><span class="v">'+esc((camp.campaignState||camp.state||'—').replace(/_/g,' '))+'</span></div>'
+    +'<div class="row"><span class="k">Closing status</span><span class="v">'+esc((camp.closingState||'—').replace(/_/g,' '))+'</span></div>'
+    +'<div class="row"><span class="k">Last update</span><span class="v">'+esc(fmtAgo(camp.lastLiveUpdate))+'</span></div>';
+  if(showLayers&&Array.isArray(camp.layerDetail)&&camp.layerDetail.length){
+    html+='<h4 style="margin:16px 0 3px">Open positions</h4>';
+    camp.layerDetail.forEach(function(l){
+      html+='<div class="layer-row"><span>Position '+esc(l.layer)+' · '+Number(l.volume||0).toFixed(2)+' lots</span><span>At '+Number(l.price||0).toFixed(2)+'</span></div>';
+    });
+  }
+  html+='</div></details></div>';
   return html;
 }
 
@@ -590,108 +639,62 @@ function setupGatePill(ok, required, available){
 }
 
 function watchingCard(me){
-  var s = me.setupStatus || null;
-  var active = !!(s && s.active && (s.state==='WATCHING'||s.state==='CONFIRMED'));
-  var recentTerminal = !!(s && !s.active && Number.isFinite(Number(s.eventAgeSec)) && Number(s.eventAgeSec)<20*60);
-
-  if (!active && !recentTerminal){
-    return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>APEX IS SCANNING</h4>'
-      + '<p>Waiting for a high-quality setup. When one is armed, this card will show its live score and every confirmation gate.</p></div>'
-      + '<div class="stepper">'
-      + '<div class="step active"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-      + '<div class="step-line"></div>'
-      + '<div class="step"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
-      + '</div></div>';
+  var s=me.setupStatus||{},mt5=(me.mt5||{}).status==='CONNECTED';
+  var armed=(me.control&&me.control.desired||{}).armed===true;
+  var active=s.active&&(s.state==='WATCHING'||s.state==='CONFIRMED');
+  var recent=!s.active&&Number.isFinite(Number(s.eventAgeSec))&&Number(s.eventAgeSec)<1200;
+  var title='',description='',tone='off';
+  if(!mt5){title='Waiting for MetaTrader 5';description='Connect your terminal to see which trading setups Apex is checking.';}
+  else if(!armed){title='New trades are paused';description='Apex is not looking to open a new trade until you enable new entries.';}
+  else if(active){title=s.state==='CONFIRMED'?'Setup confirmed':'Checking a possible '+(s.direction==='BUY'?'buy':s.direction==='SELL'?'sell':'gold')+' opportunity';
+    description=s.state==='CONFIRMED'?'Apex is processing a confirmed setup. A trade is not counted until the broker confirms the order.':
+      'Apex has spotted a possible entry but is checking the required conditions before trading.';tone='ok';}
+  else if(recent){title='Watching for the next opportunity';description='The previous setup '+(s.state==='EXPIRED'?'expired':s.state==='INVALIDATED'?'did not remain valid':'ended')+'. Apex is waiting for a fresh signal.';}
+  else{title='Watching for the next opportunity';description='No setup has qualified yet. Apex only enters when its trading rules are met.';}
+  var html='<div class="card overview-trading"><div><div class="state-title">'+esc(title)+'</div>'
+    +'<div class="state-desc">'+esc(description)+'</div></div>'
+    +'<span class="overview-pill '+tone+'">'+(active?'Evaluating':armed&&mt5?'Monitoring':'Waiting')+'</span></div>';
+  if(active||recent){
+    var score=s.score==null?'—':Number(s.score).toFixed(0);
+    html+='<details class="settings-details"><summary><span><span class="details-name">What Apex is checking</span>'
+      +'<span class="details-desc" style="display:block">Optional technical details about this setup.</span></span></summary><div class="details-content">'
+      +'<div class="row"><span class="k">Direction</span><span class="v">'+esc(s.direction||'—')+'</span></div>'
+      +'<div class="row"><span class="k">Entry score</span><span class="v">'+score+' / '+(s.requiredScore==null?'—':Number(s.requiredScore).toFixed(0))+'</span></div>'
+      +'<div class="row"><span class="k">Price rejection</span><span class="v">'+setupGatePill(!!s.rejected,true,true)+'</span></div>'
+      +'<div class="row"><span class="k">Break of market structure</span><span class="v">'+setupGatePill(!!s.microBreak,true,true)+'</span></div>'
+      +'<div class="row"><span class="k">M3 confirmation</span><span class="v">'+setupGatePill(!!s.m3Gate,!!s.requireM3,s.m3Available!==false)+'</span></div>'
+      +'<div class="row"><span class="k">M5 context</span><span class="v">'+setupGatePill(!!s.m5Gate,!!s.requireM5,s.m5Available!==false)+'</span></div>'
+      +'<div class="row"><span class="k">Current wait reason</span><span class="v">'+esc(String(s.waitReason||s.reason||'—').replace(/_/g,' ').toLowerCase())+'</span></div>'
+      +'</div></details>';
   }
-
-  if (recentTerminal){
-    var terminalText = s.state==='EXPIRED'
-      ? 'The setup did not complete before the configured watch timeout. Apex discarded it and resumed scanning.'
-      : s.state==='INVALIDATED'
-      ? 'Price printed a new extreme beyond the swept level, invalidating the rejection thesis. Apex resumed scanning.'
-      : s.state==='CONSUMED'
-      ? 'This setup was consumed by a campaign. Apex will scan again whenever it is idle.'
-      : 'Apex cancelled this setup and resumed scanning.';
-    return '<div class="card"><div class="empty-state"><div class="ic">&#128269;</div><h4>SETUP '+esc(s.state)+' — SCANNING AGAIN</h4>'
-      + '<p>'+esc(terminalText)+'</p></div>'
-      + '<div class="row"><span class="k">Direction</span><span class="v">'+esc(s.direction||'—')+'</span></div>'
-      + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>'
-      + '<div class="row"><span class="k">Reason</span><span class="v">'+esc(s.reason||s.state||'—')+'</span></div>'
-      + (s.score==null?'':'<div class="row"><span class="k">Last score</span><span class="v">'+Number(s.score).toFixed(0)+' / '+(s.requiredScore==null?'—':Number(s.requiredScore).toFixed(0))+'</span></div>')
-      + '<div class="stepper">'
-      + '<div class="step active"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-      + '<div class="step-line"></div>'
-      + '<div class="step"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
-      + '</div></div>';
-  }
-
-  var score = s.score==null ? null : Number(s.score);
-  var required = s.requiredScore==null ? null : Number(s.requiredScore);
-  var scorePct = score!=null && required>0 ? Math.min(100,Math.max(0,(score/required)*100)) : 0;
-  var scoreReady = score!=null && required!=null && score>=required;
-  var title = s.state==='CONFIRMED' ? 'SETUP CONFIRMED — SUBMITTING' : 'CONFIRMING '+esc(s.direction||'')+' SETUP';
-
-  var html = '<div class="card"><div class="empty-state" style="padding-bottom:18px"><div class="ic">&#128269;</div><h4>'+title+'</h4>'
-    + '<p>Authoritative EA setup '+esc(s.setupId||'—')+'. This is live strategy telemetry, not a dashboard guess.</p></div>';
-
-  if (score!=null){
-    html += '<div class="progress-wrap"><div class="progress-big">'+score.toFixed(0)+' <span style="font-size:14px;color:var(--text-dim)">/ '+(required==null?'—':required.toFixed(0))+' required</span></div>'
-      + '<div class="progress-track"><div class="progress-fill" style="width:'+scorePct+'%"></div></div></div>';
-  }
-
-  html += '<div class="row"><span class="k">Entry score</span><span class="v">'+(score==null?'—':score.toFixed(0))+' '+(required==null?'':setupGatePill(scoreReady,true,true))+'</span></div>'
-    + '<div class="row"><span class="k">Rejection</span><span class="v">'+setupGatePill(!!s.rejected,true,true)+'</span></div>'
-    + '<div class="row"><span class="k">Micro BOS</span><span class="v">'+setupGatePill(!!s.microBreak,true,true)+'</span></div>'
-    + '<div class="row"><span class="k">M3 confirmation</span><span class="v">'+setupGatePill(!!s.m3Gate,!!s.requireM3,s.m3Available!==false)+'</span></div>'
-    + '<div class="row"><span class="k">M5 context</span><span class="v">'+setupGatePill(!!s.m5Gate,!!s.requireM5,s.m5Available!==false)+'</span></div>'
-    + '<div class="row"><span class="k">Waiting for</span><span class="v">'+esc((s.waitReason||'—').replace(/_/g,' '))+'</span></div>'
-    + '<div class="row"><span class="k">BOS type</span><span class="v">'+esc(s.bosKind||'NONE')+'</span></div>'
-    + '<div class="row"><span class="k">Setup age</span><span class="v">'+(s.setupAgeSec==null?'—':Math.max(0,Math.round(Number(s.setupAgeSec)))+'s')+'</span></div>'
-    + '<div class="row"><span class="k">Setup ID</span><span class="v" style="font-size:11px">'+esc(s.setupId||'—')+'</span></div>';
-
-  if (score!=null){
-    html += '<div style="margin-top:14px"><h3>Score components</h3>'
-      + '<div class="row"><span class="k">Base</span><span class="v">+'+Number(s.basePoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Impulse</span><span class="v">+'+Number(s.impulsePoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Rejection</span><span class="v">+'+Number(s.rejectionPoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Micro BOS</span><span class="v">+'+Number(s.bosPoints||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">M3</span><span class="v">+'+Number(s.m3Points||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">M5</span><span class="v">+'+Number(s.m5Points||0).toFixed(1)+'</span></div>'
-      + '<div class="row"><span class="k">Wick quality</span><span class="v">+'+Number(s.wickPoints||0).toFixed(1)+'</span></div>'
-      + '</div>';
-  }
-
-  html += '<div class="stepper">'
-    + '<div class="step"><div class="dot"></div><div class="lbl">Scanning</div></div>'
-    + '<div class="step-line active"></div>'
-    + '<div class="step active"><div class="dot"></div><div class="lbl">Confirming Setup</div></div>'
-    + '</div></div>';
   return html;
 }
 
 function recentFeedCard(items){
-  if (!items.length) return '';
-  var html = '<div class="card"><h3>Recent Activity</h3>';
-  items.slice(0,8).forEach(function(e){
-    html += '<div class="feed-item"><span class="t">'+esc(fmtAgo(e.ts))+'</span><span class="txt">'+esc(e.text)+'</span></div>';
+  if(!items.length)return '<div class="overview-feed"><div class="settings-subtle">No recent trading activity to show yet. Updates will appear here when Apex reports them.</div></div>';
+  var html='<div class="overview-feed">';
+  items.slice(0,3).forEach(function(event){
+    html+='<div class="feed-item"><span class="t">'+esc(fmtAgo(event.ts))+'</span><span class="txt">'+esc(event.text||'Account activity')+'</span></div>';
   });
-  html += '</div>';
-  return html;
+  return html+'</div>';
 }
 
 function armDisarmCard(me){
-  var ctrl = me.control||{};
-  var desired = ctrl.desired||{};
-  var applied = ctrl.applied||{};
-  var hint = 'When disarmed, Apex will not start new campaigns or add new layers. Active positions are still managed.';
-  if (applied.inSync===true) hint = 'EA applied revision '+(applied.revision||desired.revision||'—')+'. '+hint;
-  else if (desired.revision) hint = 'Desired revision '+(desired.revision)+' — EA applied '+(applied.revision||'nothing yet')+'. '+hint;
-  return '<div class="card"><div class="toggle-row"><div><div class="lbl">Apex Armed (desired)</div><div class="hint">'+esc(hint)+'</div></div>'
-    + '<label class="switch"><input type="checkbox" id="arm-toggle" '+(desired.armed||me.armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div>'
-    + '<div class="row"><span class="k">Desired revision</span><span class="v">'+(desired.revision==null?'—':desired.revision)+'</span></div>'
-    + '<div class="row"><span class="k">Applied revision</span><span class="v">'+(applied.revision==null?'—':applied.revision)+'</span></div>'
-    + '<div class="row"><span class="k">In sync</span><span class="v">'+(applied.inSync===true?'yes':applied.inSync===false?'no':'unknown')+'</span></div></div>';
+  var ctrl=me.control||{},desired=ctrl.desired||{},applied=ctrl.applied||{};
+  var hasDesired=typeof desired.armed==='boolean',armed=hasDesired?desired.armed:me.armed===true;
+  var mt5=(me.mt5||{}).status==='CONNECTED';
+  var label=armed?'Allow new trades':'Pause new trades';
+  var text=armed
+    ?'Apex can open new trades only when its conditions are met.'
+    :'Apex will not open new trades or add layers. Open positions stay managed.';
+  var sync=applied.inSync===true?'Settings applied to MT5':
+    !mt5?'Will apply when MT5 reconnects':'Waiting for MT5 to apply this change';
+  return '<div class="overview-inline-control" aria-label="Apex trading control">'
+    +'<div><div class="control-title">'+label+'</div><div class="control-desc">'+text+'</div>'
+    +'<div class="settings-subtle" style="margin-top:7px">'+esc(sync)+'</div></div>'
+    +'<label class="switch" title="Allow Apex to open new trades"><input type="checkbox" id="arm-toggle" aria-label="Allow Apex to open new trades" '+(armed?'checked':'')+'><span class="track"></span><span class="knob"></span></label></div>';
 }
+
 function configSyncCard(me){
   var ec = me.effectiveConfig;
   var acc = me.account || {};
@@ -746,6 +749,32 @@ function updateRatchetPreview(){
   box.innerHTML = ratchetLadderHtml(trigger, lock, step, lockStep, enabled);
 }
 
+function wireHistoryControls(){
+  var insight=document.getElementById('history-insights-link');
+  if(insight)insight.addEventListener('click',function(){location.hash='#learning';});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-history-toggle]'),function(button){
+    button.addEventListener('click',function(){
+      var item=button.closest('.hist-item');
+      var expanded=item.classList.toggle('open');
+      button.setAttribute('aria-expanded',String(expanded));
+    });
+  });
+}
+
+function wireOverviewControls(){
+  var actions=[
+    ['overview-open-setup',function(){openSettings('setup');}],
+    ['overview-view-settings',function(){openSettings('trading');}],
+    ['overview-view-account',function(){location.hash='#account';}],
+    ['overview-view-trades',function(){location.hash='#campaigns';}],
+    ['overview-view-history',function(){location.hash='#history';}]
+  ];
+  actions.forEach(function(action){
+    var button=document.getElementById(action[0]);
+    if(button)button.addEventListener('click',action[1]);
+  });
+}
+
 function wireDashboardControls(){
   var t = document.getElementById('arm-toggle');
   if (t) t.addEventListener('change', function(){
@@ -753,10 +782,10 @@ function wireDashboardControls(){
     t.disabled = true;
     api('/api/session/config', {method:'POST', body:{armed:val}}).then(function(r){
       var d = (r && r.delivery) || '';
-      if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved locally — bridge not configured; EA will not see this yet', true);
-      else if (d==='QUEUED_FOR_BRIDGE') toast(val? 'Arm queued — waiting for bridge/EA' : 'Disarm queued — waiting for bridge/EA');
-      else if (d==='EA_APPLIED' || r.inSync) toast(val? ('Apex armed — EA applied revision '+r.desiredRevision) : ('Apex disarmed — EA applied revision '+r.desiredRevision));
-      else toast(val? 'Arm queued — waiting for EA' : 'Disarm queued — waiting for EA');
+      if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved, but your MT5 connection is not ready. Check connection details in Settings.', true);
+      else if (d==='QUEUED_FOR_BRIDGE') toast('Your change is saved. Waiting for MT5 to confirm.');
+      else if (d==='EA_APPLIED' || r.inSync) toast(val?'Apex is now allowed to open new trades':'New trades are paused');
+      else toast('Your change is saved. Waiting for MT5 to confirm.');
       return api('/api/auth/me');
     }).then(function(me){ STATE.me=me; renderStatusPills(); if (STATE.page==='dashboard'||STATE.page==='settings') renderPage(); t.disabled=false; })
     .catch(function(){ toast('Could not update — try again', true); t.checked=!val; t.disabled=false; });
@@ -765,7 +794,7 @@ function wireDashboardControls(){
 
 // ---------- Campaigns ----------
 function pageCampaigns(me){
-  var html = '<h1 class="page-title">Campaigns</h1><p class="page-sub">What Apex is doing right now</p>';
+  var html = '<h1 class="page-title">Trades</h1><p class="page-sub">Your current gold trading positions and any setup Apex is checking.</p>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   if (me.campaign) html += campaignProgressCard(me.campaign, (me.account||{}).currency) + campaignSummaryCard(me.campaign, (me.account||{}).currency, true);
   else html += watchingCard(me);
@@ -774,24 +803,25 @@ function pageCampaigns(me){
 
 // ---------- History ----------
 function pageHistory(me){
-  var html = '<h1 class="page-title">History</h1><p class="page-sub">Completed campaigns</p>';
+  var html = '<h1 class="page-title">Trade history</h1><p class="page-sub">Review previous Apex campaigns and their outcomes.</p>'
+    +'<div style="display:flex;justify-content:flex-end;margin-bottom:16px"><button class="text-link" type="button" id="history-insights-link">View trade insights →</button></div>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   var hist = me.history||[];
   if (!hist.length){
-    html += '<div class="card"><div class="empty-state"><div class="ic">&#128203;</div><h4>NO COMPLETED CAMPAIGNS YET</h4><p>Completed campaigns will appear here once Apex closes its first basket.</p></div></div>';
+    html += '<div class="card"><div class="empty-state"><div class="ic">&#128203;</div><h4>No completed trades yet</h4><p>Once a campaign closes, its result and details will appear here.</p></div></div>';
     return html;
   }
   hist.forEach(function(h, i){
     var badgeCls = h.outcome==='TARGET_HIT'?'badge-target':h.outcome==='PROFIT_FLOOR_HIT'?'badge-protected':'badge-stopout';
     var dirBadge = h.direction==='BUY'?'badge-buy':'badge-sell';
     html += '<div class="hist-item" id="hist-'+i+'">'
-      + '<div class="hist-head" onclick="document.getElementById(\'hist-'+i+'\').classList.toggle(\'open\')">'
+      + '<button type="button" class="hist-head" data-history-toggle="'+i+'" aria-expanded="false" aria-controls="history-details-'+i+'">'
       + '<span class="badge '+dirBadge+'">'+h.direction+'</span>'
       + '<div class="grow"><div class="pct" style="color:'+(h.profitPct>=0?'var(--green)':'var(--red)')+'">'+fmtPct(h.profitPct)+'</div><div class="date">'+esc(fmtDate(h.endedAt))+'</div></div>'
       + '<span class="badge '+badgeCls+'">'+esc(h.outcomeLabel)+'</span>'
       + '<span class="chev">&#9662;</span>'
-      + '</div>'
-      + '<div class="hist-body">'
+      + '</button>'
+      + '<div class="hist-body" id="history-details-'+i+'" role="region">'
       + '<div class="row"><span class="k">Start Equity</span><span class="v">'+fmtMoney(h.startEquity)+'</span></div>'
       + '<div class="row"><span class="k">End Equity</span><span class="v">'+fmtMoney(h.endEquity)+'</span></div>'
       + '<div class="row"><span class="k">Layers</span><span class="v">'+esc(h.layers)+'</span></div>'
@@ -804,14 +834,14 @@ function pageHistory(me){
 
 // ---------- Learning ----------
 function pageLearning(me){
-  var html = '<h1 class="page-title">Learning</h1><p class="page-sub">How Apex is adapting over time</p>';
+  var html = '<h1 class="page-title">Trade insights</h1><p class="page-sub">A summary of completed campaigns. This is for your review; Apex does not automatically rewrite its trading strategy based on these statistics.</p>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   var L = me.learning || {};
   if (!L.completedCampaigns){
-    html += '<div class="card"><div class="empty-state"><div class="ic">&#129504;</div><h4>NO COMPLETED CAMPAIGNS YET</h4><p>Apex needs completed campaigns before it has anything to learn from.</p></div></div>';
+    html += '<div class="card"><div class="empty-state"><div class="ic">&#129504;</div><h4>Insights will appear here</h4><p>Once Apex completes a campaign, you can review the results here.</p></div></div>';
     return html;
   }
-  html += '<div class="card"><div style="margin-bottom:12px">'+pill(L.authority==='BOUNDED_ADAPTIVE'?'Bounded Adaptive':'Observing', L.authority==='BOUNDED_ADAPTIVE'?'green':'blue')+'</div>'
+  html += '<div class="card"><h3>Campaign outcomes</h3>'
     + '<div class="grid-stats">'
     + statTile('Completed Campaigns', L.completedCampaigns)
     + statTile('Target Hits', L.targetHits, 'pos')
@@ -819,79 +849,130 @@ function pageLearning(me){
     + statTile('Genuine Failures', L.genuineFailures, L.genuineFailures?'neg':'')
     + '</div>'
     + '<div class="row"><span class="k">Positive Outcome Rate</span><span class="v">'+fmtPct(L.positiveOutcomeRate*100,1)+'</span></div>'
-    + '<div class="row"><span class="k">Entry Score Adjustment</span><span class="v">'+(L.entryScoreAdjustment>0?'+':'')+L.entryScoreAdjustment+'</span></div>'
-    + '<div class="row"><span class="k">Add Score Adjustment</span><span class="v">'+(L.addScoreAdjustment>0?'+':'')+L.addScoreAdjustment+'</span></div>'
     + '</div>';
 
   var fi = L.featureInsights||{};
   var names = Object.keys(fi);
   if (names.length){
-    html += '<div class="card"><h3>Recent Setup Insights</h3>';
+    html += '<details class="settings-details"><summary><span><span class="details-name">Setup breakdown</span><span class="details-desc" style="display:block">Optional deeper performance statistics.</span></span></summary><div class="details-content">';
     names.forEach(function(name){
       Object.keys(fi[name]).forEach(function(key){
         var b = fi[name][key];
         html += '<div class="row"><span class="k">'+esc(key)+'</span><span class="v">'+(b.positiveRate==null? 'Insufficient sample ('+b.campaigns+')' : fmtPct(b.positiveRate*100,0))+'</span></div>';
       });
     });
-    html += '</div>';
+    html += '</div></details>';
   }
   return html;
 }
 
 // ---------- Settings ----------
+function settingsTabs(){
+  var tabs=[
+    {id:'setup',label:'Setup & updates'},
+    {id:'trading',label:'Trading'},
+    {id:'protection',label:'Protection'},
+    {id:'astra',label:'Astra AI'},
+    {id:'more',label:'More'}
+  ];
+  return '<div class="settings-tabs" role="tablist" aria-label="Settings sections">'+tabs.map(function(tab){
+    var selected=STATE.settingsTab===tab.id;
+    return '<button type="button" class="settings-tab" data-settings-tab="'+tab.id+'" id="settings-tab-'+tab.id+'" role="tab" aria-controls="settings-panel-'+tab.id+'" aria-selected="'+selected+'" tabindex="'+(selected?'0':'-1')+'">'+tab.label+'</button>';
+  }).join('')+'</div>';
+}
+function startSettingsPanel(id,title,description){
+  return '<section class="settings-panel" data-settings-panel="'+id+'" id="settings-panel-'+id+'" role="tabpanel" aria-labelledby="settings-tab-'+id+'" '+(STATE.settingsTab===id?'':'hidden')+'>'
+    +'<div class="settings-lead"><h2>'+esc(title)+'</h2><p>'+esc(description)+'</p></div>';
+}
+function settingsDetailsStart(key,title,desc){
+  return '<details class="settings-details" data-section-key="'+key+'" '+(STATE.settingsExpanded[key]?'open':'')+'>'
+    +'<summary><span><span class="details-name">'+esc(title)+'</span><span class="details-desc" style="display:block">'+esc(desc)+'</span></span></summary><div class="details-content">';
+}
+function activateSettingsTab(tab){
+  if(!['setup','trading','protection','astra','more'].includes(tab))tab='setup';
+  STATE.settingsTab=tab;
+  Array.prototype.forEach.call(document.querySelectorAll('[data-settings-tab]'),function(button){
+    var selected=button.getAttribute('data-settings-tab')===tab;
+    button.setAttribute('aria-selected',String(selected));
+    button.tabIndex=selected?0:-1;
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-settings-panel]'),function(panel){
+    panel.hidden=panel.getAttribute('data-settings-panel')!==tab;
+  });
+}
+
 function pageSettings(me){
   var s = me.settings || {};
   var adv = s.advanced || {};
   var disabled = !me.settings;
   var lic = me.license || {};
-  var html = '<h1 class="page-title">Settings</h1><p class="page-sub">How Apex trades your account</p>';
-  if(window.AstraUI)html+=window.AstraUI.card(me,true);
+  var html = '<div class="settings-top"><div class="overview-eyebrow">Apex preferences</div><h1 class="page-title">Settings</h1>'
+    +'<p class="page-sub">Set up your bot, decide how it trades, and manage your protection in one place.</p></div>'
+    +settingsTabs();
+  html+=startSettingsPanel('setup','Setup & updates','Install Apex, check your connection, and find the latest bot version.');
   html+=releaseCard(me);
-  html += '<div class="card"><h3>License</h3>'
-    + '<div class="row"><span class="k">Current License</span><span class="v" style="font-size:12px">'+esc(lic.key||'—')+'</span></div>'
-    + '<div class="field" style="margin-top:14px"><label>Change License</label>'
-    + '<input id="f-change-license" class="license-input" placeholder="APEX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">'
-    + '<div class="hint">Switch this device to a different Apex license. You will immediately see that license\'s own data.</div></div>'
-    + '<div id="change-license-err" class="err-box" style="margin-top:0;margin-bottom:12px"></div>'
-    + '<button class="btn btn-ghost" id="change-license-btn">Change License</button>'
-    + '</div>';
-  html += armDisarmCard(me);
-  html += configSyncCard(me);
-  html += '<div class="card"><h3>Account</h3>'
-    + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
-    + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>NORMAL</option>'
+  html+='<div class="card"><h3>Connect to MetaTrader 5</h3>'
+    +'<p class="settings-section-intro">You only need the compiled .ex5 file from above. AstraBridge is already included.</p>'
+    +'<ol class="settings-steps">'
+    +'<li><span><strong>Install the bot.</strong> In MT5, open File → Open Data Folder → MQL5 → Experts, then copy the downloaded .ex5 into that folder and refresh Expert Advisors.</span></li>'
+    +'<li><span><strong>Allow connections.</strong> Under Tools → Options → Expert Advisors, allow WebRequest for <code>https://xaucloud.io</code> and <code>https://apex.xaucloud.io</code>.</span></li>'
+    +'<li><span><strong>Connect your license.</strong> Add Apex to your XAUUSD (or XAUUSDm) chart, enter your Apex license in Inputs and turn on Algo Trading.</span></li>'
+    +'<li><span><strong>Choose when Apex trades.</strong> Use the switch below. Watch for MT5 connected and settings applied before expecting a new entry.</span></li>'
+    +'</ol></div>';
+  html+=armDisarmCard(me);
+  html+='<div class="card"><h3>Your license</h3>'
+    +'<div class="row"><span class="k">License key</span><span class="v">'+esc(lic.key||'—')+'</span></div>'
+    +'<div class="field" style="margin-top:16px"><label for="f-change-license">Switch to another license</label>'
+    +'<input id="f-change-license" class="license-input" placeholder="Paste your other Apex license" autocomplete="off" autocapitalize="characters" spellcheck="false">'
+    +'<div class="hint">Only switch if you own another Apex license. This changes which account you are viewing.</div></div>'
+    +'<div id="change-license-err" class="err-box" role="alert"></div>'
+    +'<button class="btn btn-ghost" id="change-license-btn" style="max-width:235px">Switch license</button></div>';
+  html+=settingsDetailsStart('sync','Connection details','Only needed if Apex is not receiving your changes.');
+  html+=configSyncCard(me);
+  html+='</div></details></section>';
+  html+=startSettingsPanel('trading','Trading preferences','Choose your account mode and control how much Apex can allocate to new positions.');
+  html += '<div class="card"><h3>Trading mode &amp; profit target</h3>'
+    + '<div class="field"><label for="f-accountProfile">Trading mode</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
+    + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>Standard</option>'
     + (lic.unlimitedEntitled
-        ? '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>UNLIMITED</option>'
+        ? '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>Unlimited</option>'
         : '')
     + '</select><div class="hint">'+(lic.unlimitedEntitled
-        ? 'NORMAL closes the whole basket at a fixed target/ratchet and starts fresh. UNLIMITED is an entitlement on this license: each valid add uses 100% of CURRENT executable remaining capacity.'
-        : 'This license is NORMAL. UNLIMITED is an admin entitlement, not a customer toggle.')+'</div></div>'
-    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). The Profit Ratchet below is the intended exit — a hard TP would close the basket before the ratchet can activate. Set above 0 to activate a hard target instead.</div></div>'
-    + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save Settings</button></div>'
+        ? 'Standard follows your configured basket exits. Unlimited can use all remaining margin on each valid added position, increasing risk.'
+        : 'Your license uses Standard mode. Unlimited is only available on eligible licenses.')+'</div></div>'
+    + '<div class="field"><label for="f-normalTargetProfitPct">Fixed basket profit target (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Leave at 0 to disable the fixed target. A positive value closes a basket at the chosen profit level and can act before the profit ratchet.</div></div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save trading preferences</button></div>'
     + '</div>';
 
+  html+=settingsDetailsStart('margin','Position sizing','Adjust the size of each new trade as Apex confirms an opportunity.');
   html += '<div class="card"><h3>Margin Allocation (NORMAL)</h3>'
-    + '<div class="hint" style="margin-bottom:14px">Apex still requires its existing add conditions (a fresh continuation/confirmation signal) before opening L2 or L3+ — these layers do not all open immediately.</div>'
+    + '<div class="hint" style="margin-bottom:14px">These are sizing limits, not instructions to open multiple trades at once. Apex only adds a position after a valid new confirmation.</div>'
     + '<div class="field-grid">'
     + '<div class="field"><label>Confirmation / L1 Margin (%)</label><input type="number" step="any" id="f-normalL1MarginPct" value="'+esc(s.normalL1MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Small confirmation trade used to test whether the setup is behaving correctly.</div></div>'
     + '<div class="field"><label>Confirmed / L2 Margin (%)</label><input type="number" step="any" id="f-normalL2MarginPct" value="'+esc(s.normalL2MarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Larger confirmed add after Apex receives another valid continuation/add signal.</div></div>'
     + '<div class="field"><label>Full Exposure / L3+ Margin (%)</label><input type="number" step="any" id="f-normalL3PlusMarginPct" value="'+esc(s.normalL3PlusMarginPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Use up to the configured percentage of currently available margin after further valid confirmation. Every later add (L4, L5, ...) recalculates this against the margin available at that moment.</div></div>'
     + '<div class="field"><label>NORMAL Reference Leverage</label><select id="f-normalReferenceLeverage" '+(disabled?'disabled':'')+'>'
       + [0,100,200,500,1000,2000].map(function(v){return '<option value="'+v+'"'+(Number(s.normalReferenceLeverage||0)===v?' selected':'')+'>'+(v===0?'AUTO (use the broker\'s own margin model)':'1:'+v)+'</option>';}).join('')
-      + '</select><div class="hint">Economic leverage NORMAL sizes against when the broker/terminal reports an unusable margin model (for example 1:2000000000 with margin-per-lot 0). AUTO is only valid while the broker model is trustworthy; if it is not, Apex blocks new exposure with NORMAL_REFERENCE_LEVERAGE_REQUIRED rather than guessing. UNLIMITED accounts ignore this setting.</div></div>'
+      + '</select><div class="hint">Usually leave this on Auto. If your broker reports incorrect margin information, a reference leverage may be needed. Apex blocks new trades rather than guess. This does not apply to Unlimited licenses.</div></div>'
     + '</div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-margin" '+(disabled?'disabled':'')+'>Save Margin Allocation</button></div>'
     + '</div>';
 
+  html+='</div></details></section>';
+  html+=startSettingsPanel('protection','Protecting your account','Set how Apex limits exposure and protects profit. These controls affect real trading risk.');
+  html+='<div class="settings-note">Changing protection settings can increase risk. Start with the defaults unless you understand the effect on your account.</div>';
+  html+=settingsDetailsStart('stop','Stop loss & position limits','Choose the stop-loss distance and maximum number of positions Apex can open.');
   html += '<div class="card"><h3>Fixed Master SL &amp; Layer Cap</h3>'
     + '<div class="field-grid">'
     + '<div class="field"><label>Fixed Master SL — Gold Move</label><input type="number" step="any" id="f-normalFixedSLGoldMove" value="'+esc(s.normalFixedSLGoldMove)+'" '+(disabled?'disabled':'')+'><div class="hint">XAU price distance from the first (master) entry, not pips or account money. 0 = no broker stop-loss on the master position.</div></div>'
     + '<div class="field"><label>Max Layers</label><input type="number" id="f-maxLayers" value="'+esc(s.maxLayers)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = broker/margin limited (no software cap)</div></div>'
     + '</div>'
-    + '<div class="hint" style="margin-top:8px">UNLIMITED sizing: each valid add uses 100% of CURRENT executable remaining capacity. The old multiplier field is a no-op while baseMarginPct is capped at 100, so it is not shown.</div>'
+    + '<div class="hint" style="margin-top:8px">Unlimited accounts may use all remaining available margin on each valid additional entry. This increases risk significantly.</div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-sl" '+(disabled?'disabled':'')+'>Save</button></div>'
     + '</div>';
 
+  html+='</div></details>';
+  html+=settingsDetailsStart('breakeven','Move stop to entry','After enough campaign profit, Apex can tighten the first trade stop to its entry price.');
   html += '<div class="card"><h3>Master Break-Even Protection</h3>'
     + '<div class="toggle-row"><div><div class="lbl">Master Break-Even</div><div class="hint">When the whole Apex campaign reaches the trigger profit relative to campaign-start balance, the L1/master stop-loss is tightened to the original L1 entry price. One-way — it is never widened back out.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-masterBreakEvenEnabled" '+(s.masterBreakEvenEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
@@ -899,13 +980,17 @@ function pageSettings(me){
     + '<div class="form-row"><button class="btn btn-primary" id="save-be" '+(disabled?'disabled':'')+'>Save Break-Even</button></div>'
     + '</div>';
 
+  html+='</div></details>';
+  html+=settingsDetailsStart('recovery','Close after a recovery','If a trade moves badly against you and then returns to entry, Apex can close the basket.');
   html += '<div class="card"><h3>Recovery-To-Entry Protection</h3>'
-    + '<div class="toggle-row"><div><div class="lbl">Recovery-To-Entry Protection</div><div class="hint">If the L1/master trade moves 40% or more toward its original stop-loss, Apex marks the setup as damaged. If price later recovers to the original L1 entry, the whole basket closes so Apex can wait for a fresh setup.</div></div>'
+    + '<div class="toggle-row"><div><div class="lbl">Recovery-To-Entry Protection</div><div class="hint">If the first trade moves too far toward its original stop, Apex can close the full basket if price later returns to entry. The trigger is adjustable below.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-recoveryExitEnabled" '+(s.recoveryExitEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
     + '<div class="field" style="margin-top:14px"><label>Arm after adverse move reaches (% of Master SL)</label><input type="number" step="any" id="f-recoveryExitArmPctOfSL" value="'+esc(s.recoveryExitArmPctOfSL)+'" '+(disabled?'disabled':'')+'><div class="hint">% of the ORIGINAL fixed master SL distance, measured from the L1 entry price at campaign start.</div></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-recovery" '+(disabled?'disabled':'')+'>Save Recovery-To-Entry</button></div>'
     + '</div>';
 
+  html+='</div></details>';
+  html+=settingsDetailsStart('profit','Protect earned profit','Lock a rising amount of basket profit as the campaign grows.');
   html += '<div class="card"><h3>Profit Ratchet</h3>'
     + '<div class="toggle-row"><div><div class="lbl">Profit Ratchet</div><div class="hint">Protects basket profit in stages as it grows. The floor only ever moves up — it never decreases when profit retraces.</div></div>'
     + '<label class="switch"><input type="checkbox" id="f-profitRatchetEnabled" '+(s.profitRatchetEnabled?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
@@ -919,11 +1004,16 @@ function pageSettings(me){
     + '<div class="form-row"><button class="btn btn-primary" id="save-ratchet" '+(disabled?'disabled':'')+'>Save Profit Ratchet</button></div>'
     + '</div>';
 
+  html+='</div></details></section>';
+  html+=startSettingsPanel('astra','Astra AI','Optional AI-powered trade decisions. Apex still has its native trading strategy when Astra is off or unavailable.');
+  if(window.AstraUI)html+=window.AstraUI.card(me,true);
+  html+='</section>';
+  html+=startSettingsPanel('more','More preferences','Notifications and specialist strategy controls.');
   html += '<div id="apex-notifications-card"></div>';
 
-  html += '<div class="card"><div class="details-toggle" id="advanced-toggle"><h3 style="margin:0">Advanced Strategy</h3><span class="chev" id="advanced-chev">&#9662;</span></div>'
+  html += '<div class="card"><button class="details-toggle" type="button" id="advanced-toggle" aria-expanded="false" aria-controls="advanced-body" style="width:100%;background:none;border:0;text-align:left;color:inherit"><h3 style="margin:0">Advanced strategy controls</h3><span class="chev" id="advanced-chev">&#9662;</span></button>'
     + '<div id="advanced-body">'
-    + '<div class="warn-banner">Advanced settings affect Apex setup recognition. Only change them if you understand the strategy.</div>'
+    + '<div class="warn-banner">These controls change which trading setups Apex will consider. Keep the defaults unless you have tested changes on a demo account.</div>'
     + '<div class="field-grid">'
     + advField('Entry Score', 'entryScore', adv.entryScore, disabled)
     + advField('Add Score', 'addScore', adv.addScore, disabled)
@@ -938,13 +1028,41 @@ function pageSettings(me){
     + '<div class="toggle-row"><div class="lbl">Require M5 Context</div><label class="switch"><input type="checkbox" id="f-requireM5Context" '+(adv.requireM5Context?'checked':'')+' '+(disabled?'disabled':'')+'><span class="track"></span><span class="knob"></span></label></div>'
     + '<div class="form-row"><button class="btn btn-primary" id="save-advanced" '+(disabled?'disabled':'')+'>Save Advanced Settings</button></div>'
     + '</div></div>';
+  html+='</section>';
   return html;
 }
 function advField(label, id, value, disabled){
   return '<div class="field"><label>'+esc(label)+'</label><input type="number" step="any" id="f-'+id+'" value="'+esc(value)+'" '+(disabled?'disabled':'')+'></div>';
 }
 function wireSettings(me){
-  wireDashboardControls();
+  // Bind readable field labels to their inputs without changing server config IDs.
+  Array.prototype.forEach.call(document.querySelectorAll('.settings-panel .field'),function(field){
+    var label=field.querySelector('label:not([for])');
+    var input=field.querySelector('input[id],select[id]');
+    if(label&&input)label.setAttribute('for',input.id);
+  });
+  var advancedBody=document.getElementById('advanced-body');
+  var advancedButton=document.getElementById('advanced-toggle');
+  if(STATE.settingsExpanded.advanced && advancedBody && advancedButton){
+    advancedBody.classList.add('open');
+    advancedButton.setAttribute('aria-expanded','true');
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-settings-tab]'),function(button){
+    button.addEventListener('click',function(){activateSettingsTab(button.getAttribute('data-settings-tab'));});
+    button.addEventListener('keydown',function(event){
+      if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-settings-tab]'));
+      var index=tabs.indexOf(button);
+      var next=event.key==='Home'?0:event.key==='End'?tabs.length-1:
+        event.key==='ArrowRight'?(index+1)%tabs.length:(index+tabs.length-1)%tabs.length;
+      activateSettingsTab(tabs[next].getAttribute('data-settings-tab'));
+      tabs[next].focus();
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('details[data-section-key]'),function(section){
+    section.addEventListener('toggle',function(){STATE.settingsExpanded[section.getAttribute('data-section-key')]=section.open;});
+  });
   var changeBtn = document.getElementById('change-license-btn');
   if (changeBtn) changeBtn.addEventListener('click', function(){
     var key = document.getElementById('f-change-license').value.trim().toUpperCase();
@@ -953,7 +1071,7 @@ function wireSettings(me){
     if (!key){ errBox.textContent='Enter an Apex license key.'; errBox.style.display='block'; return; }
     changeBtn.disabled = true; changeBtn.textContent='Checking...';
     api('/api/auth/login', {method:'POST', body:{license:key}}).then(function(){
-      changeBtn.disabled=false; changeBtn.textContent='Change License';
+      changeBtn.disabled=false; changeBtn.textContent='Switch license';
       toast('License changed');
       return api('/api/auth/me');
     }).then(function(newMe){
@@ -961,14 +1079,16 @@ function wireSettings(me){
       renderStatusPills();
       if (STATE.page==='settings') renderPage();
     }).catch(function(e){
-      changeBtn.disabled=false; changeBtn.textContent='Change License';
+      changeBtn.disabled=false; changeBtn.textContent='Switch license';
       errBox.textContent = licenseErrorMessage(e.message);
       errBox.style.display='block';
     });
   });
   var advToggle = document.getElementById('advanced-toggle');
   if (advToggle) advToggle.addEventListener('click', function(){
-    document.getElementById('advanced-body').classList.toggle('open');
+    var opened=document.getElementById('advanced-body').classList.toggle('open');
+    advToggle.setAttribute('aria-expanded',String(opened));
+    STATE.settingsExpanded.advanced=opened;
   });
   var save1 = document.getElementById('save-settings');
   if (save1) save1.addEventListener('click', function(){
@@ -976,7 +1096,7 @@ function wireSettings(me){
       accountProfile: document.getElementById('f-accountProfile').value,
       normalTargetProfitPct: Number(document.getElementById('f-normalTargetProfitPct').value)
     };
-    saveConfig(payload, 'save-settings', 'Save Settings');
+    saveConfig(payload, 'save-settings', 'Save trading preferences');
   });
   var saveMargin = document.getElementById('save-margin');
   if (saveMargin) saveMargin.addEventListener('click', function(){
@@ -1051,10 +1171,10 @@ function saveConfig(payload, btnId, btnLabel){
   api('/api/session/config', {method:'POST', body:payload}).then(function(r){
     var d = (r && r.delivery) || '';
     if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved locally — bridge not configured; EA will not see this yet', true);
-    else if (d==='QUEUED_FOR_BRIDGE') toast('Saved — queued for bridge/EA (revision '+(r.desiredRevision||r.commandRevision||'')+')');
-    else if (d==='BRIDGE_FAILED') toast('Saved locally — bridge delivery failed', true);
-    else if (d==='EA_APPLIED' || r.inSync) toast('Saved — EA applied revision '+(r.appliedRevision||r.desiredRevision||''));
-    else toast('Saved — waiting for EA to apply revision '+(r.desiredRevision||r.commandRevision||''));
+    else if (d==='QUEUED_FOR_BRIDGE') toast('Saved. The change will take effect when MT5 receives it.');
+    else if (d==='BRIDGE_FAILED') toast('Saved, but MT5 has not received it. Check your connection.', true);
+    else if (d==='EA_APPLIED' || r.inSync) toast('Settings saved and applied in MT5');
+    else toast('Settings saved. Waiting for MT5 to confirm.');
     return api('/api/auth/me');
   }).then(function(me){
     STATE.me=me;
@@ -1072,33 +1192,21 @@ function saveConfig(payload, btnId, btnLabel){
 
 // ---------- Account ----------
 function pageAccount(me){
-  var lic = me.license || {};
-  var html = '<h1 class="page-title">Account</h1><p class="page-sub">Your Apex license</p>';
-  html += '<div class="card">'
-    + '<div class="row"><span class="k">License Key</span><span class="v" style="font-size:12.5px">'+esc(lic.key)+'</span></div>'
-    + '<div class="row"><span class="k">Status</span><span class="v">'+esc((lic.status||'').replace(/_/g,' '))+'</span></div>'
-    + '<div class="row"><span class="k">Bound MT5 Account</span><span class="v">'+esc(lic.account||'Not yet connected')+'</span></div>'
-    + '<div class="row"><span class="k">Account Profile</span><span class="v">'+esc(lic.accountProfile||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Expires</span><span class="v">'+(lic.expiresAt? esc(fmtDate(lic.expiresAt)) : 'No expiry')+'</span></div>'
-    + '</div>';
-  html += releaseCard(me);
-  html += '<div class="card"><h3>Set up XauCloud-Apex in MT5</h3>'
-    + '<ol style="margin:0;padding-left:20px;line-height:1.9">'
-    + '<li>Download XauCloud-Apex and add it to your MT5 Experts.</li>'
-    + '<li>Attach it to a XAUUSD/XAUUSDm chart.</li>'
-    + '<li>Enter your Apex License (shown above) in the EA\'s inputs.</li>'
-    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://xaucloud.io</code> and <code>https://apex.xaucloud.io</code> (Astra).</li>'
-    + '<li>Enable Algo Trading (the button in the MT5 toolbar).</li>'
-    + '<li>Arm Apex from the Dashboard or Settings page.</li>'
-    + '<li>Optional Astra: in Settings, enable ASTRA BRAIN, create an OpenAI API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a>, add API billing, save the key and a supported model, then Test Connection. Never enter your API key in MT5 or email it.</li>'
-    + '</ol>'
-    + '<div class="hint" style="margin-top:10px">That\'s it — no separate token or admin credential is ever needed in MT5. Your license alone authorizes the connection.</div>'
-    + '</div>';
-  html += '<div class="card"><button class="btn btn-danger" id="logout-btn2">Sign Out</button></div>';
-  setTimeout(function(){
-    var b = document.getElementById('logout-btn2');
-    if (b) b.addEventListener('click', logout);
-  },0);
+  var lic=me.license||{},mt5=me.mt5||{},status=lic.status||'LICENSE_NOT_FOUND';
+  var html='<div class="settings-top"><div class="overview-eyebrow">Your access</div><h1 class="page-title">Your account</h1>'
+    +'<p class="page-sub">License details and the MetaTrader account connected to Apex.</p></div>'
+    +'<div class="card"><div class="release-head"><h3 style="margin:0">Apex license</h3>'
+    +pill(status==='ACTIVE'?'Active':status==='LICENSE_EXPIRED'?'Expired':'Unavailable',status==='ACTIVE'?'green':'amber')+'</div>'
+    +'<div class="row"><span class="k">License key</span><span class="v" style="font-size:12.5px;overflow-wrap:anywhere">'+esc(lic.key||'—')+'</span></div>'
+    +'<div class="row"><span class="k">MT5 account</span><span class="v">'+esc(lic.account||'Not yet connected')+'</span></div>'
+    +'<div class="row"><span class="k">Account type</span><span class="v">'+esc(lic.accountProfile==='NORMAL'?'Standard':lic.accountProfile==='UNLIMITED'?'Unlimited':lic.accountProfile||'Standard')+'</span></div>'
+    +'<div class="row"><span class="k">Renewal</span><span class="v">'+(lic.expiresAt?esc(fmtDate(lic.expiresAt)):'No expiry date')+'</span></div>'
+    +'<div class="row"><span class="k">Connection</span><span class="v">'+esc(mt5.status==='CONNECTED'?'Connected':mt5.status==='STALE'?'Delayed':'Not connected')+'</span></div>'
+    +'</div>'
+    +'<div class="card"><h3>Need to install or update Apex?</h3>'
+    +'<p class="settings-section-intro">The download and full installation instructions are under Setup & updates in Settings.</p>'
+    +'<button class="btn btn-primary" style="width:auto" id="account-setup-link">Open setup & updates</button></div>'
+    +'<div class="card"><button class="btn btn-danger" style="width:auto" id="logout-btn2">Sign out</button></div>';
   return html;
 }
 

@@ -8,6 +8,10 @@ on:
       - 'server.mjs'
       - 'release-store.mjs'
       - 'public/index.html'
+      - 'public/astra-ui.js'
+      - 'public/notifications-ui.js'
+      - 'public/premium.css'
+      - 'tests/premium-ui.test.mjs'
       - 'tests/apex-release-delivery.test.mjs'
       - '.github/workflows/apex-release-ci.yml'
   workflow_dispatch:

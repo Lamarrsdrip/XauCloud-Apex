@@ -472,6 +472,7 @@ function renderPage(){
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
+  if (STATE.page==='dashboard')wireOverviewControls();
   if(STATE.page==='settings'&&window.AstraUI)window.AstraUI.bind(async function(){STATE.me=await api('/api/auth/me');renderPage();});
 }
 
@@ -568,7 +569,7 @@ function dataUnavailableCard(me){
     }[ls] || 'License is not active.';
     return '<div class="card"><div class="empty-state"><div class="ic">&#128274;</div><h4>'+esc(ls.replace(/_/g,' '))+'</h4><p>'+esc(msg)+'</p></div></div>';
   }
-  return '<div class="card"><div class="empty-state"><div class="ic">&#128225;</div><h4>MT5 DISCONNECTED</h4><p>Waiting for the Apex EA to contact the backend for the first time. Attach the EA in MT5 with your license key to begin.</p></div></div>';
+  return '<div class="card"><div class="empty-state"><div class="ic">&#128225;</div><h4>Connect MetaTrader 5</h4><p>Apex has not received account information yet. Install the bot and connect it using your license to see your balance and trades.</p></div></div>';
 }
 
 function statTile(label, value, cls){
@@ -779,6 +780,20 @@ function updateRatchetPreview(){
   var step = document.getElementById('f-ratchetStepPct').value;
   var lockStep = document.getElementById('f-ratchetLockStepPct').value;
   box.innerHTML = ratchetLadderHtml(trigger, lock, step, lockStep, enabled);
+}
+
+function wireOverviewControls(){
+  var actions=[
+    ['overview-open-setup',function(){openSettings('setup');}],
+    ['overview-view-settings',function(){openSettings('trading');}],
+    ['overview-view-account',function(){location.hash='#account';}],
+    ['overview-view-trades',function(){location.hash='#campaigns';}],
+    ['overview-view-history',function(){location.hash='#history';}]
+  ];
+  actions.forEach(function(action){
+    var button=document.getElementById(action[0]);
+    if(button)button.addEventListener('click',action[1]);
+  });
 }
 
 function wireDashboardControls(){
@@ -1042,7 +1057,22 @@ function advField(label, id, value, disabled){
   return '<div class="field"><label>'+esc(label)+'</label><input type="number" step="any" id="f-'+id+'" value="'+esc(value)+'" '+(disabled?'disabled':'')+'></div>';
 }
 function wireSettings(me){
-  wireDashboardControls();
+  Array.prototype.forEach.call(document.querySelectorAll('[data-settings-tab]'),function(button){
+    button.addEventListener('click',function(){activateSettingsTab(button.getAttribute('data-settings-tab'));});
+    button.addEventListener('keydown',function(event){
+      if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-settings-tab]'));
+      var index=tabs.indexOf(button);
+      var next=event.key==='Home'?0:event.key==='End'?tabs.length-1:
+        event.key==='ArrowRight'?(index+1)%tabs.length:(index+tabs.length-1)%tabs.length;
+      activateSettingsTab(tabs[next].getAttribute('data-settings-tab'));
+      tabs[next].focus();
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('details[data-section-key]'),function(section){
+    section.addEventListener('toggle',function(){STATE.settingsExpanded[section.getAttribute('data-section-key')]=section.open;});
+  });
   var changeBtn = document.getElementById('change-license-btn');
   if (changeBtn) changeBtn.addEventListener('click', function(){
     var key = document.getElementById('f-change-license').value.trim().toUpperCase();
@@ -1066,7 +1096,8 @@ function wireSettings(me){
   });
   var advToggle = document.getElementById('advanced-toggle');
   if (advToggle) advToggle.addEventListener('click', function(){
-    document.getElementById('advanced-body').classList.toggle('open');
+    var opened=document.getElementById('advanced-body').classList.toggle('open');
+    advToggle.setAttribute('aria-expanded',String(opened));
   });
   var save1 = document.getElementById('save-settings');
   if (save1) save1.addEventListener('click', function(){
@@ -1179,10 +1210,12 @@ function pageAccount(me){
     + '<div class="row"><span class="k">Account Profile</span><span class="v">'+esc(lic.accountProfile||'—')+'</span></div>'
     + '<div class="row"><span class="k">Expires</span><span class="v">'+(lic.expiresAt? esc(fmtDate(lic.expiresAt)) : 'No expiry')+'</span></div>'
     + '</div>';
-  html += releaseCard(me);
+  html += '<div class="card"><h3>Installing and updating Apex</h3>'
+    +'<p class="settings-section-intro">Your downloads and the full setup instructions are in Settings, under Setup & updates.</p>'
+    +'<button class="btn btn-ghost" id="account-setup-link" style="width:auto">Open setup & updates →</button></div>';
   html += '<div class="card"><h3>Set up XauCloud-Apex in MT5</h3>'
     + '<ol style="margin:0;padding-left:20px;line-height:1.9">'
-    + '<li>Download XauCloud-Apex and add it to your MT5 Experts.</li>'
+    + '<li>Go to Settings → Setup & updates to download the current .ex5, then add it to your MT5 Experts.</li>'
     + '<li>Attach it to a XAUUSD/XAUUSDm chart.</li>'
     + '<li>Enter your Apex License (shown above) in the EA\'s inputs.</li>'
     + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://xaucloud.io</code> and <code>https://apex.xaucloud.io</code> (Astra).</li>'
@@ -1196,6 +1229,8 @@ function pageAccount(me){
   setTimeout(function(){
     var b = document.getElementById('logout-btn2');
     if (b) b.addEventListener('click', logout);
+    var setup=document.getElementById('account-setup-link');
+    if(setup)setup.addEventListener('click',function(){openSettings('setup');});
   },0);
   return html;
 }

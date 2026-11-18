@@ -1035,6 +1035,18 @@ function advField(label, id, value, disabled){
   return '<div class="field"><label>'+esc(label)+'</label><input type="number" step="any" id="f-'+id+'" value="'+esc(value)+'" '+(disabled?'disabled':'')+'></div>';
 }
 function wireSettings(me){
+  // Bind readable field labels to their inputs without changing server config IDs.
+  Array.prototype.forEach.call(document.querySelectorAll('.settings-panel .field'),function(field){
+    var label=field.querySelector('label:not([for])');
+    var input=field.querySelector('input[id],select[id]');
+    if(label&&input)label.setAttribute('for',input.id);
+  });
+  var advancedBody=document.getElementById('advanced-body');
+  var advancedButton=document.getElementById('advanced-toggle');
+  if(STATE.settingsExpanded.advanced && advancedBody && advancedButton){
+    advancedBody.classList.add('open');
+    advancedButton.setAttribute('aria-expanded','true');
+  }
   Array.prototype.forEach.call(document.querySelectorAll('[data-settings-tab]'),function(button){
     button.addEventListener('click',function(){activateSettingsTab(button.getAttribute('data-settings-tab'));});
     button.addEventListener('keydown',function(event){
@@ -1076,6 +1088,7 @@ function wireSettings(me){
   if (advToggle) advToggle.addEventListener('click', function(){
     var opened=document.getElementById('advanced-body').classList.toggle('open');
     advToggle.setAttribute('aria-expanded',String(opened));
+    STATE.settingsExpanded.advanced=opened;
   });
   var save1 = document.getElementById('save-settings');
   if (save1) save1.addEventListener('click', function(){

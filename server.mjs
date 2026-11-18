@@ -1505,7 +1505,7 @@ const server=http.createServer(async(req,res)=>{
         console.info('APEX_COMPILED_RELEASE_PUBLISHED',published.version,published.sha256);
         return json(res,200,{ok:true,release:published});
       }
-      if(!throttle('apex-install-email',ip,8,60*60*1000))
+      if(!throttle('apex-install-email',ip,60,60*60*1000))
         return json(res,429,{error:'too_many_email_requests'});
       const b=await body(req);
       const recipient=String(b.recipient||'').trim().toLowerCase();

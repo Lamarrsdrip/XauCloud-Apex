@@ -1,6 +1,8 @@
 name: Apex compiled release validation
 
 on:
+  push:
+    branches: [main]
   pull_request:
     paths:
       - 'server.mjs'

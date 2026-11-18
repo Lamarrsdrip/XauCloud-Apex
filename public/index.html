@@ -473,6 +473,7 @@ function renderPage(){
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
   if (STATE.page==='dashboard')wireOverviewControls();
+  if (STATE.page==='history')wireHistoryControls();
   if (STATE.page==='account'){
     var setup=document.getElementById('account-setup-link');
     if(setup)setup.addEventListener('click',function(){openSettings('setup');});
@@ -749,6 +750,18 @@ function updateRatchetPreview(){
   box.innerHTML = ratchetLadderHtml(trigger, lock, step, lockStep, enabled);
 }
 
+function wireHistoryControls(){
+  var insight=document.getElementById('history-insights-link');
+  if(insight)insight.addEventListener('click',function(){location.hash='#learning';});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-history-toggle]'),function(button){
+    button.addEventListener('click',function(){
+      var item=button.closest('.hist-item');
+      var expanded=item.classList.toggle('open');
+      button.setAttribute('aria-expanded',String(expanded));
+    });
+  });
+}
+
 function wireOverviewControls(){
   var actions=[
     ['overview-open-setup',function(){openSettings('setup');}],
@@ -782,7 +795,7 @@ function wireDashboardControls(){
 
 // ---------- Campaigns ----------
 function pageCampaigns(me){
-  var html = '<h1 class="page-title">Campaigns</h1><p class="page-sub">What Apex is doing right now</p>';
+  var html = '<h1 class="page-title">Trades</h1><p class="page-sub">Your current gold trading positions and any setup Apex is checking.</p>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   if (me.campaign) html += campaignProgressCard(me.campaign, (me.account||{}).currency) + campaignSummaryCard(me.campaign, (me.account||{}).currency, true);
   else html += watchingCard(me);
@@ -791,24 +804,25 @@ function pageCampaigns(me){
 
 // ---------- History ----------
 function pageHistory(me){
-  var html = '<h1 class="page-title">History</h1><p class="page-sub">Completed campaigns</p>';
+  var html = '<h1 class="page-title">Trade history</h1><p class="page-sub">Review previous Apex campaigns and their outcomes.</p>'
+    +'<div style="display:flex;justify-content:flex-end;margin-bottom:16px"><button class="text-link" type="button" id="history-insights-link">View trade insights →</button></div>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   var hist = me.history||[];
   if (!hist.length){
-    html += '<div class="card"><div class="empty-state"><div class="ic">&#128203;</div><h4>NO COMPLETED CAMPAIGNS YET</h4><p>Completed campaigns will appear here once Apex closes its first basket.</p></div></div>';
+    html += '<div class="card"><div class="empty-state"><div class="ic">&#128203;</div><h4>No completed trades yet</h4><p>Once a campaign closes, its result and details will appear here.</p></div></div>';
     return html;
   }
   hist.forEach(function(h, i){
     var badgeCls = h.outcome==='TARGET_HIT'?'badge-target':h.outcome==='PROFIT_FLOOR_HIT'?'badge-protected':'badge-stopout';
     var dirBadge = h.direction==='BUY'?'badge-buy':'badge-sell';
     html += '<div class="hist-item" id="hist-'+i+'">'
-      + '<div class="hist-head" onclick="document.getElementById(\'hist-'+i+'\').classList.toggle(\'open\')">'
+      + '<button type="button" class="hist-head" data-history-toggle="'+i+'" aria-expanded="false" aria-controls="history-details-'+i+'">'
       + '<span class="badge '+dirBadge+'">'+h.direction+'</span>'
       + '<div class="grow"><div class="pct" style="color:'+(h.profitPct>=0?'var(--green)':'var(--red)')+'">'+fmtPct(h.profitPct)+'</div><div class="date">'+esc(fmtDate(h.endedAt))+'</div></div>'
       + '<span class="badge '+badgeCls+'">'+esc(h.outcomeLabel)+'</span>'
       + '<span class="chev">&#9662;</span>'
-      + '</div>'
-      + '<div class="hist-body">'
+      + '</button>'
+      + '<div class="hist-body" id="history-details-'+i+'" role="region">'
       + '<div class="row"><span class="k">Start Equity</span><span class="v">'+fmtMoney(h.startEquity)+'</span></div>'
       + '<div class="row"><span class="k">End Equity</span><span class="v">'+fmtMoney(h.endEquity)+'</span></div>'
       + '<div class="row"><span class="k">Layers</span><span class="v">'+esc(h.layers)+'</span></div>'
@@ -821,14 +835,14 @@ function pageHistory(me){
 
 // ---------- Learning ----------
 function pageLearning(me){
-  var html = '<h1 class="page-title">Learning</h1><p class="page-sub">How Apex is adapting over time</p>';
+  var html = '<h1 class="page-title">Trade insights</h1><p class="page-sub">A summary of completed campaigns. This is for your review; Apex does not automatically rewrite its trading strategy based on these statistics.</p>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   var L = me.learning || {};
   if (!L.completedCampaigns){
-    html += '<div class="card"><div class="empty-state"><div class="ic">&#129504;</div><h4>NO COMPLETED CAMPAIGNS YET</h4><p>Apex needs completed campaigns before it has anything to learn from.</p></div></div>';
+    html += '<div class="card"><div class="empty-state"><div class="ic">&#129504;</div><h4>Insights will appear here</h4><p>Once Apex completes a campaign, you can review the results here.</p></div></div>';
     return html;
   }
-  html += '<div class="card"><div style="margin-bottom:12px">'+pill(L.authority==='BOUNDED_ADAPTIVE'?'Bounded Adaptive':'Observing', L.authority==='BOUNDED_ADAPTIVE'?'green':'blue')+'</div>'
+  html += '<div class="card"><h3>Campaign outcomes</h3>'
     + '<div class="grid-stats">'
     + statTile('Completed Campaigns', L.completedCampaigns)
     + statTile('Target Hits', L.targetHits, 'pos')
@@ -836,21 +850,19 @@ function pageLearning(me){
     + statTile('Genuine Failures', L.genuineFailures, L.genuineFailures?'neg':'')
     + '</div>'
     + '<div class="row"><span class="k">Positive Outcome Rate</span><span class="v">'+fmtPct(L.positiveOutcomeRate*100,1)+'</span></div>'
-    + '<div class="row"><span class="k">Entry Score Adjustment</span><span class="v">'+(L.entryScoreAdjustment>0?'+':'')+L.entryScoreAdjustment+'</span></div>'
-    + '<div class="row"><span class="k">Add Score Adjustment</span><span class="v">'+(L.addScoreAdjustment>0?'+':'')+L.addScoreAdjustment+'</span></div>'
     + '</div>';
 
   var fi = L.featureInsights||{};
   var names = Object.keys(fi);
   if (names.length){
-    html += '<div class="card"><h3>Recent Setup Insights</h3>';
+    html += '<details class="settings-details"><summary><span><span class="details-name">Setup breakdown</span><span class="details-desc" style="display:block">Optional deeper performance statistics.</span></span></summary><div class="details-content">';
     names.forEach(function(name){
       Object.keys(fi[name]).forEach(function(key){
         var b = fi[name][key];
         html += '<div class="row"><span class="k">'+esc(key)+'</span><span class="v">'+(b.positiveRate==null? 'Insufficient sample ('+b.campaigns+')' : fmtPct(b.positiveRate*100,0))+'</span></div>';
       });
     });
-    html += '</div>';
+    html += '</div></details>';
   }
   return html;
 }

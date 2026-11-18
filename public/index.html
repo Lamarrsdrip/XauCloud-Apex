@@ -528,7 +528,7 @@ function pageDashboard(me){
     +'</section>'
     +'<section class="summary-card" aria-label="Account details"><div>'
     +'<div class="summary-card-title">Account at a glance</div><div class="summary-card-sub">The essentials, without the trading jargon.</div>'
-    +'<div class="summary-metric"><span>Account type</span><strong>'+esc(me.accountProfile||'Normal')+'</strong></div>'
+    +'<div class="summary-metric"><span>Account type</span><strong>'+esc(me.accountProfile==='NORMAL'?'Standard':me.accountProfile==='UNLIMITED'?'Unlimited':me.accountProfile||'Standard')+'</strong></div>'
     +'<div class="summary-metric"><span>Available margin</span><strong>'+esc(fmtMoney(acc.freeMargin,acc.currency))+'</strong></div>'
     +'<div class="summary-metric"><span>Open trades</span><strong>'+(camp&&camp.layers!=null?esc(camp.layers):camp?'—':'0')+'</strong></div>'
     +'</div><button type="button" id="overview-view-account" class="text-link summary-action">View account details →</button></section></div>';
@@ -782,10 +782,10 @@ function wireDashboardControls(){
     t.disabled = true;
     api('/api/session/config', {method:'POST', body:{armed:val}}).then(function(r){
       var d = (r && r.delivery) || '';
-      if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved locally — bridge not configured; EA will not see this yet', true);
-      else if (d==='QUEUED_FOR_BRIDGE') toast(val? 'Arm queued — waiting for bridge/EA' : 'Disarm queued — waiting for bridge/EA');
-      else if (d==='EA_APPLIED' || r.inSync) toast(val? ('Apex armed — EA applied revision '+r.desiredRevision) : ('Apex disarmed — EA applied revision '+r.desiredRevision));
-      else toast(val? 'Arm queued — waiting for EA' : 'Disarm queued — waiting for EA');
+      if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved, but your MT5 connection is not ready. Check connection details in Settings.', true);
+      else if (d==='QUEUED_FOR_BRIDGE') toast('Your change is saved. Waiting for MT5 to confirm.');
+      else if (d==='EA_APPLIED' || r.inSync) toast(val?'Apex is now allowed to open new trades':'New trades are paused');
+      else toast('Your change is saved. Waiting for MT5 to confirm.');
       return api('/api/auth/me');
     }).then(function(me){ STATE.me=me; renderStatusPills(); if (STATE.page==='dashboard'||STATE.page==='settings') renderPage(); t.disabled=false; })
     .catch(function(){ toast('Could not update — try again', true); t.checked=!val; t.disabled=false; });
@@ -931,17 +931,17 @@ function pageSettings(me){
   html+=configSyncCard(me);
   html+='</div></details></section>';
   html+=startSettingsPanel('trading','Trading preferences','Choose your account mode and control how much Apex can allocate to new positions.');
-  html += '<div class="card"><h3>Account</h3>'
-    + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
-    + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>NORMAL</option>'
+  html += '<div class="card"><h3>Trading mode &amp; profit target</h3>'
+    + '<div class="field"><label for="f-accountProfile">Trading mode</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
+    + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>Standard</option>'
     + (lic.unlimitedEntitled
-        ? '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>UNLIMITED</option>'
+        ? '<option value="UNLIMITED"'+(s.accountProfile==='UNLIMITED'?' selected':'')+'>Unlimited</option>'
         : '')
     + '</select><div class="hint">'+(lic.unlimitedEntitled
-        ? 'NORMAL closes the whole basket at a fixed target/ratchet and starts fresh. UNLIMITED is an entitlement on this license: each valid add uses 100% of CURRENT executable remaining capacity.'
-        : 'This license is NORMAL. UNLIMITED is an admin entitlement, not a customer toggle.')+'</div></div>'
-    + '<div class="field"><label>Basket Take Profit (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">0 = disabled (default). A fixed target may close the basket before profit protection has time to activate. Set above 0 to activate a hard target instead.</div></div>'
-    + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save Settings</button></div>'
+        ? 'Standard follows your configured basket exits. Unlimited can use all remaining margin on each valid added position, increasing risk.'
+        : 'Your license uses Standard mode. Unlimited is only available on eligible licenses.')+'</div></div>'
+    + '<div class="field"><label for="f-normalTargetProfitPct">Fixed basket profit target (%)</label><input type="number" id="f-normalTargetProfitPct" value="'+esc(s.normalTargetProfitPct)+'" '+(disabled?'disabled':'')+'><div class="hint">Leave at 0 to disable the fixed target. A positive value closes a basket at the chosen profit level and can act before the profit ratchet.</div></div>'
+    + '<div class="form-row"><button class="btn btn-primary" id="save-settings" '+(disabled?'disabled':'')+'>Save trading preferences</button></div>'
     + '</div>';
 
   html+=settingsDetailsStart('margin','Position sizing','Adjust the size of each new trade as Apex confirms an opportunity.');
@@ -1059,7 +1059,7 @@ function wireSettings(me){
     if (!key){ errBox.textContent='Enter an Apex license key.'; errBox.style.display='block'; return; }
     changeBtn.disabled = true; changeBtn.textContent='Checking...';
     api('/api/auth/login', {method:'POST', body:{license:key}}).then(function(){
-      changeBtn.disabled=false; changeBtn.textContent='Change License';
+      changeBtn.disabled=false; changeBtn.textContent='Switch license';
       toast('License changed');
       return api('/api/auth/me');
     }).then(function(newMe){
@@ -1067,7 +1067,7 @@ function wireSettings(me){
       renderStatusPills();
       if (STATE.page==='settings') renderPage();
     }).catch(function(e){
-      changeBtn.disabled=false; changeBtn.textContent='Change License';
+      changeBtn.disabled=false; changeBtn.textContent='Switch license';
       errBox.textContent = licenseErrorMessage(e.message);
       errBox.style.display='block';
     });
@@ -1083,7 +1083,7 @@ function wireSettings(me){
       accountProfile: document.getElementById('f-accountProfile').value,
       normalTargetProfitPct: Number(document.getElementById('f-normalTargetProfitPct').value)
     };
-    saveConfig(payload, 'save-settings', 'Save Settings');
+    saveConfig(payload, 'save-settings', 'Save trading preferences');
   });
   var saveMargin = document.getElementById('save-margin');
   if (saveMargin) saveMargin.addEventListener('click', function(){
@@ -1158,10 +1158,10 @@ function saveConfig(payload, btnId, btnLabel){
   api('/api/session/config', {method:'POST', body:payload}).then(function(r){
     var d = (r && r.delivery) || '';
     if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved locally — bridge not configured; EA will not see this yet', true);
-    else if (d==='QUEUED_FOR_BRIDGE') toast('Saved — queued for bridge/EA (revision '+(r.desiredRevision||r.commandRevision||'')+')');
-    else if (d==='BRIDGE_FAILED') toast('Saved locally — bridge delivery failed', true);
-    else if (d==='EA_APPLIED' || r.inSync) toast('Saved — EA applied revision '+(r.appliedRevision||r.desiredRevision||''));
-    else toast('Saved — waiting for EA to apply revision '+(r.desiredRevision||r.commandRevision||''));
+    else if (d==='QUEUED_FOR_BRIDGE') toast('Saved. The change will take effect when MT5 receives it.');
+    else if (d==='BRIDGE_FAILED') toast('Saved, but MT5 has not received it. Check your connection.', true);
+    else if (d==='EA_APPLIED' || r.inSync) toast('Settings saved and applied in MT5');
+    else toast('Settings saved. Waiting for MT5 to confirm.');
     return api('/api/auth/me');
   }).then(function(me){
     STATE.me=me;
@@ -1186,7 +1186,7 @@ function pageAccount(me){
     +pill(status==='ACTIVE'?'Active':status==='LICENSE_EXPIRED'?'Expired':'Unavailable',status==='ACTIVE'?'green':'amber')+'</div>'
     +'<div class="row"><span class="k">License key</span><span class="v" style="font-size:12.5px;overflow-wrap:anywhere">'+esc(lic.key||'—')+'</span></div>'
     +'<div class="row"><span class="k">MT5 account</span><span class="v">'+esc(lic.account||'Not yet connected')+'</span></div>'
-    +'<div class="row"><span class="k">Account type</span><span class="v">'+esc(lic.accountProfile||'Normal')+'</span></div>'
+    +'<div class="row"><span class="k">Account type</span><span class="v">'+esc(lic.accountProfile==='NORMAL'?'Standard':lic.accountProfile==='UNLIMITED'?'Unlimited':lic.accountProfile||'Standard')+'</span></div>'
     +'<div class="row"><span class="k">Renewal</span><span class="v">'+(lic.expiresAt?esc(fmtDate(lic.expiresAt)):'No expiry date')+'</span></div>'
     +'<div class="row"><span class="k">Connection</span><span class="v">'+esc(mt5.status==='CONNECTED'?'Connected':mt5.status==='STALE'?'Delayed':'Not connected')+'</span></div>'
     +'</div>'

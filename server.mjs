@@ -7,6 +7,7 @@ import { createNotificationEngine } from './notifications.mjs';
 import { resolvePersistentDataDir, preparePersistentRuntimeData } from './runtime-data.mjs';
 import { fileURLToPath } from 'node:url';
 import { createAstraService } from './astra/service.mjs';
+import { createReleaseStore } from './release-store.mjs';
 import { strategyFixtures } from './astra/fixtures.mjs';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
@@ -103,6 +104,7 @@ const MANAGER_LEASES=path.join(DATA,'manager-leases.json');
 const APEX_PUBLIC_ORIGIN=String(process.env.APEX_PUBLIC_ORIGIN||'https://apex.xaucloud.io').trim().replace(/\/+$/,'');
 const NOTIFICATIONS=createNotificationEngine({dataDir:DATA,origin:APEX_PUBLIC_ORIGIN,logger:console});
 const ASTRA=createAstraService({dataDir:DATA,emit:appendEvent});
+const RELEASE_STORE=createReleaseStore({dataDir:DATA,expectedVersion:MANIFEST.version});
 const XAUCLOUD_BASE_URL=String(process.env.XAUCLOUD_BASE_URL||'https://xaucloud.io').trim().replace(/\/+$/,'');
 const APEX_BRIDGE_SECRET=String(process.env.APEX_BRIDGE_SECRET||'');
 // APEX-AUDIT-021: every remote call is deadline-bounded.
@@ -295,9 +297,9 @@ async function withLock(key,fn){
   finally{release();if(locks.get(key)===chain)locks.delete(key)}
 }
 
-async function body(req){
+async function body(req,maxBytes=2e6){
   let s='';
-  for await(const c of req){s+=c;if(s.length>2e6)throw Object.assign(new Error('too_large'),{httpStatus:413})}
+  for await(const c of req){s+=c;if(s.length>maxBytes)throw Object.assign(new Error('too_large'),{httpStatus:413})}
   if(!s)return {};
   try{return JSON.parse(s)}catch{throw Object.assign(new Error('invalid_json'),{httpStatus:400})}
 }
@@ -1133,12 +1135,13 @@ function settingsView(c){return {
 async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const desiredHash=configHash(cfg);
+  const release=await RELEASE_STORE.status();
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
     unlimitedEntitled:licenseAllowsUnlimited(lic),
     expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
   if(status!=='ACTIVE')
-    return {license:base,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},
+    return {license:base,release,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},
       settings:settingsView(cfg),learning:learningShape([]),
       bridge:{configured:bridgeConfigured(),ok:false,reason:'LICENSE_'+status,sync:bridgeSyncState}};
 
@@ -1189,7 +1192,7 @@ async function buildMe(key){
                      eaTradeAllowed===true&&!observerOnly&&preflightBlock===''&&cfg.armed===true;
 
   return {
-    license:base,dataAvailable:Boolean(lastSeen),waitingForFirstContact:!lastSeen,
+    license:base,release,dataAvailable:Boolean(lastSeen),waitingForFirstContact:!lastSeen,
     armed:cfg.armed,accountProfile:cfg.accountProfile,
     mt5:{status:mt5,lastSeen:lastSeen||null},
     // desired vs applied vs unknown, never merged into a single "armed" light
@@ -1401,6 +1404,17 @@ const server=http.createServer(async(req,res)=>{
       }
       return json(res,200,await buildMe(s.lic));
     }
+    // License sessions may download ONLY a real compiled version published by Admin.
+    if(req.method==='GET'&&u.pathname==='/api/session/bot/download'){
+      const session=await notificationSession(req,res);if(!session)return;
+      const {filename,data,record}=await RELEASE_STORE.binary();
+      res.writeHead(200,{'content-type':'application/octet-stream',
+        'content-disposition':'attachment; filename="'+filename+'"',
+        'content-length':data.length,'cache-control':'private, no-store',
+        'x-content-sha256':record.sha256});
+      return res.end(data);
+    }
+
     if(req.method==='POST'&&u.pathname==='/api/session/config'){
       const s=verifySession(cookies(req).apex_session);if(!s)return json(res,401,{error:'no_session'});
       const licenses=await readLicenses();
@@ -1472,6 +1486,63 @@ const server=http.createServer(async(req,res)=>{
     }
 
     // --- admin ---
+    // A release is available only after an admin publishes a real compiled EX5.
+    if(['/api/admin/release','/api/admin/install-email'].includes(u.pathname)){
+      if(!adminOk(req)){
+        if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});
+        return json(res,401,{error:'unauthorized'});
+      }
+      if(req.method==='GET'&&u.pathname==='/api/admin/release')
+        return json(res,200,{ok:true,release:await RELEASE_STORE.status()});
+      if(req.method!=='POST')return json(res,405,{error:'method_not_allowed'});
+      if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
+      if(!String(req.headers['content-type']||'').startsWith('application/json'))
+        return json(res,415,{error:'json_required'});
+      if(u.pathname==='/api/admin/release'){
+        if(!throttle('release-publish',ip,5,60*60*1000))return json(res,429,{error:'too_many_release_uploads'});
+        const b=await body(req,8_000_000);
+        const published=await RELEASE_STORE.publish(b);
+        console.info('APEX_COMPILED_RELEASE_PUBLISHED',published.version,published.sha256);
+        return json(res,200,{ok:true,release:published});
+      }
+      if(!throttle('apex-install-email',ip,60,60*60*1000))
+        return json(res,429,{error:'too_many_email_requests'});
+      const b=await body(req);
+      const recipient=String(b.recipient||'').trim().toLowerCase();
+      const key=normalizeLicense(b.license);
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)||recipient.length>254)
+        return json(res,400,{error:'valid_recipient_email_required'});
+      const licenses=await readLicenses();
+      if(licenseStatusFor(licenses[key])!=='ACTIVE')
+        return json(res,403,{error:'active_apex_license_required'});
+      if(!bridgeConfigured())
+        return json(res,503,{error:'xaucloud_mail_bridge_not_configured'});
+      const release=await RELEASE_STORE.binary();
+      const requestId=crypto.randomUUID();
+      const recipientHash=crypto.createHash('sha256').update(recipient).digest('hex');
+      try{
+        const result=await bridgeRequest('/api/cloud/apex/bridge/email/install',{
+          method:'POST',timeoutMs:45_000,
+          payload:{requestId,recipient,license:key,version:release.record.version,
+            filename:release.filename,sha256:release.record.sha256,
+            fileBase64:release.data.toString('base64')}
+        });
+        await fs.appendFile(path.join(DATA,'install-email-audit.ndjson'),JSON.stringify({
+          requestId,license:maskLicense(key),recipientHash,version:release.record.version,
+          status:'SENT',at:new Date().toISOString()})+'\n').catch(()=>{});
+        return json(res,200,{ok:true,status:result.status,requestId,version:release.record.version});
+      }catch(e){
+        const unknown=['XAUCLOUD_BRIDGE_TIMEOUT','XAUCLOUD_BRIDGE_UNREACHABLE'].includes(e?.message)||
+          e?.detail?.deliveryUnknown===true;
+        await fs.appendFile(path.join(DATA,'install-email-audit.ndjson'),JSON.stringify({
+          requestId,license:maskLicense(key),recipientHash,version:release.record.version,
+          status:unknown?'DELIVERY_UNKNOWN':'FAILED',at:new Date().toISOString()})+'\n').catch(()=>{});
+        return json(res,unknown?502:(e?.httpStatus||502),{
+          ok:false,error:unknown?'email_delivery_unknown_check_xaucloud_sender_logs_before_retrying':
+            String(e?.message||'email_send_failed'),requestId,deliveryUnknown:unknown});
+      }
+    }
+
     if(req.method==='GET'&&u.pathname==='/api/admin/licenses'){
       if(!adminOk(req)){
         if(!throttle('admin',ip,30))return json(res,429,{error:'too_many_attempts'});

@@ -1171,7 +1171,7 @@ function renderAdminLicenses(licenses,release){
     var btn=this,file=document.getElementById('admin-release-file').files[0];
     var status=document.getElementById('admin-release-status');
     if(!file||!file.name.toLowerCase().endsWith('.ex5')){status.textContent='Choose a compiled .ex5 file.';return;}
-    if(file.size<8192||file.size>700000){status.textContent='The compiled .ex5 must be between 8 KB and 700 KB.';return;}
+    if(file.size<8192||file.size>5000000){status.textContent='The compiled .ex5 must be between 8 KB and 5 MB.';return;}
     if(!document.getElementById('admin-release-confirm').checked){status.textContent='Confirm the compiled version first.';return;}
     btn.disabled=true;status.textContent='Publishing and checking the release…';
     try{

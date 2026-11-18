@@ -256,7 +256,7 @@ button{cursor:pointer}
 (function(){
 'use strict';
 
-var STATE = { me:null, page:'dashboard', pollTimer:null, adminToken:null, settingsTab:'setup' };
+var STATE = { me:null, page:'dashboard', pollTimer:null, adminToken:null, settingsTab:'setup', settingsExpanded:{} };
 
 var NAV = [
   {id:'dashboard',label:'Overview'},
@@ -874,24 +874,70 @@ function pageLearning(me){
 }
 
 // ---------- Settings ----------
+function settingsTabs(){
+  var tabs=[
+    {id:'setup',label:'Setup & updates'},
+    {id:'trading',label:'Trading'},
+    {id:'protection',label:'Protection'},
+    {id:'astra',label:'Astra AI'},
+    {id:'more',label:'More'}
+  ];
+  return '<div class="settings-tabs" role="tablist" aria-label="Settings sections">'+tabs.map(function(tab){
+    var selected=STATE.settingsTab===tab.id;
+    return '<button type="button" class="settings-tab" data-settings-tab="'+tab.id+'" id="settings-tab-'+tab.id+'" role="tab" aria-controls="settings-panel-'+tab.id+'" aria-selected="'+selected+'" tabindex="'+(selected?'0':'-1')+'">'+tab.label+'</button>';
+  }).join('')+'</div>';
+}
+function startSettingsPanel(id,title,description){
+  return '<section class="settings-panel" data-settings-panel="'+id+'" id="settings-panel-'+id+'" role="tabpanel" aria-labelledby="settings-tab-'+id+'" '+(STATE.settingsTab===id?'':'hidden')+'>'
+    +'<div class="settings-lead"><h2>'+esc(title)+'</h2><p>'+esc(description)+'</p></div>';
+}
+function settingsDetailsStart(key,title,desc){
+  return '<details class="settings-details" data-section-key="'+key+'" '+(STATE.settingsExpanded[key]?'open':'')+'>'
+    +'<summary><span><span class="details-name">'+esc(title)+'</span><span class="details-desc" style="display:block">'+esc(desc)+'</span></span></summary><div class="details-content">';
+}
+function activateSettingsTab(tab){
+  if(!['setup','trading','protection','astra','more'].includes(tab))tab='setup';
+  STATE.settingsTab=tab;
+  Array.prototype.forEach.call(document.querySelectorAll('[data-settings-tab]'),function(button){
+    var selected=button.getAttribute('data-settings-tab')===tab;
+    button.setAttribute('aria-selected',String(selected));
+    button.tabIndex=selected?0:-1;
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-settings-panel]'),function(panel){
+    panel.hidden=panel.getAttribute('data-settings-panel')!==tab;
+  });
+}
+
 function pageSettings(me){
   var s = me.settings || {};
   var adv = s.advanced || {};
   var disabled = !me.settings;
   var lic = me.license || {};
-  var html = '<h1 class="page-title">Settings</h1><p class="page-sub">How Apex trades your account</p>';
-  if(window.AstraUI)html+=window.AstraUI.card(me,true);
+  var html = '<div class="settings-top"><div class="overview-eyebrow">Apex preferences</div><h1 class="page-title">Settings</h1>'
+    +'<p class="page-sub">Set up your bot, decide how it trades, and manage your protection in one place.</p></div>'
+    +settingsTabs();
+  html+=startSettingsPanel('setup','Setup & updates','Install Apex, check your connection, and find the latest bot version.');
   html+=releaseCard(me);
-  html += '<div class="card"><h3>License</h3>'
-    + '<div class="row"><span class="k">Current License</span><span class="v" style="font-size:12px">'+esc(lic.key||'—')+'</span></div>'
-    + '<div class="field" style="margin-top:14px"><label>Change License</label>'
-    + '<input id="f-change-license" class="license-input" placeholder="APEX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">'
-    + '<div class="hint">Switch this device to a different Apex license. You will immediately see that license\'s own data.</div></div>'
-    + '<div id="change-license-err" class="err-box" style="margin-top:0;margin-bottom:12px"></div>'
-    + '<button class="btn btn-ghost" id="change-license-btn">Change License</button>'
-    + '</div>';
-  html += armDisarmCard(me);
-  html += configSyncCard(me);
+  html+='<div class="card"><h3>Connect to MetaTrader 5</h3>'
+    +'<p class="settings-section-intro">You only need the compiled .ex5 file from above. AstraBridge is already included.</p>'
+    +'<ol class="settings-steps">'
+    +'<li><span><strong>Install the bot.</strong> In MT5, open File → Open Data Folder → MQL5 → Experts, then copy the downloaded .ex5 into that folder and refresh Expert Advisors.</span></li>'
+    +'<li><span><strong>Allow connections.</strong> Under Tools → Options → Expert Advisors, allow WebRequest for <code>https://xaucloud.io</code> and <code>https://apex.xaucloud.io</code>.</span></li>'
+    +'<li><span><strong>Connect your license.</strong> Add Apex to your XAUUSD (or XAUUSDm) chart, enter your Apex license in Inputs and turn on Algo Trading.</span></li>'
+    +'<li><span><strong>Choose when Apex trades.</strong> Use the switch below. Watch for MT5 connected and settings applied before expecting a new entry.</span></li>'
+    +'</ol></div>';
+  html+=armDisarmCard(me);
+  html+='<div class="card"><h3>Your license</h3>'
+    +'<div class="row"><span class="k">License key</span><span class="v">'+esc(lic.key||'—')+'</span></div>'
+    +'<div class="field" style="margin-top:16px"><label for="f-change-license">Switch to another license</label>'
+    +'<input id="f-change-license" class="license-input" placeholder="Paste your other Apex license" autocomplete="off" autocapitalize="characters" spellcheck="false">'
+    +'<div class="hint">Only switch if you own another Apex license. This changes which account you are viewing.</div></div>'
+    +'<div id="change-license-err" class="err-box" role="alert"></div>'
+    +'<button class="btn btn-ghost" id="change-license-btn" style="max-width:235px">Switch license</button></div>';
+  html+=settingsDetailsStart('sync','Connection details','Only needed if Apex is not receiving your changes.');
+  html+=configSyncCard(me);
+  html+='</div></details></section>';
+  html+=startSettingsPanel('trading','Trading preferences','Choose your account mode and control how much Apex can allocate to new positions.');
   html += '<div class="card"><h3>Account</h3>'
     + '<div class="field"><label>Account Profile</label><select id="f-accountProfile" '+(disabled?'disabled':'')+'>'
     + '<option value="NORMAL"'+(s.accountProfile==='NORMAL'?' selected':'')+'>NORMAL</option>'

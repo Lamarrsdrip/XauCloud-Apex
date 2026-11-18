@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>XauCloud Apex</title>
 <meta name="theme-color" content="#0a0b0f">
 <style>
@@ -212,6 +212,7 @@ button{cursor:pointer}
 .container{max-width:640px}
 .center-note{text-align:center;color:var(--text-faint);font-size:12.5px;margin-top:18px}
 </style>
+<link rel="stylesheet" href="/premium.css?v=2026-11-18" media="all">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#d8b15a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -238,7 +239,7 @@ button{cursor:pointer}
   <div class="topbar">
     <div class="topbar-inner">
       <div class="topbar-brand"><div class="brand-mark brand-mark-apex" aria-label="Apex">A</div><span>XauCloud Apex</span></div>
-      <div class="pills" id="status-pills"></div>
+      <div class="pills" id="status-pills" aria-live="polite"></div>
     </div>
   </div>
   <div class="layout">
@@ -255,16 +256,32 @@ button{cursor:pointer}
 (function(){
 'use strict';
 
-var STATE = { me:null, page:'dashboard', pollTimer:null, adminToken:null };
+var STATE = { me:null, page:'dashboard', pollTimer:null, adminToken:null, settingsTab:'setup' };
 
 var NAV = [
-  {id:'dashboard', label:'Dashboard', ic:'&#9679;'},
-  {id:'campaigns', label:'Campaigns', ic:'&#9670;'},
-  {id:'history', label:'History', ic:'&#8635;'},
-  {id:'learning', label:'Learning', ic:'&#9733;'},
-  {id:'settings', label:'Settings', ic:'&#9881;'},
-  {id:'account', label:'Account', ic:'&#9786;'}
+  {id:'dashboard',label:'Overview'},
+  {id:'campaigns',label:'Trades'},
+  {id:'history',label:'History'},
+  {id:'learning',label:'Insights'},
+  {id:'settings',label:'Settings'},
+  {id:'account',label:'Account'}
 ];
+function navIcon(id){
+  var shapes={
+    dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
+    campaigns:'<path d="M3 17l6-6 4 4 8-9"/><path d="M16 6h5v5"/>',
+    history:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    learning:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 2 5-7"/>',
+    settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9L7 7m10 10 2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
+    account:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'
+  };
+  return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+(shapes[id]||shapes.dashboard)+'</svg>';
+}
+function openSettings(tab){
+  STATE.settingsTab=tab||'setup';
+  if(STATE.page==='settings')activateSettingsTab(STATE.settingsTab);
+  else location.hash='#settings';
+}
 
 // ---------- api ----------
 function api(path, opts){
@@ -417,13 +434,13 @@ function route(){
 
 function renderNav(){
   var itemsHtml = NAV.map(function(n){
-    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'"><span class="ic">'+n.ic+'</span><span>'+n.label+'</span></button>';
+    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'"><span class="ic">'+navIcon(n.id)+'</span><span>'+n.label+'</span></button>';
   }).join('');
   var sidebar = document.getElementById('sidebar');
   var bottomnav = document.getElementById('bottomnav');
   sidebar.innerHTML = itemsHtml + '<button class="navitem" id="logout-btn" style="margin-top:auto"><span class="ic">&#10162;</span><span>Sign Out</span></button>';
-  bottomnav.innerHTML = NAV.slice(0,5).map(function(n){
-    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'" style="flex:1"><span class="ic">'+n.ic+'</span><span>'+n.label+'</span></button>';
+  bottomnav.innerHTML = NAV.filter(function(n){return n.id!=='learning';}).map(function(n){
+    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'" style="flex:1"><span class="ic">'+navIcon(n.id)+'</span><span>'+n.label+'</span></button>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('[data-nav]'), function(el){
     el.addEventListener('click', function(){ location.hash = '#'+el.getAttribute('data-nav'); });
@@ -434,23 +451,14 @@ function renderNav(){
 }
 
 function renderStatusPills(){
-  var me = STATE.me || {};
-  var wrap = document.getElementById('status-pills');
-  var parts = [];
-  var desiredArmed = !!(me.control && me.control.desired && me.control.desired.armed);
-  var appliedRev = me.control && me.control.applied ? me.control.applied.revision : null;
-  var desiredRev = me.control && me.control.desired ? me.control.desired.revision : null;
-  var inSync = me.control && me.control.applied ? me.control.applied.inSync : null;
-  if (inSync===true) parts.push(pill(desiredArmed? 'Apex armed — EA applied r'+(appliedRev||'') : 'Apex disarmed — EA applied', desiredArmed?'green':'gray'));
-  else if (desiredArmed) parts.push(pill('Arm queued — waiting for EA r'+(desiredRev||''), 'amber'));
-  else parts.push(pill(me.armed? 'Disarm queued / desired disarmed':'Apex Disarmed', 'gray'));
-  var mt5 = (me.mt5&&me.mt5.status) || 'DISCONNECTED';
-  parts.push(pill('MT5 '+ (mt5==='CONNECTED'?'Connected':mt5==='STALE'?'Stale':'Disconnected'), mt5==='CONNECTED'?'green':mt5==='STALE'?'amber':'red'));
-  var ls = (me.license&&me.license.status) || 'LICENSE_NOT_FOUND';
-  var licMap = {ACTIVE:['License Active','green'], LICENSE_EXPIRED:['License Expired','red'], LICENSE_DISABLED:['License Disabled','red'], ACCOUNT_MISMATCH:['Account Mismatch','amber'], LICENSE_NOT_FOUND:['License Not Found','red']};
-  var lm = licMap[ls] || licMap.LICENSE_NOT_FOUND;
-  parts.push(pill(lm[0], lm[1]));
-  wrap.innerHTML = parts.join('');
+  var me=STATE.me||{}, wrap=document.getElementById('status-pills');
+  var mt5=(me.mt5&&me.mt5.status)||'DISCONNECTED', connected=mt5==='CONNECTED';
+  var control=me.control||{}, desired=control.desired||{}, applied=control.applied||{};
+  var requested=desired.armed===true;
+  var mt5Label=connected?'MT5 connected':mt5==='STALE'?'Connection delayed':'MT5 offline';
+  var actionLabel=!connected?'Waiting for MT5':applied.inSync!==true?'Applying changes':requested?'Trading enabled':'Trading paused';
+  wrap.innerHTML=pill(mt5Label,connected?'green':mt5==='STALE'?'amber':'gray')+
+    pill(actionLabel,!connected?'gray':applied.inSync!==true?'amber':requested?'green':'gray');
 }
 
 // ---------- page render dispatch ----------

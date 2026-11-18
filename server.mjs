@@ -297,9 +297,9 @@ async function withLock(key,fn){
   finally{release();if(locks.get(key)===chain)locks.delete(key)}
 }
 
-async function body(req){
+async function body(req,maxBytes=2e6){
   let s='';
-  for await(const c of req){s+=c;if(s.length>2e6)throw Object.assign(new Error('too_large'),{httpStatus:413})}
+  for await(const c of req){s+=c;if(s.length>maxBytes)throw Object.assign(new Error('too_large'),{httpStatus:413})}
   if(!s)return {};
   try{return JSON.parse(s)}catch{throw Object.assign(new Error('invalid_json'),{httpStatus:400})}
 }
@@ -1500,7 +1500,7 @@ const server=http.createServer(async(req,res)=>{
         return json(res,415,{error:'json_required'});
       if(u.pathname==='/api/admin/release'){
         if(!throttle('release-publish',ip,5,60*60*1000))return json(res,429,{error:'too_many_release_uploads'});
-        const b=await body(req);
+        const b=await body(req,8_000_000);
         const published=await RELEASE_STORE.publish(b);
         console.info('APEX_COMPILED_RELEASE_PUBLISHED',published.version,published.sha256);
         return json(res,200,{ok:true,release:published});

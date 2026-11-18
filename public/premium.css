@@ -219,3 +219,18 @@ a:hover{text-decoration-color:var(--gold)}
 @media(prefers-reduced-motion:reduce){
   *,*:before,*:after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}
 }
+
+/* Native buttons remain keyboard-friendly in trade history. */
+.hist-head{width:100%;border:0;text-align:left;color:var(--text);font:inherit;min-height:72px}
+.hist-head:hover{background:#26303a}
+.hist-head:focus-visible{outline:2px solid var(--gold);outline-offset:-3px}
+.hist-item{border:1px solid #38424c;border-radius:16px;background:#171e24;overflow:hidden}
+.hist-body{background:#171e24}
+.hist-head .grow .pct{font-size:17px;font-weight:700}
+#apex-notifications-card .apn-top{align-items:center}
+#apex-notifications-card .apn-title{font-size:17px;letter-spacing:-.015em}
+#apex-notifications-card .apn-sub{font-size:13px;opacity:1;color:#b1bfca}
+#apex-notifications-card .apn-status{font-weight:600;font-size:11px;padding:7px 10px}
+#apex-notifications-card .apn-btn{min-height:43px;border-radius:11px}
+#apex-notifications-card .apn-btn.primary{background:var(--gold);color:#1b1c1c;border-color:var(--gold)}
+#apex-notifications-card .apn-ios{background:#232d35;border-radius:12px;color:#c6d1da;opacity:1;line-height:1.65}

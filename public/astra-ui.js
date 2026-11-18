@@ -5,27 +5,56 @@
   function row(k,v){return '<div class="row"><span class="k">'+esc(k)+'</span><span class="v">'+esc(v==null?'—':v)+'</span></div>';}
   function label(v){return String(v||'NO SETUP').replace(/_/g,' ');}
   function card(me,editing){
-    var a=me.astra||{},d=a.lastDecision||{},c=me.campaign||{};
-    var status=label(a.status||'NATIVE_LIFESTYLE');
-    var html='<section class="card" aria-label="Astra Brain"><div class="card-head"><h3>ASTRA BRAIN</h3><span class="pill '+(a.status==='ASTRA_ACTIVE'?'green':'amber')+'">'+esc(status)+'</span></div>';
-    html+='<div style="font-size:18px;font-weight:600;margin:12px 0">'+esc(label(d.state||'NO_SETUP'))+'</div>';
-    html+=row('Last recommendation',d.action?label(d.action):'WAIT')+row('Confidence · setup quality',pct(d.confidence)+' · '+pct(d.setupQuality));
-    html+=row('Freshness · extension risk',pct(d.freshness)+' · '+pct(d.extensionRisk));
-    html+=row('Campaign owner',c.strategyOwner||'LIFESTYLE_NATIVE')+row('Active positions',c.layers??0);
-    html+=row('Model',a.model+(a.reasoningEffort?' · effort '+a.reasoningEffort:''))+row('Knowledge',a.knowledgeVersion||a.strategyVersion)+row('Latency',a.latencyMs==null?'—':a.latencyMs+' ms');
-    html+=row('Requests today',(a.requestsToday==null?'—':a.requestsToday)+' / '+(a.dailyRequestLimit||'—'))+row('Last fallback',a.lastFallbackReason?label(a.lastFallbackReason):'—');
-    if(d.createdAtMs)html+=row('Decision time',new Date(d.createdAtMs).toLocaleString());
-    if(editing){
-      html+='<div class="toggle-row"><label for="astra-enabled">Enable Astra</label><input id="astra-enabled" type="checkbox" '+(a.enabled?'checked':'')+'></div>';
-      html+='<div class="field"><label for="astra-key">OpenAI API Key</label><input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Enter your key')+'"><div class="hint">Your key is encrypted on the Apex backend. Leave blank to keep the saved key.</div></div>';
-      html+='<div class="field"><label for="astra-model">Model</label><input id="astra-model" value="'+esc(a.model||'gpt-6-astra')+'" autocomplete="off" spellcheck="false"></div>';
-      html+='<div class="field"><label for="astra-limit">Daily request limit</label><input id="astra-limit" type="number" min="10" max="5000" step="10" value="'+esc(a.dailyRequestLimit||500)+'"><div class="hint">Each Astra decision is a paid request on your key. When the limit is reached, Apex trades native Lifestyle until the next UTC day.</div></div>';
-      var efforts=['low','medium','high','none','default'],eff=a.reasoningEffort||'low';
-      html+='<div class="field"><label for="astra-effort">Reasoning effort</label><select id="astra-effort">'+efforts.map(function(x){return '<option value="'+x+'"'+(x===eff?' selected':'')+'>'+esc(x==='default'?'Model default':x)+'</option>';}).join('')+'</select><div class="hint">Decisions expire after 8 seconds. Higher effort is slower and may time out, which hands control to native Lifestyle.</div></div>';
-      html+='<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="astra-save">Save Key &amp; Settings</button><button class="btn btn-ghost" id="astra-test">Test Connection</button><button class="btn btn-ghost" id="astra-checks">Run Strategy Checks</button><button class="btn btn-ghost" id="astra-remove" '+(!a.hasKey?'disabled':'')+'>Remove Key</button></div>';
-      html+='<p class="hint">Both tests use your saved key and incur API usage. Test Connection proves only that your key, model and the decision format work. Strategy Checks grade nine synthetic situations without placing orders. Neither proves trading performance.</p><div id="astra-result" role="status" aria-live="polite" style="margin-top:12px"></div>';
+    var a=me.astra||{},d=a.lastDecision||{};
+    var connected=a.status==='ASTRA_ACTIVE',hasKey=a.hasKey===true,enabled=a.enabled===true;
+    var state=connected?'Connected':enabled?(hasKey?'Checking connection':'Finish setup'):'Off';
+    var html='<section class="card" aria-label="Astra AI settings">'
+      +'<div class="release-head"><div><h3 style="margin:0 0 5px">Astra AI</h3>'
+      +'<div class="settings-subtle">Optional AI decisions, managed from your Apex account.</div></div>'
+      +'<span class="overview-pill '+(connected?'ok':enabled?'':'off')+'">'+esc(state)+'</span></div>';
+    if(!editing){
+      html+='<div class="settings-subtle" style="margin-top:13px">'+(connected?'Astra is connected to Apex.':'Apex is using its native trading strategy.')+'</div>';
+      return html+'</section>';
     }
-    return html+'</section>';
+    html+='<p class="settings-section-intro" style="margin:18px 0">Astra can help evaluate trade setups. If it is switched off or unavailable, Apex uses its native trading rules. Enabling AI does not guarantee profitable trades.</p>';
+    html+='<div class="overview-inline-control" style="margin:0 0 21px"><div>'
+      +'<label class="control-title" for="astra-enabled" style="display:block;cursor:pointer">Use Astra AI</label>'
+      +'<div class="control-desc">'+(hasKey?'A key is securely saved for this license.':'Connect your own OpenAI API key to enable Astra.')+'</div>'
+      +'</div><label class="switch"><input id="astra-enabled" type="checkbox" aria-label="Enable Astra AI" '+(enabled?'checked':'')+'>'
+      +'<span class="track"></span><span class="knob"></span></label></div>';
+    html+='<div class="field"><label for="astra-key">OpenAI API key</label>'
+      +'<input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Paste your API key here')+'">'
+      +'<div class="hint">Create a key in <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI Platform</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
+    html+='<details class="settings-details" style="margin-bottom:18px"><summary><span>'
+      +'<span class="details-name">AI usage & model</span>'
+      +'<span class="details-desc" style="display:block">Choose a supported model and control API requests.</span>'
+      +'</span></summary><div class="details-content" style="padding-top:21px">'
+      +'<div class="field"><label for="astra-model">Model</label><input id="astra-model" value="'+esc(a.model||'gpt-6-astra')+'" autocomplete="off" spellcheck="false">'
+      +'<div class="hint">Use a model available through your own OpenAI API account.</div></div>'
+      +'<div class="field"><label for="astra-limit">Daily API request limit</label><input id="astra-limit" type="number" min="10" max="5000" step="10" value="'+esc(a.dailyRequestLimit||500)+'">'
+      +'<div class="hint">Astra requests are billed separately by your API provider. This is a request count, not a spending limit. When reached, native trading takes over until the next UTC day.</div></div>';
+    var efforts=['low','medium','high','none','default'],eff=a.reasoningEffort||'low';
+    html+='<div class="field"><label for="astra-effort">Reasoning effort</label><select id="astra-effort">'
+      +efforts.map(function(x){return '<option value="'+x+'"'+(x===eff?' selected':'')+'>'+esc(x==='default'?'Model default':x)+'</option>';}).join('')
+      +'</select><div class="hint">Higher effort may respond too slowly for live decisions. Apex falls back to native trading when a decision times out.</div></div>'
+      +'</div></details>';
+    html+='<div class="release-actions" style="margin-top:8px">'
+      +'<button class="btn btn-primary" id="astra-save" style="width:auto">Save Astra settings</button>'
+      +'<button class="btn btn-ghost" id="astra-test" style="width:auto" '+(!hasKey?'disabled':'')+'>Test connection</button></div>';
+    html+='<details class="settings-details" style="margin-top:18px"><summary><span>'
+      +'<span class="details-name">Advanced Astra tools</span>'
+      +'<span class="details-desc" style="display:block">Run strategy checks, review diagnostics or remove your saved key.</span>'
+      +'</span></summary><div class="details-content" style="padding-top:14px">'
+      +row('Last decision',d.action?label(d.action):'No decision yet')
+      +row('AI requests today',(a.requestsToday==null?'—':a.requestsToday)+' / '+(a.dailyRequestLimit||'—'))
+      +row('Last connection issue',a.lastFallbackReason?label(a.lastFallbackReason):'None reported')
+      +'<div class="release-actions" style="margin-top:15px">'
+      +'<button class="btn btn-ghost" style="width:auto" id="astra-checks" '+(!hasKey?'disabled':'')+'>Run strategy checks</button>'
+      +'<button class="btn btn-danger" style="width:auto" id="astra-remove" '+(!hasKey?'disabled':'')+'>Remove API key</button></div>'
+      +'<div class="hint" style="margin-top:10px">Both tests use your saved key and may incur API charges. A successful connection is not proof of trading performance.</div></div></details>'
+      +'<div id="astra-result" role="status" aria-live="polite" class="settings-subtle" style="margin-top:13px"></div>'
+      +'</section>';
+    return html;
   }
   async function request(method,route,body){
     var response=await fetch(route,{method:method,credentials:'same-origin',headers:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});

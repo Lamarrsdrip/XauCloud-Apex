@@ -1510,7 +1510,7 @@ const server=http.createServer(async(req,res)=>{
       const b=await body(req);
       const recipient=String(b.recipient||'').trim().toLowerCase();
       const key=normalizeLicense(b.license);
-      if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(recipient)||recipient.length>254)
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)||recipient.length>254)
         return json(res,400,{error:'valid_recipient_email_required'});
       const licenses=await readLicenses();
       if(licenseStatusFor(licenses[key])!=='ACTIVE')
@@ -1529,14 +1529,14 @@ const server=http.createServer(async(req,res)=>{
         });
         await fs.appendFile(path.join(DATA,'install-email-audit.ndjson'),JSON.stringify({
           requestId,license:maskLicense(key),recipientHash,version:release.record.version,
-          status:'SENT',at:new Date().toISOString()})+'\\n').catch(()=>{});
+          status:'SENT',at:new Date().toISOString()})+'\n').catch(()=>{});
         return json(res,200,{ok:true,status:result.status,requestId,version:release.record.version});
       }catch(e){
         const unknown=['XAUCLOUD_BRIDGE_TIMEOUT','XAUCLOUD_BRIDGE_UNREACHABLE'].includes(e?.message)||
           e?.detail?.deliveryUnknown===true;
         await fs.appendFile(path.join(DATA,'install-email-audit.ndjson'),JSON.stringify({
           requestId,license:maskLicense(key),recipientHash,version:release.record.version,
-          status:unknown?'DELIVERY_UNKNOWN':'FAILED',at:new Date().toISOString()})+'\\n').catch(()=>{});
+          status:unknown?'DELIVERY_UNKNOWN':'FAILED',at:new Date().toISOString()})+'\n').catch(()=>{});
         return json(res,unknown?502:(e?.httpStatus||502),{
           ok:false,error:unknown?'email_delivery_unknown_check_xaucloud_sender_logs_before_retrying':
             String(e?.message||'email_send_failed'),requestId,deliveryUnknown:unknown});

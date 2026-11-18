@@ -1,14 +1,14 @@
 (function(){
   'use strict';
   var PREFS = [
-    ['setupDetected','Setup Detected','Potential setup found; Apex is watching for confirmation.'],
-    ['tradeFired','Trade Fired','First broker-confirmed Apex entry opened.'],
-    ['newLayers','New Layers','Apex adds another confirmed layer.'],
-    ['campaignClosed','Campaign Closed','Apex campaign finishes.'],
-    ['criticalAlerts','Critical Execution Alerts','Broker rejection, unconfirmed order, close stall or master SL failure.'],
-    ['setupCancelled','Setup Cancelled','A watched setup becomes invalid.'],
-    ['profitFloorUpdates','Profit Floor Updates','Apex raises the earned profit floor.'],
-    ['masterSlUpdates','Master SL Updates','Broker-verified master stop changes.']
+    ['setupDetected','Potential setup','Apex starts checking a possible trade.'],
+    ['tradeFired','New trade','Apex confirms the first trade was opened by your broker.'],
+    ['newLayers','Additional position','Apex adds a position after confirming a valid entry.'],
+    ['campaignClosed','Trade completed','Apex finishes a trading campaign.'],
+    ['criticalAlerts','Important trading alerts','A broker rejects an order or an important risk protection needs attention.'],
+    ['setupCancelled','Setup cancelled','A trade opportunity no longer meets the rules.'],
+    ['profitFloorUpdates','Profit protection','Apex raises the amount of campaign profit it aims to protect.'],
+    ['masterSlUpdates','Stop-loss updates','The broker confirms a change to the first position stop.']
   ];
 
   function api(path, opts){
@@ -72,7 +72,7 @@
     var slot=document.getElementById('apex-notifications-card'); if(!slot)return;
     if(slot.dataset.ready==='1')return;
     slot.dataset.ready='1';
-    slot.innerHTML='<div class="apn-card"><div class="apn-top"><div><div class="apn-title">Apex Notifications</div><div class="apn-sub">Real-time setup and broker-confirmed execution alerts. Trading never waits for notifications.</div></div><div id="apn-status" class="apn-status off">Checking...</div></div><div class="apn-actions"><button id="apn-enable" class="apn-btn primary">Enable Notifications</button><button id="apn-test" class="apn-btn">Send Test Notification</button><button id="apn-disable" class="apn-btn">Disable on This Device</button></div><div id="apn-grid" class="apn-grid"></div><div class="apn-ios">iPhone: open Apex in Safari → Add to Home Screen → open Apex from Home Screen → Settings → Enable Notifications → Allow. Permission is only requested when you press the button.</div></div>';
+    slot.innerHTML='<div class="apn-card"><div class="apn-top"><div><div class="apn-title">Notifications</div><div class="apn-sub">Choose when Apex should notify you. Trading continues even if alerts are switched off.</div></div><div id="apn-status" class="apn-status off">Checking...</div></div><div class="apn-actions"><button id="apn-enable" class="apn-btn primary">Enable alerts</button><button id="apn-test" class="apn-btn">Test an alert</button><button id="apn-disable" class="apn-btn">Turn off here</button></div><details class="settings-details" style="margin:4px 0 0"><summary><span><span class="details-name">Choose your alerts</span><span class="details-desc" style="display:block">Only receive the updates that matter to you.</span></span></summary><div class="details-content" style="padding-top:10px"><div id="apn-grid" class="apn-grid"></div><div class="apn-ios">On iPhone: open Apex in Safari, add it to your Home Screen, then open the Home Screen app and enable alerts in Settings. Apex will only ask permission when you tap Enable alerts.</div></div></details></div>';
     var status=document.getElementById('apn-status'), grid=document.getElementById('apn-grid');
     try{
       var s=await api('/api/notifications/status'), prefs=s.preferences||{}; var sub=await getSub();

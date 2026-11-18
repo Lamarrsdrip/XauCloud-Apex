@@ -200,6 +200,15 @@ button{cursor:pointer}
 .layer-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:13px}
 .layer-row:last-child{border-bottom:none}
 
+.release-card{position:relative;overflow:hidden;background:linear-gradient(125deg,#171b24,#1c1d1e 58%,#242013);border-color:#594725}
+.release-card:before{content:'';position:absolute;width:240px;height:240px;border-radius:50%;background:rgba(232,184,75,.06);right:-100px;top:-140px;pointer-events:none}
+.release-head{display:flex;align-items:start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.release-title{font-size:18px;letter-spacing:-.025em;font-weight:800;color:#f7f7f7}
+.release-caption{color:var(--text-dim);font-size:13px;line-height:1.65;margin:10px 0 16px}
+.release-actions{display:flex;gap:10px;flex-wrap:wrap}
+.release-actions .btn{width:auto;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+.release-meta{font-size:11px;color:var(--text-faint);overflow-wrap:anywhere}
+.admin-release-note{font-size:12px;color:var(--text-dim);line-height:1.65}
 .container{max-width:640px}
 .center-note{text-align:center;color:var(--text-faint);font-size:12.5px;margin-top:18px}
 </style>
@@ -458,14 +467,35 @@ function renderPage(){
   if(STATE.page==='settings'&&window.AstraUI)window.AstraUI.bind(async function(){STATE.me=await api('/api/auth/me');renderPage();});
 }
 
+// ---------- Compiled Apex release (shown even before first MT5 heartbeat) ----------
+function releaseCard(me){
+  var release=me.release||{},ready=release.available===true;
+  var html='<section class="card release-card" aria-label="Apex bot download"><div class="release-head">'
+    +'<div><div class="release-title">Your Apex trading bot</div><div class="hint">Official compiled release · MT5 Expert Advisor</div></div>'
+    +pill(ready?'v'+release.version+' · Ready':'Release pending',ready?'green':'amber')
+    +'</div>';
+  html+='<p class="release-caption">'+(ready
+    ? 'Download the latest Apex bot for Windows MT5. AstraBridge is already included in the compiled .ex5; you only need one file.'
+    : 'The latest compiled Apex bot has not been published yet. Your dashboard will show the download as soon as the official .ex5 is available.')+'</p>';
+  if(ready){
+    html+='<div class="release-actions"><a class="btn btn-primary" href="/api/session/bot/download" download>Download Apex .ex5</a>'
+      +'<button class="btn btn-ghost" style="width:auto" onclick="location.hash=\'account\'">Installation guide</button></div>'
+      +'<div class="release-meta" style="margin-top:14px">SHA-256: '+esc(release.sha256||'')+' · Published '+esc(fmtDate(release.publishedAt))+'</div>';
+  }else{
+    html+='<div class="release-actions"><button class="btn btn-primary" disabled>Compiled bot not published</button></div>';
+  }
+  return html+'</section>';
+}
+
 // ---------- Dashboard ----------
 function pageDashboard(me){
   if (!me.dataAvailable){
-    return '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview</p>' + (window.AstraUI?window.AstraUI.card(me,false):'') + dataUnavailableCard(me);
+    return '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview</p>' + releaseCard(me) + (window.AstraUI?window.AstraUI.card(me,false):'') + dataUnavailableCard(me);
   }
   var acc = me.account || {};
   var camp = me.campaign;
   var html = '<h1 class="page-title">Dashboard</h1><p class="page-sub">Live account overview · updated '+esc(fmtAgo(acc.asOf))+'</p>';
+  html+=releaseCard(me);
   if(window.AstraUI)html+=window.AstraUI.card(me,false);
 
   html += '<div class="card"><div class="acct-strip">'
@@ -816,6 +846,7 @@ function pageSettings(me){
   var lic = me.license || {};
   var html = '<h1 class="page-title">Settings</h1><p class="page-sub">How Apex trades your account</p>';
   if(window.AstraUI)html+=window.AstraUI.card(me,true);
+  html+=releaseCard(me);
   html += '<div class="card"><h3>License</h3>'
     + '<div class="row"><span class="k">Current License</span><span class="v" style="font-size:12px">'+esc(lic.key||'—')+'</span></div>'
     + '<div class="field" style="margin-top:14px"><label>Change License</label>'
@@ -1050,14 +1081,16 @@ function pageAccount(me){
     + '<div class="row"><span class="k">Account Profile</span><span class="v">'+esc(lic.accountProfile||'—')+'</span></div>'
     + '<div class="row"><span class="k">Expires</span><span class="v">'+(lic.expiresAt? esc(fmtDate(lic.expiresAt)) : 'No expiry')+'</span></div>'
     + '</div>';
+  html += releaseCard(me);
   html += '<div class="card"><h3>Set up XauCloud-Apex in MT5</h3>'
     + '<ol style="margin:0;padding-left:20px;line-height:1.9">'
     + '<li>Download XauCloud-Apex and add it to your MT5 Experts.</li>'
     + '<li>Attach it to a XAUUSD/XAUUSDm chart.</li>'
     + '<li>Enter your Apex License (shown above) in the EA\'s inputs.</li>'
-    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://xaucloud.io</code> (not apex.xaucloud.io).</li>'
+    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://xaucloud.io</code> and <code>https://apex.xaucloud.io</code> (Astra).</li>'
     + '<li>Enable Algo Trading (the button in the MT5 toolbar).</li>'
     + '<li>Arm Apex from the Dashboard or Settings page.</li>'
+    + '<li>Optional Astra: in Settings, enable ASTRA BRAIN, create an OpenAI API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a>, add API billing, save the key and a supported model, then Test Connection. Never enter your API key in MT5 or email it.</li>'
     + '</ol>'
     + '<div class="hint" style="margin-top:10px">That\'s it — no separate token or admin credential is ever needed in MT5. Your license alone authorizes the connection.</div>'
     + '</div>';
@@ -1088,8 +1121,8 @@ function renderAdmin(){
     return;
   }
   main.innerHTML = '<div class="container"><h1 class="page-title">Admin Console</h1><p class="page-sub">License issuance and raw backend state.</p><div id="admin-body"><div class="skel" style="height:200px"></div></div></div>';
-  adminApi('/api/admin/licenses').then(function(d){
-    renderAdminLicenses(d.licenses||[]);
+  Promise.all([adminApi('/api/admin/licenses'),adminApi('/api/admin/release')]).then(function(results){
+    renderAdminLicenses(results[0].licenses||[],results[1].release||{});
   }).catch(function(){
     document.getElementById('admin-body').innerHTML = '<div class="card"><div class="empty-state"><h4>Invalid admin token</h4></div></div>';
     STATE.adminToken = null;
@@ -1100,7 +1133,7 @@ function adminApi(path, opts){
   opts.headers = Object.assign({}, opts.headers||{}, {authorization:'Bearer '+STATE.adminToken});
   return api(path, opts);
 }
-function renderAdminLicenses(licenses){
+function renderAdminLicenses(licenses,release){
   var html = '<div class="card"><h3>Issue New License</h3>'
     + '<div class="field-grid">'
     + '<div class="field"><label>Account Profile</label><select id="new-lic-profile"><option value="NORMAL">NORMAL</option><option value="UNLIMITED">UNLIMITED</option></select></div>'
@@ -1117,7 +1150,54 @@ function renderAdminLicenses(licenses){
       + '</div>';
   });
   html += '</div>';
+  var active=licenses.filter(function(l){return l.status==='ACTIVE';});
+  html += '<div class="card release-card"><div class="release-head"><h3>Official Apex bot release</h3>'
+    +pill(release.available?'v'+release.version+' Published':'Awaiting compiled .ex5',release.available?'green':'amber')+'</div>'
+    +'<p class="release-caption">Publish the actual MetaEditor-compiled bot to make it available for every active-license dashboard and for email delivery. Source files alone are not enough.</p>'
+    +'<div class="field"><label>Compiled Apex file (.ex5)</label><input type="file" accept=".ex5,application/octet-stream" id="admin-release-file"></div>'
+    +'<label style="display:flex;align-items:flex-start;gap:10px;margin:14px 0;font-size:12px;color:var(--text-dim)"><input type="checkbox" style="width:auto;min-height:auto;margin-top:2px" id="admin-release-confirm">I compiled this exact v'+esc(release.version||'3.10.0')+' Apex source in MetaEditor, checked the version and confirmed the build has no compile errors.</label>'
+    +'<button class="btn btn-primary" id="admin-publish-release">Publish Latest Apex .ex5</button>'
+    +'<div class="admin-release-note" id="admin-release-status" role="status" style="margin-top:12px">'+(release.available?'Current SHA-256: '+esc(release.sha256):'No compiled bot is available for customers yet.')+'</div></div>';
+  html += '<div class="card"><h3>Email Apex to a customer</h3>'
+    +'<p class="release-caption">Send the latest compiled bot as an attachment with a premium step-by-step activation guide using XauCloud email.</p>'
+    +'<div class="field"><label>Customer email</label><input type="email" id="apex-send-recipient" placeholder="customer@example.com" autocomplete="off"></div>'
+    +'<div class="field"><label>Active Apex license</label><select id="apex-send-license"><option value="">Choose a license</option>'
+    +active.map(function(l){return '<option value="'+esc(l.key)+'">'+esc(l.key)+' · '+esc(l.customer||'Customer')+'</option>';}).join('')
+    +'</select></div>'
+    +'<button class="btn btn-primary" id="apex-send-email" '+(!release.available||!active.length?'disabled':'')+'>Send Apex Bot &amp; Setup Email</button>'
+    +'<div class="admin-release-note" id="apex-email-result" role="status" style="margin-top:12px">'+(!release.available?'Publish a compiled release before sending emails.':'Includes MT5 installation, activation, and optional Astra API key configuration.')+'</div></div>';
   document.getElementById('admin-body').innerHTML = html;
+  document.getElementById('admin-publish-release').addEventListener('click', async function(){
+    var btn=this,file=document.getElementById('admin-release-file').files[0];
+    var status=document.getElementById('admin-release-status');
+    if(!file||!file.name.toLowerCase().endsWith('.ex5')){status.textContent='Choose a compiled .ex5 file.';return;}
+    if(file.size<8192||file.size>700000){status.textContent='The compiled .ex5 must be between 8 KB and 700 KB.';return;}
+    if(!document.getElementById('admin-release-confirm').checked){status.textContent='Confirm the compiled version first.';return;}
+    btn.disabled=true;status.textContent='Publishing and checking the release…';
+    try{
+      var encoded=await new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(String(reader.result).split(',')[1]);};reader.onerror=function(){reject(new Error('Unable to read selected file'));};reader.readAsDataURL(file);});
+      var reply=await adminApi('/api/admin/release',{method:'POST',body:{
+        version:release.version,fileBase64:encoded,confirmed:true
+      }});
+      status.textContent='Release published: v'+reply.release.version+'. Customer downloads are now available.';
+      renderAdmin();
+    }catch(e){status.textContent='Publish failed: '+e.message;btn.disabled=false;}
+  });
+  document.getElementById('apex-send-email').addEventListener('click',function(){
+    var btn=this,recipient=document.getElementById('apex-send-recipient').value.trim();
+    var license=document.getElementById('apex-send-license').value;
+    var result=document.getElementById('apex-email-result');
+    if(!recipient||!document.getElementById('apex-send-recipient').checkValidity()||!license){
+      result.textContent='Enter a valid customer email and choose their active license.';return;
+    }
+    btn.disabled=true;result.textContent='Sending the compiled Apex bot and setup guide through XauCloud…';
+    adminApi('/api/admin/install-email',{method:'POST',body:{recipient:recipient,license:license}})
+      .then(function(r){result.textContent='Accepted by XauCloud email service for '+recipient+' · v'+r.version;toast('Apex setup email sent');})
+      .catch(function(e){result.textContent=e.data&&e.data.deliveryUnknown
+        ? 'Delivery is uncertain. Check XauCloud sender logs before attempting another send.'
+        : 'Email failed: '+e.message;toast('Email not confirmed',true);})
+      .finally(function(){btn.disabled=false;});
+  });
   document.getElementById('new-lic-btn').addEventListener('click', function(){
     var expiry = document.getElementById('new-lic-expiry').value.trim();
     adminApi('/api/admin/licenses', {method:'POST', body:{

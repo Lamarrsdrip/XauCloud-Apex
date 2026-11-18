@@ -473,6 +473,12 @@ function renderPage(){
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
   if (STATE.page==='dashboard')wireOverviewControls();
+  if (STATE.page==='account'){
+    var setup=document.getElementById('account-setup-link');
+    if(setup)setup.addEventListener('click',function(){openSettings('setup');});
+    var signout=document.getElementById('logout-btn2');
+    if(signout)signout.addEventListener('click',logout);
+  }
   if(STATE.page==='settings'&&window.AstraUI)window.AstraUI.bind(async function(){STATE.me=await api('/api/auth/me');renderPage();});
 }
 
@@ -1162,37 +1168,21 @@ function saveConfig(payload, btnId, btnLabel){
 
 // ---------- Account ----------
 function pageAccount(me){
-  var lic = me.license || {};
-  var html = '<h1 class="page-title">Account</h1><p class="page-sub">Your Apex license</p>';
-  html += '<div class="card">'
-    + '<div class="row"><span class="k">License Key</span><span class="v" style="font-size:12.5px">'+esc(lic.key)+'</span></div>'
-    + '<div class="row"><span class="k">Status</span><span class="v">'+esc((lic.status||'').replace(/_/g,' '))+'</span></div>'
-    + '<div class="row"><span class="k">Bound MT5 Account</span><span class="v">'+esc(lic.account||'Not yet connected')+'</span></div>'
-    + '<div class="row"><span class="k">Account Profile</span><span class="v">'+esc(lic.accountProfile||'—')+'</span></div>'
-    + '<div class="row"><span class="k">Expires</span><span class="v">'+(lic.expiresAt? esc(fmtDate(lic.expiresAt)) : 'No expiry')+'</span></div>'
-    + '</div>';
-  html += '<div class="card"><h3>Installing and updating Apex</h3>'
-    +'<p class="settings-section-intro">Your downloads and the full setup instructions are in Settings, under Setup & updates.</p>'
-    +'<button class="btn btn-ghost" id="account-setup-link" style="width:auto">Open setup & updates →</button></div>';
-  html += '<div class="card"><h3>Set up XauCloud-Apex in MT5</h3>'
-    + '<ol style="margin:0;padding-left:20px;line-height:1.9">'
-    + '<li>Go to Settings → Setup & updates to download the current .ex5, then add it to your MT5 Experts.</li>'
-    + '<li>Attach it to a XAUUSD/XAUUSDm chart.</li>'
-    + '<li>Enter your Apex License (shown above) in the EA\'s inputs.</li>'
-    + '<li>In MT5: Tools &rarr; Options &rarr; Expert Advisors &rarr; allow WebRequest for <code>https://xaucloud.io</code> and <code>https://apex.xaucloud.io</code> (Astra).</li>'
-    + '<li>Enable Algo Trading (the button in the MT5 toolbar).</li>'
-    + '<li>Arm Apex from the Dashboard or Settings page.</li>'
-    + '<li>Optional Astra: in Settings, enable ASTRA BRAIN, create an OpenAI API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a>, add API billing, save the key and a supported model, then Test Connection. Never enter your API key in MT5 or email it.</li>'
-    + '</ol>'
-    + '<div class="hint" style="margin-top:10px">That\'s it — no separate token or admin credential is ever needed in MT5. Your license alone authorizes the connection.</div>'
-    + '</div>';
-  html += '<div class="card"><button class="btn btn-danger" id="logout-btn2">Sign Out</button></div>';
-  setTimeout(function(){
-    var b = document.getElementById('logout-btn2');
-    if (b) b.addEventListener('click', logout);
-    var setup=document.getElementById('account-setup-link');
-    if(setup)setup.addEventListener('click',function(){openSettings('setup');});
-  },0);
+  var lic=me.license||{},mt5=me.mt5||{},status=lic.status||'LICENSE_NOT_FOUND';
+  var html='<div class="settings-top"><div class="overview-eyebrow">Your access</div><h1 class="page-title">Your account</h1>'
+    +'<p class="page-sub">License details and the MetaTrader account connected to Apex.</p></div>'
+    +'<div class="card"><div class="release-head"><h3 style="margin:0">Apex license</h3>'
+    +pill(status==='ACTIVE'?'Active':status==='LICENSE_EXPIRED'?'Expired':'Unavailable',status==='ACTIVE'?'green':'amber')+'</div>'
+    +'<div class="row"><span class="k">License key</span><span class="v" style="font-size:12.5px;overflow-wrap:anywhere">'+esc(lic.key||'—')+'</span></div>'
+    +'<div class="row"><span class="k">MT5 account</span><span class="v">'+esc(lic.account||'Not yet connected')+'</span></div>'
+    +'<div class="row"><span class="k">Account type</span><span class="v">'+esc(lic.accountProfile||'Normal')+'</span></div>'
+    +'<div class="row"><span class="k">Renewal</span><span class="v">'+(lic.expiresAt?esc(fmtDate(lic.expiresAt)):'No expiry date')+'</span></div>'
+    +'<div class="row"><span class="k">Connection</span><span class="v">'+esc(mt5.status==='CONNECTED'?'Connected':mt5.status==='STALE'?'Delayed':'Not connected')+'</span></div>'
+    +'</div>'
+    +'<div class="card"><h3>Need to install or update Apex?</h3>'
+    +'<p class="settings-section-intro">The download and full installation instructions are under Setup & updates in Settings.</p>'
+    +'<button class="btn btn-primary" style="width:auto" id="account-setup-link">Open setup & updates</button></div>'
+    +'<div class="card"><button class="btn btn-danger" style="width:auto" id="logout-btn2">Sign out</button></div>';
   return html;
 }
 

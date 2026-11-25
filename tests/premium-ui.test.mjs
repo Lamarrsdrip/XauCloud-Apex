@@ -107,4 +107,4 @@ test('UI stylesheet and Astra / notification scripts remain linked and parsable'
     assert.match(css,new RegExp('\\.'+cls.replace(/-/g,'\\-')));
 });
 
-test('AI route versioned assets and graceful reload fallback',()=>{assert.match(html,/astra-ui\.js\?v=2026-11-25-desk/);assert.match(html,/typeof window\.AstraUI\.chatPage/);assert.match(html,/reload-ai/);assert.match(astra,/apex-chat-welcome/);});
+test('AI route versioned assets and graceful reload fallback',()=>{assert.match(html,/astra-ui\.js\?v=2026-11-25-intelligence-lab/);assert.match(html,/typeof window\.AstraUI\.chatPage/);assert.match(html,/reload-ai/);assert.match(astra,/apex-chat-welcome/);});

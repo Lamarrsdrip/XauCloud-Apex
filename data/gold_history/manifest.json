@@ -1,0 +1,312 @@
+{
+ "source": "EXNESS_PUBLIC_TICKS_M1",
+ "origin": "XauCloud backend_node/data/gold_history (same files XauCloud research reads)",
+ "format": "epoch_minute,open,high,low,close,spread_avg,ticks — UTC minute bars of bid/ask MID; minutes without ticks have no bar",
+ "priceBasis": "MID (MT5 charts show BID ≈ mid − spread/2)",
+ "firstMonth": "2021_11",
+ "lastMonth": "2026_10",
+ "months": 60,
+ "totalM1Bars": 1765848,
+ "files": [
+  {
+   "file": "XAUUSD_M1_2021_11.csv.gz",
+   "rows": 29663,
+   "sha256": "585ea6a78384e886f47ec561eee19caf52cb0ad60250b1c9ed25509601bd57ae"
+  },
+  {
+   "file": "XAUUSD_M1_2021_12.csv.gz",
+   "rows": 30120,
+   "sha256": "2571cee4c002b4808a093dfeaf023c29f2e7d189e3acca21eeb31d0d9e6a7822"
+  },
+  {
+   "file": "XAUUSD_M1_2022_01.csv.gz",
+   "rows": 28807,
+   "sha256": "b4d9d8cefaf4e8ae2dfa1f69f3f4a1965372099dc463a462d0466d287a06bf4b"
+  },
+  {
+   "file": "XAUUSD_M1_2022_02.csv.gz",
+   "rows": 27302,
+   "sha256": "3ef9b194b1a1b6b3abd2f8652cd441910aac9b195d97ba6641d19c7540a0e3a3"
+  },
+  {
+   "file": "XAUUSD_M1_2022_03.csv.gz",
+   "rows": 31729,
+   "sha256": "2f5d7aeb029fdab0a6cbda3f4154f6e41e9afc0ea9c746d0d6f2b4ed1d425d00"
+  },
+  {
+   "file": "XAUUSD_M1_2022_04.csv.gz",
+   "rows": 27405,
+   "sha256": "541b9d129fa0d82edf810ed3eebc4ffa418bd37b8352798320086e16750f2841"
+  },
+  {
+   "file": "XAUUSD_M1_2022_05.csv.gz",
+   "rows": 30127,
+   "sha256": "282c5831038ea62bbebcb4fb9664212f65248159c632403c17f4cfa226d83e1a"
+  },
+  {
+   "file": "XAUUSD_M1_2022_06.csv.gz",
+   "rows": 30055,
+   "sha256": "341499b193b4a61eec3c41e791dd24a0e1bb406bb6a54531cdc10a469323b37a"
+  },
+  {
+   "file": "XAUUSD_M1_2022_07.csv.gz",
+   "rows": 28633,
+   "sha256": "43818dfa9c08298194f8b9c5b37188e86d53e0abc7fbebb5f26e0f73381e3bb2"
+  },
+  {
+   "file": "XAUUSD_M1_2022_08.csv.gz",
+   "rows": 31655,
+   "sha256": "978f5fc41387b67507bc400663bcf4e8bde5b0ae1d45b152638f12cc961aeec1"
+  },
+  {
+   "file": "XAUUSD_M1_2022_09.csv.gz",
+   "rows": 29881,
+   "sha256": "d33fa1bf864342e6d429ef81e39ef147a8c6192a00a82bb5ea86538f2b235547"
+  },
+  {
+   "file": "XAUUSD_M1_2022_10.csv.gz",
+   "rows": 28971,
+   "sha256": "c963615df8f01e4d2ae2e52afa94262e9ba5690cd650a8793fab4d729e90160a"
+  },
+  {
+   "file": "XAUUSD_M1_2022_11.csv.gz",
+   "rows": 29811,
+   "sha256": "9f9a737b562d172749916fc071791d18c7c239709a506fb923687c6e5c5a186d"
+  },
+  {
+   "file": "XAUUSD_M1_2022_12.csv.gz",
+   "rows": 28836,
+   "sha256": "ba3cfb0e0034d85f07ba1e2d37c6b9d25e1eae154b1ffd5ca840f9a6a35bce65"
+  },
+  {
+   "file": "XAUUSD_M1_2023_01.csv.gz",
+   "rows": 28812,
+   "sha256": "c9d9586025ac01fa612b728182d51f0aef829f24864446511c48afc26b3e2ba9"
+  },
+  {
+   "file": "XAUUSD_M1_2023_02.csv.gz",
+   "rows": 27351,
+   "sha256": "9ebc4594a6a7b6c1c0ac915244ae8d034446691880d3fb086d15b7a5a84c709f"
+  },
+  {
+   "file": "XAUUSD_M1_2023_03.csv.gz",
+   "rows": 31586,
+   "sha256": "15925177ac97187785b6f56795ef6f76934b95d03e021d12f68762d76b8b7eca"
+  },
+  {
+   "file": "XAUUSD_M1_2023_04.csv.gz",
+   "rows": 26250,
+   "sha256": "bff401a9f03571398c32062406b8d406b711595d84ace706c2e0d511926336b8"
+  },
+  {
+   "file": "XAUUSD_M1_2023_05.csv.gz",
+   "rows": 31402,
+   "sha256": "40b9303f3916957478e29ffcf053b1a319e5378af04f35a5bec219f2358d890d"
+  },
+  {
+   "file": "XAUUSD_M1_2023_06.csv.gz",
+   "rows": 29914,
+   "sha256": "d622f200da3359153d466337b4695648296fac708f6b8952cd69881d48d13478"
+  },
+  {
+   "file": "XAUUSD_M1_2023_07.csv.gz",
+   "rows": 28846,
+   "sha256": "229a8d9adba217959b60553396e2e946d2a7af98d96f4881a60f3c40e5823548"
+  },
+  {
+   "file": "XAUUSD_M1_2023_08.csv.gz",
+   "rows": 31648,
+   "sha256": "5290b68f9ef7d476817cd55eee821f10114796640c99ef53281c2a14e852165d"
+  },
+  {
+   "file": "XAUUSD_M1_2023_09.csv.gz",
+   "rows": 28554,
+   "sha256": "3f01f156d991a96db83b5874090770106321d275015a048b6d2720cdf46acc2a"
+  },
+  {
+   "file": "XAUUSD_M1_2023_10.csv.gz",
+   "rows": 30387,
+   "sha256": "0bcb49c9f8dbb132f6c8de1476f461dcecef0c2f8bdc7f263bffd6a78e6b176d"
+  },
+  {
+   "file": "XAUUSD_M1_2023_11.csv.gz",
+   "rows": 29754,
+   "sha256": "07de13a50bce236f6bf22f4c92f3200a51b8f60cc63bf894562a8424e99845f7"
+  },
+  {
+   "file": "XAUUSD_M1_2023_12.csv.gz",
+   "rows": 27464,
+   "sha256": "df2611be22038fd1704924017de6f8057928fd6b0c3ca31fa13c55135ff0c9a5"
+  },
+  {
+   "file": "XAUUSD_M1_2024_01.csv.gz",
+   "rows": 30161,
+   "sha256": "6265356560e8d332d1223a1a3f230c3ab07e2c7e01c23eae1e1662dc0267630a"
+  },
+  {
+   "file": "XAUUSD_M1_2024_02.csv.gz",
+   "rows": 28699,
+   "sha256": "ec26a894f550932a87dc2f411ae3f58669b7f1d7ed068316c4aa6ccebbbe0d72"
+  },
+  {
+   "file": "XAUUSD_M1_2024_03.csv.gz",
+   "rows": 27531,
+   "sha256": "0ae8dab9ae457d1af1013fb9b490cd6ba3e3ae51cb864e7689e7abf9b492c3d3"
+  },
+  {
+   "file": "XAUUSD_M1_2024_04.csv.gz",
+   "rows": 28862,
+   "sha256": "4f387d57ed0d5e0cca04d59fcc0fc94f7b490e1197408b217df0f60f240f762d"
+  },
+  {
+   "file": "XAUUSD_M1_2024_05.csv.gz",
+   "rows": 31262,
+   "sha256": "2b06a3062e9c1c4c983e083a92184e5d560f23ea88993eff11fbc40707f6a3ea"
+  },
+  {
+   "file": "XAUUSD_M1_2024_06.csv.gz",
+   "rows": 27412,
+   "sha256": "6b06cb2006c7c9e89fcd33662d7993ccafce562e96fa97d079f852eb6038c575"
+  },
+  {
+   "file": "XAUUSD_M1_2024_07.csv.gz",
+   "rows": 31428,
+   "sha256": "dabadb5944857dd4175781cdb4142e428ba6a98e6afbb2ca0394038e24610ae4"
+  },
+  {
+   "file": "XAUUSD_M1_2024_08.csv.gz",
+   "rows": 30159,
+   "sha256": "ea8ca5c7850bb1fcecc685537812da3af9ef66ffefddc8f780f574b86f0fe42f"
+  },
+  {
+   "file": "XAUUSD_M1_2024_09.csv.gz",
+   "rows": 28804,
+   "sha256": "854a8444169bc3c65c6179209ef1635a3693856fbbd49d6891eb66b67a6813c0"
+  },
+  {
+   "file": "XAUUSD_M1_2024_10.csv.gz",
+   "rows": 31655,
+   "sha256": "3570f6168458f88232c0e568b504bd2ea37df6f732e2531e7060672fe8bc0f15"
+  },
+  {
+   "file": "XAUUSD_M1_2024_11.csv.gz",
+   "rows": 28347,
+   "sha256": "2b9fe0b8a5065ec858cf4649d31f88c8c5e6784ae64c9c3c68762131772ee799"
+  },
+  {
+   "file": "XAUUSD_M1_2024_12.csv.gz",
+   "rows": 28496,
+   "sha256": "184c17ba1b2c3b9e930c1e87e8cdf641b5759d9a2aea773ec8a2db665aec584f"
+  },
+  {
+   "file": "XAUUSD_M1_2025_01.csv.gz",
+   "rows": 30019,
+   "sha256": "e5ec5d4aa36814f584d7fd9d3b62a0d10c31607cbe9dfbc0a57c3553869e6916"
+  },
+  {
+   "file": "XAUUSD_M1_2025_02.csv.gz",
+   "rows": 27351,
+   "sha256": "d3916791dacb3a416fa7434c9d9b87f78810b600bbf32a453b062d50125103ce"
+  },
+  {
+   "file": "XAUUSD_M1_2025_03.csv.gz",
+   "rows": 29013,
+   "sha256": "c5caa9af19d967cced3800bb973be7763ccee8445457739813edc4f496406fb8"
+  },
+  {
+   "file": "XAUUSD_M1_2025_04.csv.gz",
+   "rows": 28847,
+   "sha256": "cb8f2798eeff9b34d00553d0dd835e2d10dd030656805d1da2689feec5ea6f8a"
+  },
+  {
+   "file": "XAUUSD_M1_2025_05.csv.gz",
+   "rows": 29984,
+   "sha256": "4c608166dfd8d40f8c0a3ac826f13b0780a4bc559cda34cec6677f97d670fe8b"
+  },
+  {
+   "file": "XAUUSD_M1_2025_06.csv.gz",
+   "rows": 28780,
+   "sha256": "019f9c516fe3ef12c3ac59a025b92edea67e92cb17d1b94d3e428b4b019193cd"
+  },
+  {
+   "file": "XAUUSD_M1_2025_07.csv.gz",
+   "rows": 31383,
+   "sha256": "8b3e314938e5abf8623694eb7b68b80a2a2754edac21633b0aa16776913568fd"
+  },
+  {
+   "file": "XAUUSD_M1_2025_08.csv.gz",
+   "rows": 28881,
+   "sha256": "5a04027e8f35f04c6ed0a8cf55f00c369ada8191ac369414a1f53e8edf95ee23"
+  },
+  {
+   "file": "XAUUSD_M1_2025_09.csv.gz",
+   "rows": 30096,
+   "sha256": "8048ae62415b069e85c1490709ef6bb61ed9899b0c7ca6562430d9c08920705b"
+  },
+  {
+   "file": "XAUUSD_M1_2025_10.csv.gz",
+   "rows": 31518,
+   "sha256": "89c89ebfdd0ed7bd6b94de321811287c518c1631ee780272e9b3bb1fa87b59c4"
+  },
+  {
+   "file": "XAUUSD_M1_2025_11.csv.gz",
+   "rows": 27227,
+   "sha256": "959bee35aa84b96c2690d323cf7ca937bb3abefed2b8002fc7f994c4ec2cd4e7"
+  },
+  {
+   "file": "XAUUSD_M1_2025_12.csv.gz",
+   "rows": 29982,
+   "sha256": "b3c564c1d9e492e0420ed5a1f9197a806f9882d7625e052d3d92331274cbe62e"
+  },
+  {
+   "file": "XAUUSD_M1_2026_01.csv.gz",
+   "rows": 28729,
+   "sha256": "e2a95a287a9b5777e605bfda74251c39c0a3834d90773d956b35dc2e256d0217"
+  },
+  {
+   "file": "XAUUSD_M1_2026_02.csv.gz",
+   "rows": 27379,
+   "sha256": "20eb33864372826f9f15ca20e8092a793cca131516fb7c5685f276c5e0316761"
+  },
+  {
+   "file": "XAUUSD_M1_2026_03.csv.gz",
+   "rows": 30406,
+   "sha256": "2943efe63d9be8be243662e938646fcd5b4f34bb6602fb39ee014cc9c817fb34"
+  },
+  {
+   "file": "XAUUSD_M1_2026_04.csv.gz",
+   "rows": 28898,
+   "sha256": "2a48298a176f37c5f20fe0aaea579fd8da678a29eb2725c47b2fb718cdd256f2"
+  },
+  {
+   "file": "XAUUSD_M1_2026_05.csv.gz",
+   "rows": 28773,
+   "sha256": "b39232e32539c14ad64c183ae248bcc7af050201a48fa5e6b0894504d0fdfb07"
+  },
+  {
+   "file": "XAUUSD_M1_2026_06.csv.gz",
+   "rows": 30073,
+   "sha256": "5e20abf6dd6c25dbe1c82dfdcc9a4c3392fa7a5647da73aa7bdddd63b7522326"
+  },
+  {
+   "file": "XAUUSD_M1_2026_07.csv.gz",
+   "rows": 31332,
+   "sha256": "c72bac1f1b22b5c37cbf247c1dfca33ecb6f6962fd1db96412e4f73add804e7c"
+  },
+  {
+   "file": "XAUUSD_M1_2026_08.csv.gz",
+   "rows": 29049,
+   "sha256": "0c7f29e8f94fc8e2f9e957ff855bcc5cf5c4ad69031fa72eea191429dcb3761d"
+  },
+  {
+   "file": "XAUUSD_M1_2026_09.csv.gz",
+   "rows": 30157,
+   "sha256": "211de2d24b6b17f5533a330eda6ed19c2645d0c9789fea28da5a363ed1ef43d5"
+  },
+  {
+   "file": "XAUUSD_M1_2026_10.csv.gz",
+   "rows": 30192,
+   "sha256": "138d3be1eed60aa068b2496c63cebfef47db392cccab297c1e887e647bc6f587"
+  }
+ ]
+}

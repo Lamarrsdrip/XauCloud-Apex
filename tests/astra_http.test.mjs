@@ -35,6 +35,15 @@ test('dashboard key routes authenticate, isolate licenses, reject CSRF, and neve
     assert.equal((await req('/api/apex/astra/context',{method:'POST',body:{license:'A',account:'111',snapshot:{}}})).data.status,'DISABLED');
     assert.equal((await req('/api/ea/config?license=A&account=111')).data.apiKey,undefined);
     assert.equal((await req('/api/auth/me',{cookie:a})).data.astra.maskedKey.endsWith('6789'),true);
+    assert.equal((await req('/api/session/lab/new',{method:'POST',body:{mode:'random'}})).status,401);
+    assert.equal((await req('/api/session/lab/new',{method:'POST',cookie:a,body:{mode:'random'},headers:{'sec-fetch-site':'cross-site'}})).status,403);
+    const episode=await req('/api/session/lab/new',{method:'POST',cookie:a,body:{mode:'random',split:'VALIDATION'}});
+    assert.equal(episode.status,200);assert.equal(episode.data.prefix.length,180);assert.equal(episode.data.future,undefined);
+    const route='/api/session/lab/'+episode.data.id;
+    assert.equal((await req(route,{cookie:b})).status,404);
+    assert.equal((await req(route+'/reveal',{method:'POST',cookie:a,body:{}})).status,409);
+    assert.equal((await req(route+'/predict',{method:'POST',cookie:a,body:{source:'ENGINE'}})).status,200);
+    assert.equal((await req(route+'/reveal',{method:'POST',cookie:a,body:{}})).data.future.length,120);
     const events=await fs.readFile(path.join(dir,'events.ndjson'),'utf8').catch(()=> '');assert.ok(!events.includes(fake));
     assert.ok(!(await fs.readFile(path.join(dir,'astra-vault.json'),'utf8')).includes(fake));
     assert.equal((await req('/api/session/astra',{method:'DELETE',cookie:a,body:{}})).data.hasKey,false);

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {referencePatternEvidence} from './reference-pattern-evidence.mjs';
+import {detect,ENGINE_VERSION} from './pattern-engine.mjs';
 
 function fail(){throw new Error('INVALID_MARKET_CONTEXT');}
 function number(x,{min=-1e15,max=1e15}={}){if(typeof x!=='number'||!Number.isFinite(x)||x<min||x>max)fail();return x;}
@@ -137,6 +138,12 @@ export function buildContext(snapshot,{now=Date.now()}={}) {
     forming={isClosed:false,time,open,high,low,close};
   }
   const referencePattern=referencePatternEvidence({bars:m1,quote:q,structure,forming,ticks});
-  return {schemaVersion:1,snapshotId,observedAtMs,symbol,quote:q,account,candles:{m1,m3,m5},forming,referencePattern,
+  // Reference-pattern engine on the same causal prefix (M3 rebuilt from M1 incl. the forming bar).
+  const asBar=x=>({t:x.time,o:x.open,h:x.high,l:x.low,c:x.close});
+  const engine=detect({m1:m1.map(asBar),forming:forming?asBar(forming):null,bid,ask});
+  const patternEngine={engineVersion:ENGINE_VERSION,atrM3:engine.atrM3,authority:'MEASUREMENT_ONLY_NOT_AN_ORDER',
+    candidates:engine.candidates.map(({eventTime,legKey,...c})=>c)};
+  const bridgeVersion=Number.isInteger(snapshot.bridgeVersion)?snapshot.bridgeVersion:1;
+  return {schemaVersion:1,bridgeVersion,snapshotId,observedAtMs,symbol,quote:q,account,candles:{m1,m3,m5},forming,referencePattern,patternEngine,
     higherContext:{m3:summary(m3),m5:summary(m5)},structure,campaign:c,recentTicks:ticks};
 }

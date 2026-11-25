@@ -1,15 +1,19 @@
 import crypto from 'node:crypto';
 
 export const KNOWLEDGE_VERSION = 'tradingcartel-breakfast-v1';
-export const DEFAULT_MODEL = 'gpt-6-astra'; // verified 2026-10-16 at developers.openai.com/api/docs/models/gpt-6-astra
+// gpt-6.2-astra replaced gpt-6-astra as OpenAI's flagship (official model catalog, read 2026-11-25).
+// Saved gpt-6-astra settings stay valid; see astra/models.mjs for the full verified catalog.
+export const DEFAULT_MODEL = 'gpt-6.2-astra';
 // Reasoning models spend latency before answering; decisions expire after 8s.
-export const REASONING_EFFORTS = ['default','none','low','medium','high','xhigh'];
+export const REASONING_EFFORTS = ['default','none','low','medium','high','xhigh','max'];
 export const DEFAULT_REASONING_EFFORT = 'low';
-// Every live request is billed to the user's own key. The server refuses to
-// spend beyond this many model requests per UTC day; native Lifestyle trades on.
-export const DEFAULT_DAILY_REQUEST_LIMIT = 500;
+// Every live request is billed to the user's own key. This is the OWNER's
+// spending ceiling (configurable up to 20000/day), not an analytical limit:
+// screening snapshots that the pattern engine rejects never reach the model and
+// never count. Native Lifestyle trades on if the ceiling is reached.
+export const DEFAULT_DAILY_REQUEST_LIMIT = 2000;
 export function dailyRequestLimit(value=DEFAULT_DAILY_REQUEST_LIMIT) {
-  if(!Number.isInteger(value)||value<10||value>5000) throw new Error('INVALID_DAILY_REQUEST_LIMIT');
+  if(!Number.isInteger(value)||value<10||value>20000) throw new Error('INVALID_DAILY_REQUEST_LIMIT');
   return value;
 }
 export const ACTIONS = ['WAIT','ENTER_BUY','ENTER_SELL','ADD','HOLD','STOP_ADDING','REDUCE','EXIT'];
@@ -37,6 +41,20 @@ export function modelId(value=DEFAULT_MODEL) {
 export function reasoningEffort(value=DEFAULT_REASONING_EFFORT) {
   if(!REASONING_EFFORTS.includes(value)) throw new Error('INVALID_REASONING_EFFORT');
   return value;
+}
+
+// Research settings: deep, slower analysis that never authorises an order by itself.
+export const RESEARCH_EFFORTS = ['default','low','medium','high','xhigh','max'];
+export const DEFAULT_RESEARCH = {researchEnabled:true,researchEffort:'high',researchDailyLimit:300,contextDepth:'deep',executionTimeoutMs:6500};
+export function researchSettings(patch={}) {
+  const out={};
+  if('researchEnabled' in patch){if(typeof patch.researchEnabled!=='boolean')throw new Error('INVALID_RESEARCH_SETTINGS');out.researchEnabled=patch.researchEnabled;}
+  if('researchEffort' in patch){if(!RESEARCH_EFFORTS.includes(patch.researchEffort))throw new Error('INVALID_RESEARCH_SETTINGS');out.researchEffort=patch.researchEffort;}
+  if('researchDailyLimit' in patch){const v=patch.researchDailyLimit;if(!Number.isInteger(v)||v<0||v>5000)throw new Error('INVALID_RESEARCH_SETTINGS');out.researchDailyLimit=v;}
+  if('contextDepth' in patch){if(!['standard','deep'].includes(patch.contextDepth))throw new Error('INVALID_RESEARCH_SETTINGS');out.contextDepth=patch.contextDepth;}
+  // The EA rejects any decision older than 8 s, so execution calls must finish first.
+  if('executionTimeoutMs' in patch){const v=patch.executionTimeoutMs;if(!Number.isInteger(v)||v<2000||v>7500)throw new Error('INVALID_RESEARCH_SETTINGS');out.executionTimeoutMs=v;}
+  return out;
 }
 
 export function validateDecision(value) {

@@ -1,0 +1,57 @@
+{
+ "version":"apex-brain-taxonomy-2026-11-25",
+ "principle":"Recognise the setup WHILE it develops, state what is still missing, and never confuse the reference traders' leverage-driven money results with directional edge. The engine measures structure; the model judges it.",
+ "families":{
+  "V_RECOVERY_FAILURE":{
+   "references":["V2","V4","V5","V6","V7"],
+   "story":"A sharp leg (the 'flush') leaves an origin. Price snaps back fast - a V - into that origin zone or the broken shelf. The first sign that the recovery cannot accept there is the entry; the leg low / imbalance is the target.",
+   "approach":["leg of at least ~3 M3 ATR inside about 12 M3 bars","recovery of >=55% of the leg, reached quickly (a 'V', often one or two large candles)","recovery high at or just under the leg origin, drawn as a box/zone by the traders"],
+   "readiness":["the bar that printed the recovery high is closed and price is >=0.3 ATR off it","failure evidence: a pin/upper wick on the high bar, a close below its midpoint, or an M1 close below the previous M1 low","still close to the high (traders entered 0.9-2.4 points below it)"],
+   "early":"V7 trader sold IN the zone before any bearish displacement (first fill red -67). Early = small risk, frequent heat.",
+   "late":"price already >1.5 ATR below the recovery high, or the leg low is near (V6: room to the prior low was small and the campaign stalled there).",
+   "contradictions":["recovery closes and holds above the origin (acceptance) -> this becomes a breakout","higher lows keep forming under the zone (V8 is that opposite story)","the 2-hour structure is a strong trend in the recovery's direction"],
+   "falseConfirmations":["a single M1 red candle inside a still-rising M3","a wick with no follow-through while lows keep rising"],
+   "invalidation":"above the recovery high (+0.2 ATR); thesis is dead if price accepts above the origin",
+   "targets":"imbalance/FVG left by the recovery candle first, then the leg low ('liquidity below the previous lows')"
+  },
+  "SPIKE_REJECTION":{
+   "references":["V3","V9"],
+   "story":"A near-vertical impulse runs into a NEW local extreme (beyond the last ~20 M3 bars) and cannot hold it. The vertical leg leaves a fair-value gap that the trader expects to be filled.",
+   "approach":["impulse of >=2.2 M3 ATR inside 3 M3 bars","new high/low versus the prior hour","often a news/tick burst (V9 11:27: 782 ticks in a minute)"],
+   "readiness":["pin bar on the extreme or the next M1 closing in its lower half / below the prior low","price 0.3-1.2 ATR off the extreme"],
+   "early":"V3 sold inside the forming spike candle ~3 points under its high.",
+   "late":"price already back at the impulse origin; the FVG is mostly filled.",
+   "contradictions":["the spike candle closes near its high and the next bar extends","a retest of the extreme holds and breaks again"],
+   "falseConfirmations":["first pullback after a breakout of a long range (continuation is common)"],
+   "invalidation":"beyond the spike extreme (+0.2 ATR)",
+   "targets":"the FVG of the impulse, then the impulse origin"
+  },
+  "BREAK_PAUSE_CONTINUATION":{
+   "references":["V1"],
+   "story":"Structure breaks with a displacement candle through a shelf of prior lows. The counter-move is weak: small bodies with rejection wicks that cannot reclaim the shelf. Entry on the break of the pause.",
+   "approach":["M3 close beyond the lowest low of the prior 6 bars with a >=0.6 ATR body","descending context (older highs above the shelf)"],
+   "readiness":["1-5 small pause candles under the broken shelf, at least one with a rejection wick","latest M1 closes through the pause low; not more than 0.8 ATR beyond it"],
+   "early":"V1 entry was at the pause low itself; the engine marked it 5 minutes earlier.",
+   "late":"price far below the pause low or after several pause/break cycles.",
+   "contradictions":["a pause candle closes back above the broken shelf","the break candle is fully retraced"],
+   "falseConfirmations":["a break from a tight range without displacement"],
+   "invalidation":"above the pause high (+0.2 ATR)",
+   "targets":"measured continuation; the trader held for an equity target"
+  },
+  "RECOVERY_CONTINUATION":{
+   "references":["V8"],
+   "story":"After a flush, price builds higher lows back toward the origin of the flush; the origin box / imbalance above is the magnet. Single-example family: low evidential weight.",
+   "approach":["flush of >=3 ATR within ~15 M1 bars","two or more successive higher M1 swing lows","at least 35% of the leg still left to the origin"],
+   "readiness":["M1 closes above the recent micro range"],
+   "contradictions":["a lower low below the recovery base"],
+   "invalidation":"below the last higher low",
+   "targets":"the origin box (V8 closed on the spike into it)"
+  }
+ },
+ "campaign":{
+  "observed":["first entry often red for seconds to a minute","adds while the BASKET is green, frequently in same-price bursts, sometimes above the previous fill","size only grows when floating equity funds it","exit by equity target or bulk close"],
+  "failureModes":["large late adds at the extended low / prior low (V4, V7 10 lots, V9 20 lots)","adding after a pullback has already weakened control"],
+  "apexRules":"Apex keeps its own sizing, protections and duplicate-order rules. The model may HOLD / STOP_ADDING / EXIT / ADD only with fresh same-direction evidence."
+ },
+ "measuredReality":"See base-rates.json: on 2021-2026 M1 data the mechanically detected shapes are not better than random entries after spread on the held-out period. Treat a recognised family as a hypothesis that needs the specific confirming behaviour, not as an edge."
+}

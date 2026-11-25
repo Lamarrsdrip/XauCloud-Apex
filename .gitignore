@@ -18,3 +18,4 @@ data/astra-usage.json
 data/astra-*.tmp-*
 .env.local
 *.ex5
+research/results/*_signals_*.jsonl

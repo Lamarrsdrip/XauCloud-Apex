@@ -1438,15 +1438,55 @@ const server=http.createServer(async(req,res)=>{
     }
 
     // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
+    if(u.pathname.startsWith('/api/session/lab/')){
+      const s=await notificationSession(req,res);if(!s)return;
+      if(!throttle('astra-lab:'+s.lic,ip,20,60_000))return json(res,429,{error:'too_many_lab_requests'});
+      if(req.method!=='GET'){
+        if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
+        if(!String(req.headers['content-type']||'').startsWith('application/json'))return json(res,415,{error:'json_required'});
+      }
+      try{
+        if(req.method==='POST'&&u.pathname==='/api/session/lab/new')return json(res,200,await ASTRA.lab.newEpisode(s.lic,await body(req)));
+        if(req.method==='POST'&&u.pathname==='/api/session/lab/benchmark')return json(res,202,await ASTRA.lab.benchmark(s.lic,await body(req)));
+        const benchmark=u.pathname.match(/^\/api\/session\/lab\/benchmark\/([0-9a-f-]{36})$/);
+        if(benchmark&&req.method==='GET')return json(res,200,await ASTRA.lab.getBenchmark(s.lic,benchmark[1]));
+        const match=u.pathname.match(/^\/api\/session\/lab\/([0-9a-f-]{36})(?:\/(predict|reveal))?$/);
+        if(match){
+          if(req.method==='GET'&&!match[2])return json(res,200,await ASTRA.lab.get(s.lic,match[1]));
+          if(req.method==='POST'&&match[2]==='predict')return json(res,200,await ASTRA.lab.predict(s.lic,match[1],await body(req)));
+          if(req.method==='POST'&&match[2]==='reveal')return json(res,200,await ASTRA.lab.reveal(s.lic,match[1]));
+        }
+        return json(res,404,{error:'not_found'});
+      }catch(e){return json(res,e.httpStatus||(e.safe?409:500),{error:e.safe?e.message:'LAB_ERROR'});}
+    }
     if(u.pathname.startsWith('/api/session/astra')){
       const s=await notificationSession(req,res);if(!s)return;
       if(req.method==='GET'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.settings(s.lic));
+      if(req.method==='GET'&&u.pathname==='/api/session/astra/models')return json(res,200,{models:ASTRA.models});
+      if(req.method==='GET'&&u.pathname==='/api/session/astra/learning')return json(res,200,await ASTRA.learningStats(s.lic));
+      if(req.method==='GET'&&u.pathname==='/api/session/astra/conversations')return json(res,200,{conversations:await ASTRA.conversations.list(s.lic)});
+      const conversation=u.pathname.match(/^\/api\/session\/astra\/conversations\/([0-9a-f-]{36})$/);
+      if(conversation&&req.method==='GET'){const c=await ASTRA.conversations.get(s.lic,conversation[1]);return json(res,c?200:404,c||{error:'not_found'});}
       if(req.method!=='GET'){
         if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
         if(!String(req.headers['content-type']||'').startsWith('application/json'))return json(res,415,{error:'json_required'});
         if(!throttle('astra-settings:'+s.lic,ip,12,60_000))return json(res,429,{error:'too_many_astra_requests'});
       }
+      if(conversation&&req.method==='DELETE')return json(res,200,await ASTRA.conversations.remove(s.lic,conversation[1]));
+      if(conversation&&req.method==='PATCH'){
+        const b=await body(req);if(typeof b.title!=='string'||!b.title.trim()||b.title.length>200)return json(res,400,{error:'invalid_title'});
+        const c=await ASTRA.conversations.rename(s.lic,conversation[1],b.title);return json(res,c?200:404,c||{error:'not_found'});
+      }
       if(req.method==='POST'&&u.pathname==='/api/session/astra/chat'){
+        if(String(req.headers.accept||'').includes('text/event-stream')){
+          const b=await body(req);
+          res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'});
+          const send=(event,data)=>{if(!res.destroyed&&!res.writableEnded)res.write('event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n');};
+          const keep=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write(': keepalive\n\n');},15000);
+          try{const result=await ASTRA.chat(s.lic,b,{onDelta:delta=>send('delta',{delta})});send('done',result);}
+          catch(e){send('error',{error:e.safe?e.message:'AI_ERROR'});}
+          finally{clearInterval(keep);res.end();}return;
+        }
         try{return json(res,200,await ASTRA.chat(s.lic,await body(req)));}
         catch(e){const reason=e.safe?e.message:'AI_ERROR';const status=reason==='INVALID_CHAT_INPUT'||reason==='INVALID_CHAT_IMAGE'?400:reason==='NO_API_KEY'||reason==='SETTINGS_CHANGED'||reason==='CHAT_ALREADY_RUNNING'?409:502;return json(res,status,{error:reason});}
       }
@@ -1454,7 +1494,9 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='DELETE'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.remove(s.lic));
       if(req.method==='POST'&&u.pathname==='/api/session/astra/test'){
         const b=await body(req),fixtures=strategyFixtures();
-        return json(res,200,b.scope==='strategy'?await ASTRA.test(s.lic,fixtures,{scope:'STRATEGY'}):await ASTRA.test(s.lic,[fixtures.find(x=>x.name==='TOO_EARLY')],{scope:'CONNECTION'}));
+        const scope=String(b.scope||'connection').toUpperCase();
+        if(!['CONNECTION','TEXT','VISION','STRATEGY'].includes(scope))return json(res,400,{error:'invalid_scope'});
+        return json(res,200,await ASTRA.test(s.lic,scope==='STRATEGY'?fixtures:[fixtures.find(x=>x.name==='TOO_EARLY')],{scope}));
       }
       return json(res,404,{error:'not_found'});
     }

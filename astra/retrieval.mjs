@@ -2,11 +2,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {selectReferenceObservations} from './reference-observations.mjs';
+import {brainPackage} from './brain.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
-export async function knowledge(context) {
-  const [base,guide]=await Promise.all([fs.readFile(path.join(root,'astra','strategy.md'),'utf8'),fs.readFile(path.join(root,'astra','reference-pattern-guide.md'),'utf8')]);
-  const instructions=base+'\n\n'+guide;
+// Model-independent knowledge: identical for every provider and model.
+export async function knowledge(context,{lessons=[],depth='deep'}={}) {
+  const [base,guide,brainText]=await Promise.all(['strategy.md','reference-pattern-guide.md','brain-instructions.md'].map(f=>fs.readFile(path.join(root,'astra',f),'utf8')));
+  const instructions=brainText+'\n\n'+base+'\n\n'+guide;
+  const brain=brainPackage({candidates:context?.patternEngine?.candidates||[],lessons,
+    limits:depth==='deep'?{examplesPerCandidate:8,episodesPerFamily:3}:{examplesPerCandidate:4,episodesPerFamily:2}});
   const files=['reference-setups.jsonl','reference-adds.jsonl','negative-setups.jsonl','failed-campaigns.jsonl','campaign-sequences.jsonl'];
   const groups=await Promise.all(files.map(async file=>{
     try {
@@ -31,5 +35,5 @@ export async function knowledge(context) {
     .sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,limits[i]).map(x=>x.row));
   const observed=(await fs.readFile(path.join(root,'data','astra','reference-observations-2026-11-25.jsonl'),'utf8')).split('\n').filter(x=>x.trim()).map(JSON.parse);
   examples.push(...selectReferenceObservations(observed,context));
-  return {instructions,examples};
+  return {instructions,examples,brain};
 }

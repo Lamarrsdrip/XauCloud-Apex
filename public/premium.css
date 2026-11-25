@@ -253,3 +253,34 @@ a:hover{text-decoration-color:var(--gold)}
 .apex-chat-attachment{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--text-dim);font-size:11px;margin-bottom:8px}
 .apex-chat-attachment input{max-width:100%;font-size:12px}
 #apex-chat-status{margin-top:8px;min-height:18px}
+
+:root{--bg:#0d1117;--bg-elev:#151b23;--bg-elev-2:#1b2430;--border:#2b3542;--text:#f2f4f7;--text-dim:#b0bac8;--gold:#d8b477}
+.layout,.topbar-inner{max-width:1440px}.overview-title,.page-title{font-size:clamp(23px,3vw,30px);font-weight:690;letter-spacing:-.035em}
+.overview-top{margin-bottom:18px}.overview-eyebrow,.intel-kicker{font-size:10px;letter-spacing:.12em;font-weight:680;color:#c9a66b}
+.overview-desc,.page-sub{font-size:13px}.card,.summary-card,.balance-hero{border-radius:12px;padding:17px;box-shadow:none}
+.balance-hero{min-height:0;background:#151c25}.balance-hero:after{display:none}.balance-figure{font-size:clamp(27px,4vw,37px)}
+.summary-card{min-height:0}.overview-layout{gap:12px}.overview-section{margin-top:20px}.overview-section-head h2{font-size:16px}
+.stat-tile{padding:12px;border-radius:10px}.stat-tile .value{font-size:19px}
+.apex-intel{border:1px solid var(--border);border-radius:12px;background:var(--bg-elev);margin:0 0 18px;overflow:hidden}
+.intel-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:15px 17px 13px}
+.intel-heading h2{margin:4px 0 0;font-size:17px;letter-spacing:-.02em;font-weight:650}.intel-link{color:#e6c58d;text-decoration:none;font-size:12px;font-weight:650;white-space:nowrap}
+.intel-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--border)}
+.intel-grid>div{padding:13px 17px;border-right:1px solid var(--border);min-width:0}.intel-grid>div:last-child{border-right:0}
+.intel-grid span,.intel-grid small{display:block;font-size:11px;color:var(--text-dim)}.intel-grid strong{display:block;font-size:14px;font-weight:650;margin:4px 0;overflow-wrap:anywhere}
+.intel-grid .intel-buy{color:var(--green)}.intel-grid .intel-sell{color:var(--red)}
+.intel-foot{display:flex;justify-content:space-between;gap:8px;border-top:1px solid var(--border);padding:10px 17px;color:var(--text-dim);font-size:11px}.intel-foot a{color:#e6c58d;text-decoration:none}
+.main[data-page="ai"]{padding-top:16px;padding-bottom:16px}
+.apex-ai-chat{max-width:850px;min-height:0;gap:0;height:calc(100dvh - 112px);border:1px solid var(--border);border-radius:14px;background:var(--bg);overflow:hidden}
+.apex-ai-chat header{flex:none;padding:13px 17px;background:var(--bg-elev);gap:10px}.apex-chat-heading{min-width:0}.apex-chat-heading h2{font-size:18px;line-height:1.2}.apex-chat-heading p{font-size:11px}
+.apex-ai-chat header button{font-size:12px;min-height:34px;padding:6px 10px;white-space:nowrap}.apex-chat-thread{flex:1;min-height:0;max-height:none;padding:20px clamp(12px,4vw,34px);gap:20px}
+.apex-chat-assistant,.apex-chat-user{font-size:14px;line-height:1.65;max-width:88%}.apex-chat-assistant{max-width:100%;padding:0}.apex-chat-user{border:0;background:var(--bg-elev-2);padding:10px 13px;border-radius:14px 14px 4px 14px}
+.apex-chat-welcome{margin:auto 0;max-width:490px}.apex-chat-welcome h3{font-size:clamp(22px,4vw,31px);line-height:1.2;letter-spacing:-.04em;margin:10px 0}.apex-chat-welcome p{color:var(--text-dim);margin:0 0 14px}
+.apex-chat-suggestion{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev);font-size:13px;padding:10px 12px;margin:7px 0}.apex-chat-suggestion:hover{border-color:var(--gold)}.apex-chat-suggestion:disabled{opacity:.45}
+#apex-chat-form{flex:none;padding:10px 14px 12px;border-top:1px solid var(--border);background:var(--bg-elev)}.apex-chat-compose{align-items:center;gap:8px}.apex-chat-compose textarea{background:var(--bg);font-size:16px;min-height:44px;max-height:120px;resize:none;border-radius:10px}
+.apex-chat-compose button{min-height:42px;padding:8px 12px;font-size:13px;border-radius:9px;white-space:nowrap}.apex-attach-button{display:grid;place-items:center;flex:0 0 36px;height:36px;border:1px solid var(--border);border-radius:10px;font-size:24px;cursor:pointer}
+.apex-file-input{position:absolute;opacity:0;width:1px;height:1px;min-height:0;padding:0}.apex-chat-file{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:11px}.apex-chat-file[hidden]{display:none}
+.apex-chat-file img{width:44px;height:44px;object-fit:cover;border-radius:5px}.apex-chat-file span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.apex-chat-file button{margin-left:auto;background:none;border:0;font-size:22px}
+.apex-chat-chart{display:block;max-width:100%;max-height:220px;object-fit:contain;border-radius:8px;margin-bottom:8px}
+#apex-chat-status{font-size:11px;min-height:14px;margin-top:6px;overflow-wrap:anywhere}.apex-chat-note{margin:8px 12px;font-size:12px}
+@media(max-width:899px){.main[data-page="ai"]{padding:0 0 calc(76px + var(--safe-b))}.apex-ai-chat{height:calc(100dvh - 136px - var(--safe-t) - var(--safe-b));min-height:260px;border:0;border-radius:0}.intel-grid{grid-template-columns:1fr 1fr}.intel-grid>div:nth-child(2){border-right:0}.intel-grid>div:nth-child(-n+2){border-bottom:1px solid var(--border)}.intel-grid>div{padding:11px 13px}.bottomnav .navitem{font-size:10px;min-width:0;min-height:54px;padding:6px 2px}.intel-heading{padding:13px}.intel-heading h2{font-size:15px}.intel-foot{padding:10px 13px}.overview-layout{grid-template-columns:1fr}.apex-chat-heading p{font-size:10px}}
+@media(max-width:380px){.apex-ai-chat header{padding:10px}.apex-chat-heading p{display:none}.intel-link{font-size:11px}.bottomnav .navitem{font-size:9px}}

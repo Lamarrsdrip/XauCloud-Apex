@@ -1639,7 +1639,7 @@ const server=http.createServer(async(req,res)=>{
       const file=u.pathname.slice(1);
       const types={'push-sw.js':'application/javascript; charset=utf-8','notifications-ui.js':'application/javascript; charset=utf-8','astra-ui.js':'application/javascript; charset=utf-8','premium.css':'text/css; charset=utf-8','manifest.webmanifest':'application/manifest+json; charset=utf-8','apex-icon.svg':'image/svg+xml'};
       const data=await fs.readFile(path.join(__dirname,'public',file));
-      res.writeHead(200,{'content-type':types[file]||'application/octet-stream','cache-control':file==='push-sw.js'?'no-cache':'public, max-age=300'});
+      res.writeHead(200,{'content-type':types[file]||'application/octet-stream','cache-control':['push-sw.js','astra-ui.js','premium.css'].includes(file)?'no-cache':'public, max-age=300'});
       return res.end(data);
     }
 

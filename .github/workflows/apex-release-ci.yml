@@ -34,3 +34,10 @@ jobs:
       - run: node --check server.mjs
       - run: node --check release-store.mjs
       - run: npm test
+      - run: npm install --no-save --package-lock=false playwright
+      - run: npx playwright install --with-deps chromium
+      - run: node tests/browser-apex-ui.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apex-browser-screenshots
+          path: apex-*.png

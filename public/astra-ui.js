@@ -84,33 +84,35 @@
     document.getElementById('astra-test').onclick=function(){test('connection');};
     document.getElementById('astra-checks').onclick=function(){test('strategy');};
   }
+  var state={identity:null,history:[],busy:false,epoch:0,refresh:null,status:''};
+  function resetChat(){state.epoch++;state.identity=null;state.history=[];state.busy=false;state.refresh=null;state.status='';}
   function chatPage(me){
-    var hasKey=me.astra&&me.astra.hasKey;
-    return '<section class="apex-ai-chat"><header><div class="apex-ai-mark" aria-hidden="true">✦</div><div><h2>Apex AI</h2><p>Gold setup research · Reference pattern intelligence</p></div><button type="button" id="apex-chat-clear" class="btn btn-ghost">Clear</button></header>'
-      +(hasKey?'':'<div class="apex-chat-note">Connect your API key in <a href="#settings">Settings</a> to use Apex AI.</div>')
-      +'<div class="apex-chat-thread" id="apex-chat-thread" role="log" aria-live="polite"><div class="apex-chat-assistant">Send a gold chart or ask me to investigate a setup. I can compare it with Apex’s reference patterns and available market evidence.</div></div>'
-      +'<form id="apex-chat-form"><div class="apex-chat-attachment"><input type="file" id="apex-chat-image" accept="image/png,image/jpeg" aria-label="Attach gold chart"><span>PNG or JPEG · up to 1 MB</span></div><div class="apex-chat-compose"><textarea id="apex-chat-message" aria-label="Message Apex AI" placeholder="Ask about a gold setup…" rows="2" maxlength="4000" '+(hasKey?'':'disabled')+'></textarea><button type="submit" id="apex-chat-send" class="btn btn-primary" '+(hasKey?'':'disabled')+'>Send</button></div><div id="apex-chat-status" class="hint" role="status"></div></form></section>';
+    var id=String((me.license||{}).key||(me.license||{}).account||'session');if(state.identity!==id){resetChat();state.identity=id;}
+    var key=!!(me.astra&&me.astra.hasKey);
+    return '<section class="apex-ai-chat"><header><div class="apex-ai-mark">✦</div><div class="apex-chat-heading"><h2>Apex AI</h2><p>Gold setup &amp; chart research</p></div><button type="button" id="apex-chat-clear" class="btn btn-ghost">New chat</button></header>'
+    +(key?'':'<div class="apex-chat-note">Connect your API key in <a href="#settings">Settings → Astra AI</a> to begin.</div>')
+    +'<div class="apex-chat-thread" id="apex-chat-thread" role="log" aria-live="polite"></div><form id="apex-chat-form"><div id="apex-chat-preview" class="apex-chat-file" hidden><img id="apex-chat-thumb" alt="Chart preview"><span id="apex-chat-name"></span><button id="apex-chat-remove" type="button" aria-label="Remove chart">×</button></div><div class="apex-chat-compose"><label class="apex-attach-button" for="apex-chat-image" title="Attach a gold chart">＋</label><input class="apex-file-input" type="file" id="apex-chat-image" accept="image/png,image/jpeg" aria-label="Attach gold chart"><textarea id="apex-chat-message" aria-label="Message Apex AI" placeholder="Ask about a gold setup…" rows="2" maxlength="4000" '+(key?'':'disabled')+'></textarea><button id="apex-chat-send" type="submit" class="btn btn-primary" '+(key?'':'disabled')+'>Send ↑</button></div><div id="apex-chat-status" class="hint" role="status"></div></form></section>';
   }
-  function bindChat(){
-    var thread=document.getElementById('apex-chat-thread'),form=document.getElementById('apex-chat-form');
-    if(!thread||!form)return;
-    var message=document.getElementById('apex-chat-message'),attachment=document.getElementById('apex-chat-image'),send=document.getElementById('apex-chat-send'),status=document.getElementById('apex-chat-status'),clear=document.getElementById('apex-chat-clear');
-    var history=[],busy=false;
-    function append(role,text){var node=document.createElement('div');node.className='apex-chat-'+role;node.textContent=text;thread.appendChild(node);thread.scrollTop=thread.scrollHeight;}
-    function readImage(file){return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(reader.result);};reader.onerror=reject;reader.readAsDataURL(file);});}
-    clear.onclick=function(){if(busy)return;history=[];thread.textContent='';status.textContent='';};
-    form.onsubmit=async function(e){e.preventDefault();var value=message.value.trim();if(!value||busy)return;
-      var file=attachment.files[0];if(file&&(file.size>1000000||!['image/png','image/jpeg'].includes(file.type))){status.textContent='Choose a PNG or JPEG chart smaller than 1 MB.';return;}
-      busy=true;send.disabled=true;clear.disabled=true;status.textContent='Researching the setup…';
-      try{
-        var image=file?await readImage(file):null;
-        append('user',value+(file?' · Chart attached':''));message.value='';attachment.value='';
-        var result=await request('POST','/api/session/astra/chat',{message:value,image:image,history:history.slice(-8)});
-        append('assistant',result.answer);history.push({role:'user',text:value},{role:'assistant',text:result.answer.slice(0,6000)});history=history.slice(-8);
-        status.textContent=result.marketStatus==='RECENT_SNAPSHOT'?'Market snapshot: '+result.observedAt:result.marketStatus==='HISTORICAL_SNAPSHOT'?'Historical snapshot: '+result.observedAt:'No Apex market snapshot available';
-      }catch(error){status.textContent='Unable to complete research: '+label(error.message);}
-      finally{busy=false;send.disabled=false;clear.disabled=false;}
+  function bindChat(me){
+    var thread=document.getElementById('apex-chat-thread'),form=document.getElementById('apex-chat-form');if(!thread||!form)return;
+    var message=document.getElementById('apex-chat-message'),attachment=document.getElementById('apex-chat-image'),send=document.getElementById('apex-chat-send'),status=document.getElementById('apex-chat-status'),clear=document.getElementById('apex-chat-clear'),preview=document.getElementById('apex-chat-preview'),thumb=document.getElementById('apex-chat-thumb');
+    var key=!!(me.astra&&me.astra.hasKey),image=null,selection=0;
+    function append(role,text,url){var node=document.createElement('div');node.className='apex-chat-'+role;if(url){var img=document.createElement('img');img.src=url;img.alt='Uploaded gold chart';img.className='apex-chat-chart';node.appendChild(img);}var body=document.createElement('div');body.textContent=text;node.appendChild(body);thread.appendChild(node);}
+    function render(){if(!thread.isConnected)return;thread.textContent='';
+      if(!state.history.length&&!state.busy){var w=document.createElement('div');w.className='apex-chat-welcome';w.innerHTML='<span class="intel-kicker">REFERENCE PATTERN DESK</span><h3>Find the setup.<br>Understand the move.</h3><p>Research a gold chart, developing rejection or active campaign.</p>';['Recognize a setup on my chart','Explain the latest Apex decision','Compare reversal and continuation'].forEach(function(q){var b=document.createElement('button');b.type='button';b.className='apex-chat-suggestion';b.textContent=q;b.disabled=!key;b.onclick=function(){message.value=q;message.focus();};w.appendChild(b);});thread.appendChild(w);}
+      state.history.forEach(function(m){append(m.role,m.text,m.image);});if(state.busy)append('assistant','Researching market evidence…');send.disabled=!key||state.busy;clear.disabled=state.busy;status.textContent=state.status;thread.scrollTop=thread.scrollHeight;}
+    state.refresh=render;render();
+    function clearImage(){selection++;image=null;attachment.value='';preview.hidden=true;thumb.removeAttribute('src');}
+    attachment.onchange=function(){var f=attachment.files[0],n=++selection;image=null;preview.hidden=true;if(!f)return;if(f.size>1000000||!['image/png','image/jpeg'].includes(f.type)){clearImage();status.textContent='Choose a PNG or JPEG under 1 MB.';return;}var r=new FileReader();r.onload=function(){if(n!==selection||!thread.isConnected)return;image=r.result;thumb.src=image;document.getElementById('apex-chat-name').textContent=f.name;preview.hidden=false;};r.onerror=function(){clearImage();status.textContent='Unable to read chart.';};r.readAsDataURL(f);};
+    document.getElementById('apex-chat-remove').onclick=clearImage;
+    clear.onclick=function(){if(state.busy)return;state.history=[];state.status='';clearImage();render();};
+    form.onsubmit=async function(e){e.preventDefault();var value=message.value.trim();if(!value&&image)value='Analyze this gold chart and identify the developing setup.';if(!value||state.busy||!key)return;if(attachment.files[0]&&!image){status.textContent='Chart still loading.';return;}
+      var selected=image,history=state.history.slice(-8).map(function(m){return {role:m.role,text:m.text.slice(0,6000)};}),epoch=state.epoch;
+      state.busy=true;state.status='';state.history.push({role:'user',text:value,image:selected});message.value='';clearImage();render();
+      try{var result=await request('POST','/api/session/astra/chat',{message:value,image:selected,history:history});if(epoch!==state.epoch)return;state.history.push({role:'assistant',text:result.answer});state.status=result.marketStatus==='RECENT_SNAPSHOT'?'Snapshot at request: '+result.observedAt:result.marketStatus==='HISTORICAL_SNAPSHOT'?'Historical snapshot: '+result.observedAt:'Chart and reference research · No recent Apex snapshot';}
+      catch(error){if(epoch!==state.epoch)return;state.status='Unable to complete research: '+label(error.message);state.history.pop();if(thread.isConnected)message.value=value;}
+      finally{if(epoch===state.epoch){state.busy=false;state.history=state.history.slice(-32);if(state.refresh)state.refresh();}}
     };
   }
-  window.AstraUI={card:card,bind:bind,chatPage:chatPage,bindChat:bindChat};
+  window.AstraUI={card:card,bind:bind,chatPage:chatPage,bindChat:bindChat,resetChat:resetChat};
 })();

@@ -212,7 +212,7 @@ button{cursor:pointer}
 .container{max-width:640px}
 .center-note{text-align:center;color:var(--text-faint);font-size:12.5px;margin-top:18px}
 </style>
-<link rel="stylesheet" href="/premium.css?v=2026-11-18" media="all">
+<link rel="stylesheet" href="/premium.css?v=2026-11-25-desk" media="all">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#d8b15a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -251,7 +251,7 @@ button{cursor:pointer}
 
 <div class="toast" id="toast"></div>
 
-<script src="/astra-ui.js"></script>
+<script src="/astra-ui.js?v=2026-11-25-desk"></script>
 <script>
 (function(){
 'use strict';
@@ -401,6 +401,7 @@ document.getElementById('login-form').addEventListener('submit', function(e){
 
 function logout(){
   api('/api/auth/logout', {method:'POST'}).then(function(){
+    if(window.AstraUI&&window.AstraUI.resetChat)window.AstraUI.resetChat();
     STATE.me = null;
     stopPolling();
     showLogin();
@@ -416,7 +417,7 @@ function startPolling(){
       renderStatusPills();
       if (['dashboard','campaigns','history','learning'].indexOf(STATE.page)>=0) renderPage();
     }).catch(function(e){
-      if (e.status===401){ STATE.me=null; stopPolling(); showLogin(); }
+      if (e.status===401){if(window.AstraUI&&window.AstraUI.resetChat)window.AstraUI.resetChat(); STATE.me=null; stopPolling(); showLogin(); }
     });
   }, 8000);
 }
@@ -467,11 +468,12 @@ function renderStatusPills(){
 function renderPage(){
   var main = document.getElementById('main');
   var me = STATE.me || {};
+  main.setAttribute('data-page',STATE.page);
   if (STATE.page==='dashboard') main.innerHTML = pageDashboard(me);
   else if (STATE.page==='campaigns') main.innerHTML = pageCampaigns(me);
   else if (STATE.page==='history') main.innerHTML = pageHistory(me);
   else if (STATE.page==='learning') main.innerHTML = pageLearning(me);
-  else if (STATE.page==='ai') {main.innerHTML=window.AstraUI.chatPage(me);window.AstraUI.bindChat();}
+  else if (STATE.page==='ai') {if(window.AstraUI&&typeof window.AstraUI.chatPage==='function'&&typeof window.AstraUI.bindChat==='function'){main.innerHTML=window.AstraUI.chatPage(me);window.AstraUI.bindChat(me);}else{main.innerHTML='<section class="card"><h1>Apex AI</h1><p>The research interface could not load. Reload to retrieve the current version.</p><button id="reload-ai" class="btn btn-primary">Reload Apex</button></section>';document.getElementById('reload-ai').onclick=function(){location.reload();};}}
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
@@ -510,9 +512,10 @@ function pageDashboard(me){
   var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{};
   var broker=acc.broker||'Broker not reported', account=acc.account||lic.account||'Not connected';
   var html='<div class="overview-top"><div><div class="overview-eyebrow">XauCloud Apex</div>'
-    +'<h1 class="overview-title">Your overview</h1>'
-    +'<div class="overview-desc">Your gold trading activity, account balance and Apex status in one place.</div></div>'
+    +'<h1 class="overview-title">Command center</h1>'
+    +'<div class="overview-desc">Gold setup intelligence and campaign execution.</div></div>'
     +'<div class="overview-meta">Last account update: '+esc(fmtAgo(acc.asOf||mt5.lastSeen))+'</div></div>';
+  html+=apexIntelligencePanel(me);
   if(!me.dataAvailable){
     html+=dataUnavailableCard(me);
     if(lic.status==='ACTIVE')html+='<div class="overview-inline-control"><div><div class="control-title">Get Apex connected</div>'
@@ -546,6 +549,19 @@ function pageDashboard(me){
   return html;
 }
 
+function apexIntelligencePanel(me){
+  var a=me.astra||{},d=a.lastDecision||{},s=me.setupStatus||{},camp=me.campaign;
+  var state=!a.hasKey?'Not configured':!a.enabled?'Research only':a.status==='ASTRA_ACTIVE'?'Decision recorded':a.status==='ASTRA_READY'?'Ready':String(a.status||'Checking').replace(/_/g,' ');
+  var owner=camp&&camp.strategyOwner?camp.strategyOwner==='ASTRA'?'Apex AI':'Native Apex':'No active campaign';
+  var side=d.direction==='BUY'||d.direction==='SELL'?d.direction:s.direction==='BUY'||s.direction==='SELL'?s.direction:'—';
+  var phase=s.state?String(s.state).replace(/_/g,' '):'Not reported';
+  return '<section class="apex-intel" aria-label="Apex intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / STRATEGY INTELLIGENCE</span><h2>Market &amp; campaign desk</h2></div><a class="intel-link" href="#ai">Open AI research ↗</a></div>'
+  +'<div class="intel-grid"><div><span>Setup phase</span><strong>'+esc(phase)+'</strong><small>Native telemetry</small></div>'
+  +'<div><span>Direction</span><strong class="'+(side==='BUY'?'intel-buy':side==='SELL'?'intel-sell':'')+'">'+esc(side)+'</strong><small>Last reported</small></div>'
+  +'<div><span>AI status</span><strong>'+esc(state)+'</strong><small>'+esc(d.action?String(d.action).replace(/_/g,' '):'No decision')+'</small></div>'
+  +'<div><span>Strategy owner</span><strong>'+esc(owner)+'</strong><small>Campaign control</small></div></div>'
+  +'<div class="intel-foot"><span>Reference patterns · chart research</span><a href="#settings">Configure model</a></div></section>';
+}
 function overviewTradingCard(me){
   var camp=me.campaign, setup=me.setupStatus||{}, currency=(me.account||{}).currency;
   var desired=(me.control&&me.control.desired||{}).armed===true;
@@ -797,7 +813,7 @@ function wireDashboardControls(){
 
 // ---------- Campaigns ----------
 function pageCampaigns(me){
-  var html = '<h1 class="page-title">Trades</h1><p class="page-sub">Your current gold trading positions and any setup Apex is checking.</p>';
+  var html = '<h1 class="page-title">Trades</h1><p class="page-sub">Open positions, setup state and strategy ownership.</p>'+apexIntelligencePanel(me);
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   if (me.campaign) html += campaignProgressCard(me.campaign, (me.account||{}).currency) + campaignSummaryCard(me.campaign, (me.account||{}).currency, true);
   else html += watchingCard(me);

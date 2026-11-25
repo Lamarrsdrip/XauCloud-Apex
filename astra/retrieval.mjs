@@ -5,7 +5,8 @@ import {selectReferenceObservations} from './reference-observations.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
 export async function knowledge(context) {
-  const instructions=await fs.readFile(path.join(root,'astra','strategy.md'),'utf8');
+  const [base,guide]=await Promise.all([fs.readFile(path.join(root,'astra','strategy.md'),'utf8'),fs.readFile(path.join(root,'astra','reference-pattern-guide.md'),'utf8')]);
+  const instructions=base+'\n\n'+guide;
   const files=['reference-setups.jsonl','reference-adds.jsonl','negative-setups.jsonl','failed-campaigns.jsonl','campaign-sequences.jsonl'];
   const groups=await Promise.all(files.map(async file=>{
     try {
@@ -13,11 +14,13 @@ export async function knowledge(context) {
       return rows.map(row=>({sourceFile:file,...row}));
     }catch(e){if(e.code==='ENOENT')return [];throw new Error('KNOWLEDGE_PACKAGE_INVALID');}
   }));
-  const direction=context.campaign.direction!=='NONE'?context.campaign.direction:
-    context.structure.approach.impulseAtr>0?'SELL':'BUY';
+  const direction=context.campaign.positions.length?context.campaign.direction:null;
   const rank=row=>{
     const serialized=JSON.stringify(row).toUpperCase();
-    let score=serialized.includes(direction)?3:0;
+    let score=direction&&row.direction===direction?3:0;
+    if(context.structure.lowerFailedAcceptance&&row.direction==='BUY')score+=2;
+    if(context.structure.failedBullishRecovery&&row.direction==='SELL')score+=2;
+    if(context.structure.failedBearishRecovery&&row.direction==='BUY')score+=2;
     if(context.campaign.positions.length&&/ADD|CONTINUATION|COUNTER/.test(serialized))score+=4;
     if(context.structure.upperFailedAcceptance&&/REJECTION|SWEEP/.test(serialized))score+=2;
     return score;

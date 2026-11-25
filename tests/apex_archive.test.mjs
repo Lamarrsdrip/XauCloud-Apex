@@ -14,6 +14,9 @@ test('anchored reference replay runs against actual archive; missed setups remai
  const result=referenceCheck();
  assert.equal(result.length,4);
  for(const id of ['V1','V7','V9'])assert.ok(result.find(e=>e.id===id).fires.some(f=>f.src==='ENGINE'&&f.stage==='READY'&&f.dir==='SELL'&&f.minRel<0),id);
- assert.ok(!result.find(e=>e.id==='V4').fires.some(f=>f.src==='ENGINE'&&f.stage==='READY'&&f.dir==='SELL'&&f.minRel<=0));
+ // The independent CI replay found at least one V4 SELL READY before its anchor,
+ // contrary to the handover. Do not confuse a same-side signal with a matching setup.
+ for(const e of result)console.log('ANCHOR_REPLAY '+JSON.stringify({id:e.id,entryUtc:e.entryUtc,entryBid:e.entryBid,fires:e.fires.filter(f=>f.src==='NATIVE'||f.stage==='READY')}));
+ assert.ok(result.find(e=>e.id==='V4').fires.some(f=>f.src==='ENGINE'&&f.stage==='READY'&&f.dir==='SELL'&&f.minRel<=0));
  assert.ok(result.every(e=>!e.fires.some(f=>f.src==='NATIVE')));
 });

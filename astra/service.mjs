@@ -6,6 +6,7 @@ import {buildContext} from './context.mjs';
 import {DECISION_SCHEMA,KNOWLEDGE_VERSION,bindDecision,validateDecision} from './contract.mjs';
 import {knowledge} from './retrieval.mjs';
 import {callAstraChat,validateChatInput} from './chat.mjs';
+import {providerForKey,assertProviderModel,callAnthropicDecision} from './providers.mjs';
 
 const EVENT_ACTION={ENTER_BUY:'ASTRA_ENTRY',ENTER_SELL:'ASTRA_ENTRY',ADD:'ASTRA_ADD',HOLD:'ASTRA_HOLD',
   STOP_ADDING:'ASTRA_STOP_ADDING',EXIT:'ASTRA_EXIT',REDUCE:'ASTRA_STOP_ADDING',WAIT:'ASTRA_SETUP_WATCH'};
@@ -50,6 +51,8 @@ export async function callOpenAI({key,model,effort='default',context,fetchImpl=f
     throw failure('AI_ERROR');
   }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
 }
+
+export function callStrategyModel(args){const provider=providerForKey(args.key);assertProviderModel(provider,args.model);return provider==='anthropic'?callAnthropicDecision(args):callOpenAI(args);}
 
 export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clock=Date.now,timeoutMs=6000}={}) {
   const vault=createAstraVault(dataDir),jobs=new Map(),last=new Map(),running=new Map(),recent=new Map();
@@ -135,7 +138,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
       await event(license,'ASTRA_REQUEST',{decisionId:id,snapshotId:context.snapshotId,model:settings.model});
       job.promise=(async()=>{
         try {
-          const raw=await vault.withKey(license,key=>callOpenAI({key,model:settings.model,effort:settings.reasoningEffort,context,fetchImpl,timeoutMs,signal:job.controller.signal}));
+          const raw=await vault.withKey(license,key=>callStrategyModel({key,model:settings.model,effort:settings.reasoningEffort,context,fetchImpl,timeoutMs,signal:job.controller.signal}));
           const current=await vault.settings(license);
           if(current.revision!==settings.revision||!current.enabled||job.controller.signal.aborted)return;
           const decision=bindDecision(raw,context,{now:clock(),requestId:id});
@@ -177,7 +180,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
         const started=clock();
         try {
           const context=buildContext(item.snapshot,{now:clock()});
-          const raw=await vault.withKey(license,key=>callOpenAI({key,model:settings.model,effort:settings.reasoningEffort,context,fetchImpl,timeoutMs:20000}));
+          const raw=await vault.withKey(license,key=>callStrategyModel({key,model:settings.model,effort:settings.reasoningEffort,context,fetchImpl,timeoutMs:20000}));
           // Also apply executable contract rules; tests do not submit to MT5.
           bindDecision(raw,context,{now:context.observedAtMs,requestId:crypto.randomUUID()});
           const latencyMs=clock()-started;

@@ -34,7 +34,7 @@ export function createAstraVault(dataDir) {
   const identity=license=>crypto.createHash('sha256').update(license).digest('hex');
   function view(rec={}) {
     return {enabled:rec.enabled===true,hasKey:!!rec.ciphertext,model:rec.model||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:rec.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,
-      maskedKey:rec.ciphertext?'sk-••••••••••••'+rec.suffix:null,revision:rec.revision||0};
+      provider:rec.provider||'openai',maskedKey:rec.ciphertext?'sk-••••••••••••'+rec.suffix:null,revision:rec.revision||0};
   }
   return {
     async settings(license){return view((await read())[identity(license)]);},
@@ -54,10 +54,11 @@ export function createAstraVault(dataDir) {
           const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',await master(!existingCiphertext),iv);
           cipher.setAAD(Buffer.from(id));
           rec.ciphertext=Buffer.concat([cipher.update(patch.apiKey,'utf8'),cipher.final()]).toString('base64');
-          rec.iv=iv.toString('base64');rec.tag=cipher.getAuthTag().toString('base64');rec.suffix=patch.apiKey.slice(-4);
+          rec.iv=iv.toString('base64');rec.tag=cipher.getAuthTag().toString('base64');rec.suffix=patch.apiKey.slice(-4);rec.provider=patch.apiKey.startsWith('sk-ant-')?'anthropic':'openai';
         }
         if('enabled'in patch)rec.enabled=patch.enabled;
         if('model'in patch)rec.model=patch.model;
+        if(rec.ciphertext&&((rec.provider==='anthropic')!==/^claude-/i.test(rec.model||DEFAULT_MODEL)))throw safeError('PROVIDER_MODEL_MISMATCH');
         if('reasoningEffort'in patch)rec.reasoningEffort=patch.reasoningEffort;
         if('dailyRequestLimit'in patch)rec.dailyRequestLimit=patch.dailyRequestLimit;
         rec.revision=(rec.revision||0)+1;

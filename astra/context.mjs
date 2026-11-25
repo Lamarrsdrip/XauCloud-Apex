@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {referencePatternEvidence} from './reference-pattern-evidence.mjs';
 
 function fail(){throw new Error('INVALID_MARKET_CONTEXT');}
 function number(x,{min=-1e15,max=1e15}={}){if(typeof x!=='number'||!Number.isFinite(x)||x<min||x>max)fail();return x;}
@@ -135,6 +136,7 @@ export function buildContext(snapshot,{now=Date.now()}={}) {
     if(low<=0||low>Math.min(open,close)||high<Math.max(open,close))fail();
     forming={isClosed:false,time,open,high,low,close};
   }
-  return {schemaVersion:1,snapshotId,observedAtMs,symbol,quote:q,account,candles:{m1,m3,m5},forming,
+  const referencePattern=referencePatternEvidence({bars:m1,quote:q,structure,forming,ticks});
+  return {schemaVersion:1,snapshotId,observedAtMs,symbol,quote:q,account,candles:{m1,m3,m5},forming,referencePattern,
     higherContext:{m3:summary(m3),m5:summary(m5)},structure,campaign:c,recentTicks:ticks};
 }

@@ -19,18 +19,18 @@
     html+='<p class="settings-section-intro" style="margin:18px 0">Astra can help evaluate trade setups. If it is switched off or unavailable, Apex uses its native trading rules. Enabling AI does not guarantee profitable trades.</p>';
     html+='<div class="overview-inline-control" style="margin:0 0 21px"><div>'
       +'<label class="control-title" for="astra-enabled" style="display:block;cursor:pointer">Use Astra AI</label>'
-      +'<div class="control-desc">'+(hasKey?'A key is securely saved for this license.':'Connect your own OpenAI API key to enable Astra.')+'</div>'
+      +'<div class="control-desc">'+(hasKey?'A key is securely saved for this license.':'Connect your OpenAI or Anthropic API key to enable Apex AI.')+'</div>'
       +'</div><label class="switch"><input id="astra-enabled" type="checkbox" aria-label="Enable Astra AI" '+(enabled?'checked':'')+'>'
       +'<span class="track"></span><span class="knob"></span></label></div>';
-    html+='<div class="field"><label for="astra-key">OpenAI API key</label>'
+    html+='<div class="field"><label for="astra-key">Model API key</label>'
       +'<input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Paste your API key here')+'">'
-      +'<div class="hint">Create a key in <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI Platform</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
+      +'<div class="hint">Use <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI</a> or <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Anthropic</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
     html+='<details class="settings-details" style="margin-bottom:18px"><summary><span>'
       +'<span class="details-name">AI usage & model</span>'
       +'<span class="details-desc" style="display:block">Choose a supported model and control API requests.</span>'
       +'</span></summary><div class="details-content" style="padding-top:21px">'
       +'<div class="field"><label for="astra-model">Model</label><input id="astra-model" value="'+esc(a.model||'gpt-6-astra')+'" autocomplete="off" spellcheck="false">'
-      +'<div class="hint">Use a model available through your own OpenAI API account.</div></div>'
+      +'<div class="hint">Use the exact model ID available to your OpenAI or Anthropic account. A Claude model needs an Anthropic key.</div></div>'
       +'<div class="field"><label for="astra-limit">Daily live-decision request limit</label><input id="astra-limit" type="number" min="10" max="5000" step="10" value="'+esc(a.dailyRequestLimit||500)+'">'
       +'<div class="hint">Live decision requests are billed by your API provider. Research chat is billed separately and does not consume this live-decision allowance. When reached, native trading takes over until the next UTC day.</div></div>';
     var efforts=['low','medium','high','none','default'],eff=a.reasoningEffort||'low';

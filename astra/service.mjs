@@ -10,6 +10,8 @@ import {providerForKey,assertProviderModel,callAnthropicDecision,callModel} from
 import {createLearning} from './learning.mjs';
 import {BRAIN_VERSION} from './brain.mjs';
 import {MODELS,modelInfo} from './models.mjs';
+import {budgetReached} from './contract.mjs';
+const providerForModel=model=>/^claude-/i.test(model)?'anthropic':'openai';
 import {visionTestChart} from './chart-png.mjs';
 import {createConversations} from './conversations.mjs';
 import {createLab,LAB_SCHEMA} from '../research/lab.mjs';
@@ -61,18 +63,19 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
   const learning=createLearning(dataDir,{clock}),chats=createConversations(dataDir,{clock});
   const lab=createLab(dataDir,{clock,learning,modelPredict:async(license,e)=>{
     const settings=await vault.settings(license);
-    const model=e.requestedModel||settings.model,info=modelInfo(model),provider=info?.provider||(model.startsWith('claude-')?'anthropic':'openai');
+    const model=e.requestedModel||settings.researchModel||settings.model,info=modelInfo(model),provider=info?.provider||(model.startsWith('claude-')?'anthropic':'openai');
     if(!settings.availableProviders.includes(provider))throw failure('NO_API_KEY');
-    if(((await usageToday(license)).research||0)>=settings.researchDailyLimit)throw failure('RESEARCH_BUDGET_REACHED');
+    if(budgetReached((await usageToday(license)).research||0,settings.researchDailyLimit))throw failure('RESEARCH_BUDGET_REACHED');
     const ctx={campaign:{positions:[],direction:'NONE'},structure:{},patternEngine:e.engine};
     const {instructions,brain,examples}=await knowledge(ctx,{depth:'deep'});
     // Do not give a benchmark model retrospective video outcomes or validation/held-out aggregate results.
     // Training-only analogues are allowed; model pretraining and human reference selection are still possible contamination.
     const blindBrain={brainVersion:brain.brainVersion,families:brain.families,similarHistory:brain.similarHistory};
+    await countRequest(license,{kind:'research'});
     const reply=await vault.withKey(license,key=>callModel({key,model,effort:settings.researchEffort,
       system:instructions+'\nBLIND RESEARCH ONLY. Output the lab schema, not an execution decision. The chart is rebased and historical. Assess only the prefix; no future information. Use exact rebased levels and admit uncertainty.',
       text:JSON.stringify({prefix:e.prefix,quote:e.quote,atr:e.atr,engine:e.engine,apexBrain:blindBrain}),image:e.image,schema:LAB_SCHEMA,fetchImpl,signal:AbortSignal.timeout(180000),maxTokens:16000}),provider);
-    await countRequest(license,{kind:'research',tokens:reply.usage});
+    await countRequest(license,{kind:'researchDone',tokens:reply.usage});
     if((await vault.settings(license)).revision!==settings.revision)throw failure('SETTINGS_CHANGED');
     return {prediction:JSON.parse(reply.text),model,latencyMs:reply.latencyMs};
   }});
@@ -115,7 +118,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
     const today=await usageToday(license),requestsToday=today.count||0;
     return {...settings,requestsToday,researchToday:today.research||0,tokensToday:{input:today.inputTokens||0,output:today.outputTokens||0},
       status:!settings.enabled?'DISABLED':!settings.hasKey?'NO_API_KEY':
-      requestsToday>=settings.dailyRequestLimit?'DAILY_BUDGET_REACHED':'ASTRA_READY',strategyVersion:KNOWLEDGE_VERSION,brainVersion:BRAIN_VERSION};
+      budgetReached(requestsToday,settings.dailyRequestLimit)?'DAILY_BUDGET_REACHED':'ASTRA_READY',strategyVersion:KNOWLEDGE_VERSION,brainVersion:BRAIN_VERSION};
   }
   const mid=c=>(c.quote.bid+c.quote.ask)/2;
   const atrOf=c=>c.patternEngine?.atrM3||c.structure.atr*Math.sqrt(3);
@@ -132,22 +135,25 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
     if(!top||!settings.researchEnabled||thesisRunning.has(license))return;
     const cur=theses.get(license);
     if(cur&&cur.eventKey===top.eventKey&&clock()-cur.createdAtMs<THESIS_TTL_MS)return;
-    const today=await usageToday(license);if((today.research||0)>=settings.researchDailyLimit)return;
+    const today=await usageToday(license);if(budgetReached(today.research||0,settings.researchDailyLimit))return;
+    const researchModel=settings.researchModel||settings.model,researchProvider=providerForModel(researchModel);
+    if(!settings.availableProviders.includes(researchProvider))return;
     thesisRunning.add(license);await countRequest(license,{kind:'research'});
     (async()=>{
       const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),180000);
       try{
         const lessons=await learning.lessons(license,{family:top.family,direction:top.direction});
         const {instructions,examples,brain}=await knowledge(context,{lessons,depth:'deep'});
-        const r=await vault.withKey(license,key=>callModel({key,model:settings.model,effort:settings.researchEffort,system:instructions+THESIS_PROMPT,
-          text:JSON.stringify({apexBrain:brain,referenceExamples:examples,market:context}),schema:THESIS_SCHEMA,maxTokens:32000,fetchImpl,signal:ctrl.signal}));
+        const r=await vault.withKey(license,key=>callModel({key,model:researchModel,effort:settings.researchEffort,system:instructions+THESIS_PROMPT,
+          text:JSON.stringify({apexBrain:brain,referenceExamples:examples,market:context}),schema:THESIS_SCHEMA,maxTokens:32000,fetchImpl,signal:ctrl.signal}),researchProvider);
         const thesis=JSON.parse(r.text);
-        theses.set(license,{status:'READY',eventKey:top.eventKey,createdAtMs:clock(),mid:mid(context),atr:atrOf(context),thesis,model:settings.model,latencyMs:r.latencyMs});
+        if((await vault.settings(license)).revision!==settings.revision)return;
+        theses.set(license,{status:'READY',eventKey:top.eventKey,createdAtMs:clock(),mid:mid(context),atr:atrOf(context),thesis,model:researchModel,latencyMs:r.latencyMs});
         await countRequest(license,{kind:'researchDone',tokens:r.usage});
-        if(thesis.direction!=='NONE')await learning.predict(license,{source:'RESEARCH_THESIS',model:settings.model,family:thesis.family,direction:thesis.direction,stage:thesis.stage,
+        if(thesis.direction!=='NONE')await learning.predict(license,{source:'RESEARCH_THESIS',model:researchModel,family:thesis.family,direction:thesis.direction,stage:thesis.stage,
           entry:thesis.direction==='SELL'?context.quote.bid:context.quote.ask,atr:atrOf(context),thesis:thesis.summary?.slice(0,300),eventKey:top.eventKey});
-        await event(license,'ASTRA_RESEARCH_THESIS',{family:thesis.family,direction:thesis.direction,stage:thesis.stage,model:settings.model,latencyMs:r.latencyMs});
-      }catch(e){theses.set(license,{status:'FAILED',eventKey:top.eventKey,createdAtMs:clock(),reason:e.safe?e.message:'AI_ERROR'});}
+        await event(license,'ASTRA_RESEARCH_THESIS',{family:thesis.family,direction:thesis.direction,stage:thesis.stage,model:researchModel,latencyMs:r.latencyMs});
+      }catch(e){if((await vault.settings(license)).revision===settings.revision)theses.set(license,{status:'FAILED',eventKey:top.eventKey,createdAtMs:clock(),reason:e.safe?e.message:'AI_ERROR'});}
       finally{clearTimeout(timer);thesisRunning.delete(license);}
     })();
   }
@@ -186,8 +192,10 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
         if(!settings.hasKey)throw failure('NO_API_KEY');
         const conv=input.conversationId?await chats.get(license,input.conversationId):null;
         const history=conv?conv.messages.slice(-24).map(({role,text})=>({role,text:text.slice(0,6000)})):(input.history||[]);
-        const result=await vault.withKey(license,key=>callAstraChat({key,model:settings.model,effort:settings.reasoningEffort,
-          input:{message:input.message,image:input.image??null,history},context:snapshots.get(license),fetchImpl,now:clock(),onDelta}));
+        const researchModel=settings.researchModel||settings.model,researchProvider=providerForModel(researchModel);
+        if(!settings.availableProviders.includes(researchProvider))throw failure('NO_API_KEY');
+        const result=await vault.withKey(license,key=>callAstraChat({key,model:researchModel,effort:settings.researchModel?settings.researchEffort:settings.reasoningEffort,
+          input:{message:input.message,image:input.image??null,history},context:snapshots.get(license),fetchImpl,now:clock(),onDelta}),researchProvider);
         const after=await vault.settings(license);
         if(after.revision!==settings.revision||!after.hasKey)throw failure('SETTINGS_CHANGED');
         await countRequest(license,{kind:'chat',tokens:result.usage});

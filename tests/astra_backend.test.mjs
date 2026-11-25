@@ -204,3 +204,16 @@ test('vault preserves both providers, switches selected model and isolates encry
   await assert.rejects(v.withKey('b',async()=>{},'anthropic'),/NO_API_KEY/);
   await v.remove('a');assert.deepEqual((await v.settings('a')).availableProviders,[]);
 }));
+
+test('explicit uncapped budget persists; independent Sol and Astra model routing',()=>temp(async dir=>{
+ const v=createAstraVault(dir);
+ const x=await v.update('a',{apiKey:fakeKey,enabled:true,model:'gpt-6.2-sol',researchModel:'gpt-6.2-astra',dailyRequestLimit:null,researchDailyLimit:null});
+ assert.equal(x.model,'gpt-6.2-sol');assert.equal(x.researchModel,'gpt-6.2-astra');
+ const y=await createAstraVault(dir).settings('a');assert.equal(y.dailyRequestLimit,null);assert.equal(y.researchDailyLimit,null);
+ const svc=createAstraService({dataDir:dir,fetchImpl:async()=>completed(decision())});
+ assert.equal((await svc.status('a')).status,'ASTRA_READY');
+ await assert.rejects(v.update('a',{researchModel:'claude-opus-5-5'}),/RESEARCH_PROVIDER_KEY_MISSING/);
+ await v.update('a',{researchModel:null,researchDailyLimit:0});
+ assert.equal((await v.settings('a')).researchDailyLimit,0);
+ svc.close();
+}));

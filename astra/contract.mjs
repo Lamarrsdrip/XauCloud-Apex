@@ -13,6 +13,7 @@ export const DEFAULT_REASONING_EFFORT = 'low';
 // never count. Native Lifestyle trades on if the ceiling is reached.
 export const DEFAULT_DAILY_REQUEST_LIMIT = 2000;
 export function dailyRequestLimit(value=DEFAULT_DAILY_REQUEST_LIMIT) {
+  if(value===null)return null; // Explicit owner opt-in: no Apex daily spending ceiling.
   if(!Number.isInteger(value)||value<10||value>20000) throw new Error('INVALID_DAILY_REQUEST_LIMIT');
   return value;
 }
@@ -45,12 +46,14 @@ export function reasoningEffort(value=DEFAULT_REASONING_EFFORT) {
 
 // Research settings: deep, slower analysis that never authorises an order by itself.
 export const RESEARCH_EFFORTS = ['default','low','medium','high','xhigh','max'];
-export const DEFAULT_RESEARCH = {researchEnabled:true,researchEffort:'high',researchDailyLimit:300,contextDepth:'deep',executionTimeoutMs:6500};
+export const DEFAULT_RESEARCH = {researchEnabled:true,researchModel:null,researchEffort:'high',researchDailyLimit:300,contextDepth:'deep',executionTimeoutMs:6500};
+export const budgetReached=(count,limit)=>limit!==null&&count>=limit;
 export function researchSettings(patch={}) {
   const out={};
   if('researchEnabled' in patch){if(typeof patch.researchEnabled!=='boolean')throw new Error('INVALID_RESEARCH_SETTINGS');out.researchEnabled=patch.researchEnabled;}
+  if('researchModel' in patch){out.researchModel=patch.researchModel===null?null:modelId(patch.researchModel);}
   if('researchEffort' in patch){if(!RESEARCH_EFFORTS.includes(patch.researchEffort))throw new Error('INVALID_RESEARCH_SETTINGS');out.researchEffort=patch.researchEffort;}
-  if('researchDailyLimit' in patch){const v=patch.researchDailyLimit;if(!Number.isInteger(v)||v<0||v>5000)throw new Error('INVALID_RESEARCH_SETTINGS');out.researchDailyLimit=v;}
+  if('researchDailyLimit' in patch){const v=patch.researchDailyLimit;if(v!==null&&(!Number.isInteger(v)||v<0||v>5000))throw new Error('INVALID_RESEARCH_SETTINGS');out.researchDailyLimit=v;}
   if('contextDepth' in patch){if(!['standard','deep'].includes(patch.contextDepth))throw new Error('INVALID_RESEARCH_SETTINGS');out.contextDepth=patch.contextDepth;}
   // The EA rejects any decision older than 8 s, so execution calls must finish first.
   if('executionTimeoutMs' in patch){const v=patch.executionTimeoutMs;if(!Number.isInteger(v)||v<2000||v>7500)throw new Error('INVALID_RESEARCH_SETTINGS');out.executionTimeoutMs=v;}

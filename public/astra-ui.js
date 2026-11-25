@@ -16,7 +16,7 @@
       html+='<div class="settings-subtle" style="margin-top:13px">'+(connected?'Apex AI is connected.':'Apex is using its native trading strategy.')+'</div>';
       return html+'</section>';
     }
-    html+='<p class="settings-section-intro" style="margin:18px 0">Astra can help evaluate trade setups. If it is switched off or unavailable, Apex uses its native trading rules. Enabling AI does not guarantee profitable trades.</p>';
+    html+='<p class="settings-section-intro" style="margin:18px 0">Apex AI can evaluate trade setups. If it is switched off or unavailable, Apex uses its native trading rules. Enabling AI does not guarantee profitable trades.</p>';
     html+='<div class="overview-inline-control" style="margin:0 0 21px"><div>'
       +'<label class="control-title" for="astra-enabled" style="display:block;cursor:pointer">Use Apex AI</label>'
       +'<div class="control-desc">'+(hasKey?'A key is securely saved for this license.':'Connect your OpenAI or Anthropic API key to enable Apex AI.')+'</div>'
@@ -25,19 +25,16 @@
     html+='<div class="field"><label for="astra-key">Model API key</label>'
       +'<input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Paste your API key here')+'">'
       +'<div class="hint">Save a key for each provider separately; choosing a model switches to its saved provider key. Use <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI</a> or <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Anthropic</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
-    html+='<details class="settings-details" style="margin-bottom:18px"><summary><span>'
-      +'<span class="details-name">AI usage & model</span>'
+    html+='<div class="ai-model-duo"><div class="ai-model-heading"><span class="intel-kicker">MODEL ROUTING</span><h3>Two roles. One Apex Brain.</h3><p>Choose the model that handles fast bot decisions and the model that studies market context.</p></div><button id="astra-dual-preset" type="button" class="btn btn-ghost">Use Sol + Astra</button></div><div class="ai-role-grid"><div class="ai-role"><span class="ai-role-tag">01 / EXECUTION</span><label for="astra-model">Bot decision model</label><input id="astra-model" list="astra-model-options" value="'+esc(a.model||'gpt-6.2-astra')+'" autocomplete="off" spellcheck="false"><datalist id="astra-model-options"></datalist><p>Time-sensitive entries and campaign decisions.</p></div><div class="ai-role"><span class="ai-role-tag">02 / INTELLIGENCE</span><label for="astra-research-model">Research &amp; chat model</label><input id="astra-research-model" list="astra-model-options" value="'+esc(a.researchModel||'')+'" placeholder="Same as bot model" autocomplete="off" spellcheck="false"><p>Deep setup research, AI chat and default historical replay.</p></div></div><details class="settings-details" style="margin-bottom:18px"><summary><span>'
+      +'<span class="details-name">Reasoning &amp; optional spending controls</span>'
       +'<span class="details-desc" style="display:block">Choose a supported model and control API requests.</span>'
       +'</span></summary><div class="details-content" style="padding-top:21px">'
-      +'<div class="field"><label for="astra-model">Model</label><input id="astra-model" list="astra-model-options" value="'+esc(a.model||'gpt-6.2-astra')+'" autocomplete="off" spellcheck="false"><datalist id="astra-model-options"></datalist>'
-      +'<div class="hint">Use the exact model ID available to your OpenAI or Anthropic account. A Claude model needs an Anthropic key.</div></div>'
-      +'<div class="field"><label for="astra-limit">Daily live-decision request limit</label><input id="astra-limit" type="number" min="10" max="20000" step="10" value="'+esc(a.dailyRequestLimit||2000)+'">'
-      +'<div class="hint">Live decision requests are billed by your API provider. Research chat is billed separately and does not consume this live-decision allowance. When reached, native trading takes over until the next UTC day.</div></div>';
+      +'<div class="field"><label class="ai-check"><input id="astra-unlimited" type="checkbox" '+(a.dailyRequestLimit===null?'checked':'')+'> No Apex daily trading cap</label><label for="astra-limit">Optional daily trading request budget</label><input id="astra-limit" type="number" min="10" max="20000" step="10" value="'+esc(a.dailyRequestLimit??2000)+'" '+(a.dailyRequestLimit===null?'disabled':'')+'><div class="hint">No cap permits requests whenever trading conditions qualify. Your API provider still bills and enforces its own limits. A capped account falls back to native trading when its budget is spent.</div></div>';
     var efforts=['low','medium','high','xhigh','max','none','default'],eff=a.reasoningEffort||'low';
     html+='<div class="field"><label for="astra-effort">Reasoning effort</label><select id="astra-effort">'
       +efforts.map(function(x){return '<option value="'+x+'"'+(x===eff?' selected':'')+'>'+esc(x==='default'?'Model default':x)+'</option>';}).join('')
       +'</select><div class="hint">Higher effort may respond too slowly for live decisions. Apex falls back to native trading when a decision times out.</div></div>'
-      +'<div class="field"><label for="astra-research-effort">Research reasoning effort</label><select id="astra-research-effort">'+efforts.map(function(x){return '<option value="'+x+'"'+(x===(a.researchEffort||'high')?' selected':'')+'>'+esc(x)+'</option>';}).join('')+'</select></div><div class="field"><label for="astra-research-limit">Daily research requests</label><input id="astra-research-limit" type="number" min="0" max="5000" value="'+esc(a.researchDailyLimit??300)+'"></div><label><input id="astra-research-enabled" type="checkbox" '+(a.researchEnabled?'checked':'')+'> Background deep research</label>'
+      +'<div class="field"><label for="astra-research-effort">Research reasoning effort</label><select id="astra-research-effort">'+efforts.map(function(x){return '<option value="'+x+'"'+(x===(a.researchEffort||'high')?' selected':'')+'>'+esc(x)+'</option>';}).join('')+'</select></div><div class="field"><label class="ai-check"><input id="astra-research-unlimited" type="checkbox" '+(a.researchDailyLimit===null?'checked':'')+'> No Apex daily research cap</label><label for="astra-research-limit">Optional daily research budget</label><input id="astra-research-limit" type="number" min="0" max="5000" value="'+esc(a.researchDailyLimit??300)+'" '+(a.researchDailyLimit===null?'disabled':'')+'></div><label class="ai-check"><input id="astra-research-enabled" type="checkbox" '+(a.researchEnabled?'checked':'')+'> Background deep research</label>'
       +'</div></details>';
     html+='<div class="release-actions" style="margin-top:8px">'
       +'<button class="btn btn-primary" id="astra-save" style="width:auto">Save AI settings</button>'
@@ -47,8 +44,8 @@
       +'<span class="details-desc" style="display:block">Run strategy checks, review diagnostics or remove your saved key.</span>'
       +'</span></summary><div class="details-content" style="padding-top:14px">'
       +row('Last decision',d.action?label(d.action):'No decision yet')
-      +row('AI requests today',(a.requestsToday==null?'—':a.requestsToday)+' / '+(a.dailyRequestLimit||'—'))
-      +row('Saved providers',(a.availableProviders||[]).join(', ')||'—')+row('Research requests today',a.researchToday??'—')+row('Input / output tokens',a.tokensToday?(a.tokensToday.input+' / '+a.tokensToday.output):'—')+row('Last model latency',a.latencyMs==null?'—':a.latencyMs+' ms')
+      +row('AI requests today',(a.requestsToday==null?'—':a.requestsToday)+' / '+(a.dailyRequestLimit===null?'No cap':a.dailyRequestLimit??'—'))
+      +row('Saved providers',(a.availableProviders||[]).join(', ')||'—')+row('Research requests today',(a.researchToday??'—')+' / '+(a.researchDailyLimit===null?'No cap':a.researchDailyLimit??'—'))+row('Input / output tokens',a.tokensToday?(a.tokensToday.input+' / '+a.tokensToday.output):'—')+row('Last model latency',a.latencyMs==null?'—':a.latencyMs+' ms')
       +row('Last connection issue',a.lastFallbackReason?label(a.lastFallbackReason):'None reported')
       +'<div class="release-actions" style="margin-top:15px">'
       +'<button class="btn btn-ghost" style="width:auto" id="astra-checks" '+(!hasKey?'disabled':'')+'>Run strategy checks</button><button class="btn btn-ghost" style="width:auto" id="astra-text-test" '+(!hasKey?'disabled':'')+'>Text test</button><button class="btn btn-ghost" style="width:auto" id="astra-vision-test" '+(!hasKey?'disabled':'')+'>Vision test</button>'
@@ -68,14 +65,18 @@
     var buttons=['astra-save','astra-test','astra-checks','astra-text-test','astra-vision-test','astra-remove'].map(function(id){return document.getElementById(id);});
     async function run(fn){buttons.forEach(function(b){b.disabled=true;});result.textContent='Working…';
       try{await fn();}catch(e){result.textContent=label(e.message);}finally{buttons.forEach(function(b){b.disabled=false;});}}
+    function bindCap(check,field){var c=document.getElementById(check),v=document.getElementById(field);c.onchange=function(){v.disabled=c.checked;};}
+    bindCap('astra-unlimited','astra-limit');bindCap('astra-research-unlimited','astra-research-limit');
+    document.getElementById('astra-dual-preset').onclick=function(){document.getElementById('astra-model').value='gpt-6.2-sol';document.getElementById('astra-research-model').value='gpt-6.2-astra';document.getElementById('astra-effort').value='low';document.getElementById('astra-research-effort').value='high';result.textContent='Sol for execution, Astra for research. Save AI settings to apply.';};
     save.onclick=function(){run(async function(){
-      var input=document.getElementById('astra-key'),patch={enabled:document.getElementById('astra-enabled').checked,model:document.getElementById('astra-model').value.trim(),reasoningEffort:document.getElementById('astra-effort').value,dailyRequestLimit:parseInt(document.getElementById('astra-limit').value,10)};
-      patch.researchEnabled=document.getElementById('astra-research-enabled').checked;patch.researchEffort=document.getElementById('astra-research-effort').value;patch.researchDailyLimit=parseInt(document.getElementById('astra-research-limit').value,10);
+      var input=document.getElementById('astra-key'),patch={enabled:document.getElementById('astra-enabled').checked,model:document.getElementById('astra-model').value.trim(),reasoningEffort:document.getElementById('astra-effort').value,dailyRequestLimit:document.getElementById('astra-unlimited').checked?null:parseInt(document.getElementById('astra-limit').value,10)};
+      patch.researchEnabled=document.getElementById('astra-research-enabled').checked;patch.researchEffort=document.getElementById('astra-research-effort').value;patch.researchModel=document.getElementById('astra-research-model').value.trim()||null;patch.researchDailyLimit=document.getElementById('astra-research-unlimited').checked?null:parseInt(document.getElementById('astra-research-limit').value,10);
+      if((patch.dailyRequestLimit===null||patch.researchDailyLimit===null)&&!confirm('No Apex spending cap means your API provider may charge for all qualifying requests. Save these settings?'))return;
       if(input.value.trim()){patch.apiKey=input.value.trim();var anthropic=patch.apiKey.startsWith('sk-ant-');if(anthropic!==/^claude-/i.test(patch.model))patch.model=anthropic?'claude-opus-5-5':'gpt-6.2-astra';}
       try{await request('POST','/api/session/astra',patch);}finally{input.value='';delete patch.apiKey;}
       await refresh();
     });};
-    document.getElementById('astra-remove').onclick=function(){run(async function(){await request('DELETE','/api/session/astra',{});document.getElementById('astra-key').value='';await refresh();});};
+    document.getElementById('astra-remove').onclick=function(){if(!confirm('Remove both saved provider keys and disable AI decisions?'))return;run(async function(){await request('DELETE','/api/session/astra',{});document.getElementById('astra-key').value='';await refresh();});};
     function test(scope){run(async function(){
       var data=await request('POST','/api/session/astra/test',{scope:scope});
       var lines=(data.results||[]).map(function(r){

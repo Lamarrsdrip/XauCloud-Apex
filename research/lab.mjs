@@ -7,6 +7,7 @@ import {detect} from '../astra/pattern-engine.mjs';
 import {createNative} from './native-port.mjs';
 import {forwardOutcome} from './outcomes.mjs';
 import {candlesPng} from '../astra/chart-png.mjs';
+import {modelInfo} from '../astra/models.mjs';
 const fail=(message,status=400)=>Object.assign(new Error(message),{safe:true,httpStatus:status});
 const digest=x=>crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const validId=x=>typeof x==='string'&&/^[0-9a-f-]{36}$/.test(x);
@@ -69,14 +70,15 @@ export function createLab(dataDir,{clock=Date.now,loadBars=bars,modelPredict,lea
   if(!chosen)throw fail('ARCHIVE_WINDOW_UNAVAILABLE',503);
   await save(l,chosen);return chosen;
  }
- async function predict(l,e,{source='USER',prediction}={}){
+ async function predict(l,e,{source='USER',prediction,requestedModel=null}={}){
   if(e.revealedAt)throw fail('EPISODE_ALREADY_REVEALED',409);
   if(!['USER','MODEL','ENGINE','NATIVE'].includes(source))throw fail('INVALID_SOURCE');
-  if(e.predictions.some(x=>x.source===source))throw fail('PREDICTION_ALREADY_SEALED',409);
+  if(requestedModel!==null&&(source!=='MODEL'||!modelInfo(requestedModel)||modelInfo(requestedModel).legacy))throw fail('INVALID_MODEL');
+  if(e.predictions.some(x=>x.source===source&&(source!=='MODEL'||requestedModel===null||x.model===requestedModel)))throw fail('PREDICTION_ALREADY_SEALED',409);
   let model=null,latencyMs=null;
   if(source==='MODEL'){
    if(!modelPredict)throw fail('MODEL_UNAVAILABLE',503);
-   const v=await modelPredict(l,{prefix:e.prefix,quote:e.quote,atr:e.atr,engine:e.engine,image:candlesPng(e.prefix)});
+   const v=await modelPredict(l,{prefix:e.prefix,quote:e.quote,atr:e.atr,engine:e.engine,image:candlesPng(e.prefix),requestedModel});
    prediction=v.prediction;model=v.model;latencyMs=v.latencyMs;
   }else if(source!=='USER'){
    const c=source==='NATIVE'?e.native:e.engine.candidates.find(x=>x.stage==='READY')||e.engine.candidates[0];
@@ -107,7 +109,7 @@ export function createLab(dataDir,{clock=Date.now,loadBars=bars,modelPredict,lea
  }
  function summarize(rows,requested){
   const groups={};
-  for(const r of rows){const g=groups[r.source]??={predictions:0,entered:0,favourable:0,adverse:0,flat:0,abstained:0,mfe:0,mae:0,brierSum:0,brierN:0,latency:0,latencyN:0};
+  for(const r of rows){const g=groups[r.source==='MODEL'?'MODEL · '+r.model:r.source]??={predictions:0,entered:0,favourable:0,adverse:0,flat:0,abstained:0,mfe:0,mae:0,brierSum:0,brierN:0,latency:0,latencyN:0};
    g.predictions++;if(r.result==='ABSTAINED'){g.abstained++;continue;}g.entered++;g.mfe+=r.mfeAtr;g.mae+=r.maeAtr;
    if(r.result==='FAVOURABLE_FIRST')g.favourable++;else if(r.result==='ADVERSE_FIRST')g.adverse++;else g.flat++;
    if(r.source==='MODEL'&&r.result!=='NEITHER_WITHIN_120M'){g.brierSum+=(r.confidence/100-(r.result==='FAVOURABLE_FIRST'?1:0))**2;g.brierN++;}
@@ -115,10 +117,10 @@ export function createLab(dataDir,{clock=Date.now,loadBars=bars,modelPredict,lea
   }
   return Object.fromEntries(Object.entries(groups).map(([source,g])=>[source,{predictions:g.predictions,coverage:g.predictions/requested,entered:g.entered,entryRate:g.entered/g.predictions,abstained:g.abstained,favourable:g.favourable,adverse:g.adverse,flat:g.flat,winRateResolved:g.favourable+g.adverse?g.favourable/(g.favourable+g.adverse):null,avgMfeAtr:g.entered?g.mfe/g.entered:null,avgMaeAtr:g.entered?g.mae/g.entered:null,brierResolved:g.brierN?g.brierSum/g.brierN:null,avgLatencyMs:g.latencyN?g.latency/g.latencyN:null}]));
  }
- async function benchmark(l,{split='VALIDATION',mode='random',n=10,includeModel=false}={}){
-  if(!['VALIDATION','HELD_OUT'].includes(split)||!['setup','random'].includes(mode)||!Number.isInteger(n)||n<1||n>100||typeof includeModel!=='boolean'||(includeModel&&n>20))throw fail('INVALID_BENCHMARK_OPTIONS');
+ async function benchmark(l,{split='VALIDATION',mode='random',n=10,includeModel=false,models=[]}={}){
+  if(!['VALIDATION','HELD_OUT'].includes(split)||!['setup','random'].includes(mode)||!Number.isInteger(n)||n<1||n>100||typeof includeModel!=='boolean'||!Array.isArray(models)||models.length>9||new Set(models).size!==models.length||models.some(m=>!modelInfo(m)||modelInfo(m).legacy)||((includeModel||models.length)&&n>20))throw fail('INVALID_BENCHMARK_OPTIONS');
   if(active.has(l)||runningBenchmarks.has(l))throw fail('LAB_ALREADY_RUNNING',409);
-  const j={id:crypto.randomUUID(),split,mode,n,includeModel,status:'RUNNING',completed:0,createdAt:new Date(clock()).toISOString(),episodes:[],errors:[],results:{}};
+  const j={id:crypto.randomUUID(),split,mode,n,includeModel,models,status:'RUNNING',completed:0,createdAt:new Date(clock()).toISOString(),episodes:[],errors:[],results:{}};
   runningBenchmarks.set(l,j.id);active.add(l);
   try{await saveBenchmark(l,j);}catch(e){runningBenchmarks.delete(l);active.delete(l);throw e;}
   // The service owns the job; no request remains open while model calls run.
@@ -127,7 +129,8 @@ export function createLab(dataDir,{clock=Date.now,loadBars=bars,modelPredict,lea
    try{
     for(let i=0;i<n;i++){
      const e=await make(l,{split,mode});await predict(l,e,{source:'ENGINE'});await predict(l,e,{source:'NATIVE'});
-     if(includeModel){try{await predict(l,e,{source:'MODEL'});}catch(err){j.errors.push({episode:e.id,source:'MODEL',reason:err.safe?err.message:'MODEL_FAILED'});}}
+     const selections=models.length?models:includeModel?[null]:[];
+     for(const requestedModel of selections){try{await predict(l,e,{source:'MODEL',requestedModel});}catch(err){j.errors.push({episode:e.id,source:'MODEL',model:requestedModel,reason:err.safe?err.message:'MODEL_FAILED'});}}
      const revealed=await reveal(l,e);j.episodes.push(e.id);
      for(const s of revealed.scores){const p=revealed.predictions.find(p=>p.hash===s.hash);rows.push({...s,confidence:p.prediction.confidence});}
      j.completed++;j.results=summarize(rows,n);await saveBenchmark(l,j);

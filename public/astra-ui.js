@@ -24,7 +24,7 @@
       +'<span class="track"></span><span class="knob"></span></label></div>';
     html+='<div class="field"><label for="astra-key">Model API key</label>'
       +'<input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Paste your API key here')+'">'
-      +'<div class="hint">Use <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI</a> or <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Anthropic</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
+      +'<div class="hint">Save a key for each provider separately; choosing a model switches to its saved provider key. Use <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI</a> or <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Anthropic</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
     html+='<details class="settings-details" style="margin-bottom:18px"><summary><span>'
       +'<span class="details-name">AI usage & model</span>'
       +'<span class="details-desc" style="display:block">Choose a supported model and control API requests.</span>'
@@ -48,11 +48,11 @@
       +'</span></summary><div class="details-content" style="padding-top:14px">'
       +row('Last decision',d.action?label(d.action):'No decision yet')
       +row('AI requests today',(a.requestsToday==null?'—':a.requestsToday)+' / '+(a.dailyRequestLimit||'—'))
-      +row('Research requests today',a.researchToday??'—')+row('Input / output tokens',a.tokensToday?(a.tokensToday.input+' / '+a.tokensToday.output):'—')+row('Last model latency',a.latencyMs==null?'—':a.latencyMs+' ms')
+      +row('Saved providers',(a.availableProviders||[]).join(', ')||'—')+row('Research requests today',a.researchToday??'—')+row('Input / output tokens',a.tokensToday?(a.tokensToday.input+' / '+a.tokensToday.output):'—')+row('Last model latency',a.latencyMs==null?'—':a.latencyMs+' ms')
       +row('Last connection issue',a.lastFallbackReason?label(a.lastFallbackReason):'None reported')
       +'<div class="release-actions" style="margin-top:15px">'
       +'<button class="btn btn-ghost" style="width:auto" id="astra-checks" '+(!hasKey?'disabled':'')+'>Run strategy checks</button><button class="btn btn-ghost" style="width:auto" id="astra-text-test" '+(!hasKey?'disabled':'')+'>Text test</button><button class="btn btn-ghost" style="width:auto" id="astra-vision-test" '+(!hasKey?'disabled':'')+'>Vision test</button>'
-      +'<button class="btn btn-danger" style="width:auto" id="astra-remove" '+(!hasKey?'disabled':'')+'>Remove API key</button></div>'
+      +'<button class="btn btn-danger" style="width:auto" id="astra-remove" '+(!hasKey?'disabled':'')+'>Remove all API keys</button></div>'
       +'<div class="hint" style="margin-top:10px">Both tests use your saved key and may incur API charges. A successful connection is not proof of trading performance.</div></div></details>'
       +'<div id="astra-result" role="status" aria-live="polite" class="settings-subtle" style="margin-top:13px"></div>'
       +'</section>';
@@ -71,7 +71,7 @@
     save.onclick=function(){run(async function(){
       var input=document.getElementById('astra-key'),patch={enabled:document.getElementById('astra-enabled').checked,model:document.getElementById('astra-model').value.trim(),reasoningEffort:document.getElementById('astra-effort').value,dailyRequestLimit:parseInt(document.getElementById('astra-limit').value,10)};
       patch.researchEnabled=document.getElementById('astra-research-enabled').checked;patch.researchEffort=document.getElementById('astra-research-effort').value;patch.researchDailyLimit=parseInt(document.getElementById('astra-research-limit').value,10);
-      if(input.value.trim())patch.apiKey=input.value.trim();
+      if(input.value.trim()){patch.apiKey=input.value.trim();var anthropic=patch.apiKey.startsWith('sk-ant-');if(anthropic!==/^claude-/i.test(patch.model))patch.model=anthropic?'claude-opus-5-5':'gpt-6.2-astra';}
       try{await request('POST','/api/session/astra',patch);}finally{input.value='';delete patch.apiKey;}
       await refresh();
     });};
@@ -137,7 +137,7 @@
     if(!result)throw new Error('CHAT_STREAM_INTERRUPTED');return result;
   }
   function labPage(me){
-    return '<section class="apex-lab"><div class="intel-heading"><div><span class="intel-kicker">HISTORICAL / BLIND REPLAY</span><h2>Strategy Research Lab</h2></div><button id="lab-back" class="btn btn-ghost">Back to AI</button></div><p class="settings-subtle">Price and date are masked until reveal. Compare decisions on the same historical prefix; no live orders.</p><div class="lab-controls"><label>Dataset <select id="lab-split"><option value="VALIDATION">Validation · 2025</option><option value="HELD_OUT">Held-out · 2026</option></select></label><label>Sampling <select id="lab-mode"><option value="setup">Developing setups</option><option value="random">Random windows</option></select></label><button id="lab-new" class="btn btn-primary">New episode</button></div><div id="lab-content"></div><details class="settings-details lab-benchmark"><summary>Benchmark on identical blind windows</summary><div class="lab-controls"><label>Episodes <input id="lab-n" type="number" min="1" max="100" value="10"></label><label><input type="checkbox" id="lab-model"> Include configured AI (up to 20 paid calls)</label><button id="lab-benchmark" class="btn btn-ghost">Run benchmark</button></div><div id="lab-benchmark-results" role="status"></div></details><div id="lab-status" class="settings-subtle" role="status" aria-live="polite"></div></section>';
+    return '<section class="apex-lab"><div class="intel-heading"><div><span class="intel-kicker">HISTORICAL / BLIND REPLAY</span><h2>Strategy Research Lab</h2></div><button id="lab-back" class="btn btn-ghost">Back to AI</button></div><p class="settings-subtle">Price and date are masked until reveal. Compare decisions on the same historical prefix; no live orders.</p><div class="lab-controls"><label>Dataset <select id="lab-split"><option value="VALIDATION">Validation · 2025</option><option value="HELD_OUT">Held-out · 2026</option></select></label><label>Sampling <select id="lab-mode"><option value="setup">Developing setups</option><option value="random">Random windows</option></select></label><button id="lab-new" class="btn btn-primary">New episode</button></div><div id="lab-content"></div><details class="settings-details lab-benchmark"><summary>Benchmark on identical blind windows</summary><div class="lab-controls"><label>Episodes <input id="lab-n" type="number" min="1" max="100" value="10"></label><label><input type="checkbox" id="lab-model"> Include configured AI</label><label>Compare saved-provider models <select id="lab-models" multiple aria-label="Models to benchmark"></select></label><button id="lab-benchmark" class="btn btn-ghost">Run benchmark</button></div><div id="lab-benchmark-results" role="status"></div></details><div id="lab-status" class="settings-subtle" role="status" aria-live="polite"></div></section>';
   }
   function bindLab(me){
     var root=document.getElementById('lab-content'),status=document.getElementById('lab-status'),busy=false;
@@ -162,13 +162,15 @@
     }
     async function run(fn){if(busy)return;busy=true;status.textContent='Working…';root.setAttribute('aria-busy','true');try{state.episode=await fn();status.textContent='';render();}catch(e){status.textContent=label(e.message);}finally{busy=false;root.removeAttribute('aria-busy');}}
     document.getElementById('lab-new').onclick=function(){run(function(){return request('POST','/api/session/lab/new',{split:document.getElementById('lab-split').value,mode:document.getElementById('lab-mode').value});});};
-    var bench=document.getElementById('lab-benchmark-results'),benchButton=document.getElementById('lab-benchmark');
+    var bench=document.getElementById('lab-benchmark-results'),benchButton=document.getElementById('lab-benchmark'),modelSelect=document.getElementById('lab-models');
+    request('GET','/api/session/astra/models').then(function(d){if(!modelSelect.isConnected)return;var providers=(me.astra&&me.astra.availableProviders)||[];(d.models||[]).filter(function(m){return !m.legacy&&providers.includes(m.provider);}).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.textContent=m.label+' · '+m.provider;modelSelect.appendChild(o);});}).catch(function(){});
+
     function showBenchmark(j){
       if(!bench.isConnected)return;
       bench.innerHTML='<p class="settings-subtle">'+esc(j.status)+' · '+j.completed+' / '+j.n+' episodes'+(j.errors.length?' · '+j.errors.length+' provider failures':'')+'</p>'+Object.keys(j.results||{}).map(function(k){var x=j.results[k];return '<article class="lab-pred"><strong>'+esc(k)+'</strong><div>Entries '+x.entered+' · Abstentions '+x.abstained+' · Resolved win rate '+(x.winRateResolved==null?'—':(x.winRateResolved*100).toFixed(1)+'%')+'</div><div class="settings-subtle">Coverage '+(x.coverage*100).toFixed(0)+'% · MFE '+(x.avgMfeAtr==null?'—':x.avgMfeAtr.toFixed(2))+' ATR · MAE '+(x.avgMaeAtr==null?'—':x.avgMaeAtr.toFixed(2))+' ATR</div></article>';}).join('');
     }
     async function pollBenchmark(id){if(!bench.isConnected)return;try{var j=await request('GET','/api/session/lab/benchmark/'+id);showBenchmark(j);if(j.status==='RUNNING')setTimeout(function(){pollBenchmark(id);},3500);else benchButton.disabled=false;}catch(e){bench.textContent=label(e.message);benchButton.disabled=false;}}
-    benchButton.onclick=async function(){if(benchButton.disabled)return;var model=document.getElementById('lab-model').checked,n=Number(document.getElementById('lab-n').value);if(model&&!confirm('This benchmark may make up to '+n+' paid model requests using your key. Continue?'))return;benchButton.disabled=true;try{var j=await request('POST','/api/session/lab/benchmark',{n:n,includeModel:model,split:document.getElementById('lab-split').value,mode:document.getElementById('lab-mode').value});state.benchmarkId=j.id;showBenchmark(j);pollBenchmark(j.id);}catch(e){bench.textContent=label(e.message);benchButton.disabled=false;}};
+    benchButton.onclick=async function(){if(benchButton.disabled)return;var model=document.getElementById('lab-model').checked,n=Number(document.getElementById('lab-n').value),models=Array.from(modelSelect.selectedOptions).map(function(o){return o.value;}),paid=n*(models.length||(model?1:0));if(paid&&!confirm('This benchmark may make up to '+paid+' paid model requests using your keys. Continue?'))return;benchButton.disabled=true;try{var j=await request('POST','/api/session/lab/benchmark',{n:n,includeModel:model,models:models,split:document.getElementById('lab-split').value,mode:document.getElementById('lab-mode').value});state.benchmarkId=j.id;showBenchmark(j);pollBenchmark(j.id);}catch(e){bench.textContent=label(e.message);benchButton.disabled=false;}};
     if(state.benchmarkId){benchButton.disabled=true;pollBenchmark(state.benchmarkId);}render();
   }
   window.AstraUI={card:card,bind:bind,chatPage:chatPage,bindChat:bindChat,resetChat:resetChat};

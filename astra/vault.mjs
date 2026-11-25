@@ -34,11 +34,21 @@ export function createAstraVault(dataDir) {
     finally {await fs.rm(tmp,{force:true}).catch(()=>{});}
   }
   const identity=license=>crypto.createHash('sha256').update(license).digest('hex');
+  const cryptoFields=['ciphertext','iv','tag','suffix','keyAddedAt'];
+  const providerOfModel=m=>/^claude-/i.test(m)?'anthropic':'openai';
+  function keysOf(rec={}){
+    const keys={...(rec.providerKeys||{})};
+    // v1 records used the license hash only as associated data. Preserve their
+    // encryption until the customer rotates the key; new records bind provider too.
+    if(rec.ciphertext&&!keys[rec.provider||'openai'])keys[rec.provider||'openai']={...Object.fromEntries(cryptoFields.map(k=>[k,rec[k]])),aadVersion:1};
+    return keys;
+  }
+  const mask=(p,k)=>k?.ciphertext?(p==='anthropic'?'sk-ant-••••••••':'sk-••••••••••••')+k.suffix:null;
   function view(rec={}) {
-    const provider=rec.provider||'openai';
+    const provider=rec.provider||'openai',keys=keysOf(rec),key=keys[provider];
     return {...DEFAULT_RESEARCH,...Object.fromEntries(RESEARCH_KEYS.filter(k=>k in rec).map(k=>[k,rec[k]])),
-      enabled:rec.enabled===true,hasKey:!!rec.ciphertext,model:rec.model||DEFAULT_MODEL_BY_PROVIDER[provider]||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:rec.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,
-      provider,maskedKey:rec.ciphertext?(provider==='anthropic'?'sk-ant-••••••••':'sk-••••••••••••')+rec.suffix:null,keyAddedAt:rec.keyAddedAt||null,revision:rec.revision||0};
+      enabled:rec.enabled===true,hasKey:!!key?.ciphertext,model:rec.model||DEFAULT_MODEL_BY_PROVIDER[provider]||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:rec.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,
+      provider,maskedKey:mask(provider,key),keyAddedAt:key?.keyAddedAt||null,availableProviders:['openai','anthropic'].filter(p=>!!keys[p]?.ciphertext),providerKeys:Object.fromEntries(['openai','anthropic'].map(p=>[p,{hasKey:!!keys[p]?.ciphertext,maskedKey:mask(p,keys[p]),keyAddedAt:keys[p]?.keyAddedAt||null}])),revision:rec.revision||0};
   }
   return {
     async settings(license){return view((await read())[identity(license)]);},
@@ -51,21 +61,28 @@ export function createAstraVault(dataDir) {
       let research;try{research=researchSettings(patch);}catch{throw safeError('INVALID_ASTRA_SETTINGS');}
       if('apiKey'in patch&&(typeof patch.apiKey!=='string'||!/^sk-[A-Za-z0-9_-]{16,500}$/.test(patch.apiKey)))throw safeError('INVALID_API_KEY_FORMAT');
       return locked(async()=>{
-        const rows=await read(),id=identity(license),rec={...(rows[id]||{})};
+        const rows=await read(),id=identity(license),rec={...(rows[id]||{})},keys=keysOf(rec);
         if('apiKey'in patch) {
           // Losing the master must not silently rotate it and destroy all other
           // users' decryptability. Rotation requires an explicit re-encryption job.
-          const existingCiphertext=Object.values(rows).some(x=>x.ciphertext);
+          const existingCiphertext=Object.values(rows).some(x=>Object.values(keysOf(x)).some(k=>k.ciphertext));
+          const provider=patch.apiKey.startsWith('sk-ant-')?'anthropic':'openai';
+          if('model' in patch&&providerOfModel(patch.model)!==provider)throw safeError('PROVIDER_MODEL_MISMATCH');
           const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',await master(!existingCiphertext),iv);
-          cipher.setAAD(Buffer.from(id));
-          rec.ciphertext=Buffer.concat([cipher.update(patch.apiKey,'utf8'),cipher.final()]).toString('base64');
-          rec.iv=iv.toString('base64');rec.tag=cipher.getAuthTag().toString('base64');rec.suffix=patch.apiKey.slice(-4);rec.provider=patch.apiKey.startsWith('sk-ant-')?'anthropic':'openai';rec.keyAddedAt=new Date().toISOString();
-          // A key for the other provider brings that provider's recommended model unless one is chosen in the same request.
-          if(!('model'in patch)&&rec.model&&(rec.provider==='anthropic')!==/^claude-/i.test(rec.model))delete rec.model;
+          cipher.setAAD(Buffer.from(id+'|'+provider));
+          keys[provider]={ciphertext:Buffer.concat([cipher.update(patch.apiKey,'utf8'),cipher.final()]).toString('base64'),
+            iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),suffix:patch.apiKey.slice(-4),keyAddedAt:new Date().toISOString(),aadVersion:2};
+          rec.provider=provider;
+          if(!('model'in patch)&&rec.model&&providerOfModel(rec.model)!==provider)delete rec.model;
         }
         if('enabled'in patch)rec.enabled=patch.enabled;
-        if('model'in patch)rec.model=patch.model;
-        if(rec.ciphertext&&rec.model&&((rec.provider==='anthropic')!==/^claude-/i.test(rec.model)))throw safeError('PROVIDER_MODEL_MISMATCH');
+        if('model'in patch){
+          const provider=providerOfModel(patch.model);
+          if(Object.keys(keys).length&&!keys[provider]?.ciphertext)throw safeError('PROVIDER_MODEL_MISMATCH');
+          rec.model=patch.model;rec.provider=provider;
+        }
+        rec.providerKeys=keys;
+        for(const field of cryptoFields)delete rec[field];
         Object.assign(rec,research);
         if('reasoningEffort'in patch)rec.reasoningEffort=patch.reasoningEffort;
         if('dailyRequestLimit'in patch)rec.dailyRequestLimit=patch.dailyRequestLimit;
@@ -80,13 +97,14 @@ export function createAstraVault(dataDir) {
         await write(rows);return view(rows[id]);
       });
     },
-    async withKey(license,fn) {
-      const id=identity(license),rec=(await read())[id];
+    async withKey(license,fn,provider=null) {
+      const id=identity(license),record=(await read())[id];
+      const selected=provider||record?.provider||'openai',rec=keysOf(record)[selected];
       if(!rec?.ciphertext)throw new Error('NO_API_KEY');
       let key;
       try {
         const decipher=crypto.createDecipheriv('aes-256-gcm',await master(),Buffer.from(rec.iv,'base64'));
-        decipher.setAAD(Buffer.from(id));decipher.setAuthTag(Buffer.from(rec.tag,'base64'));
+        decipher.setAAD(Buffer.from(rec.aadVersion===2?id+'|'+selected:id));decipher.setAuthTag(Buffer.from(rec.tag,'base64'));
         key=Buffer.concat([decipher.update(Buffer.from(rec.ciphertext,'base64')),decipher.final()]);
       }catch{throw new Error('ASTRA_ENCRYPTION_UNAVAILABLE');}
       try{return await fn(key.toString('utf8'));}finally{key.fill(0);}

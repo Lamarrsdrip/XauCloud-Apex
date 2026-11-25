@@ -192,3 +192,15 @@ test('daily request budget is enforced, persisted across restart, and never bloc
   await assert.rejects(again.configure('L',{dailyRequestLimit:999999}));
   again.close();
 }));
+
+test('vault preserves both providers, switches selected model and isolates encryption',()=>temp(async dir=>{
+  const v=createAstraVault(dir),anthropic='sk-ant-THIS_IS_A_SYNTHETIC_ANTHROPIC_KEY_1234';
+  await v.update('a',{apiKey:fakeKey,model:'gpt-6.2-astra'});
+  const b=await v.update('a',{apiKey:anthropic,model:'claude-opus-5-5'});
+  assert.deepEqual(b.availableProviders,['openai','anthropic']);assert.equal(b.provider,'anthropic');
+  assert.equal(await v.withKey('a',async k=>k),'sk-ant-THIS_IS_A_SYNTHETIC_ANTHROPIC_KEY_1234');
+  assert.equal(await v.withKey('a',async k=>k,'openai'),fakeKey);
+  const c=await v.update('a',{model:'gpt-6.2-sol'});assert.equal(c.provider,'openai');assert.equal(await v.withKey('a',async k=>k),fakeKey);
+  await assert.rejects(v.withKey('b',async()=>{},'anthropic'),/NO_API_KEY/);
+  await v.remove('a');assert.deepEqual((await v.settings('a')).availableProviders,[]);
+}));

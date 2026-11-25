@@ -61,19 +61,20 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
   const learning=createLearning(dataDir,{clock}),chats=createConversations(dataDir,{clock});
   const lab=createLab(dataDir,{clock,learning,modelPredict:async(license,e)=>{
     const settings=await vault.settings(license);
-    if(!settings.hasKey)throw failure('NO_API_KEY');
+    const model=e.requestedModel||settings.model,info=modelInfo(model),provider=info?.provider||(model.startsWith('claude-')?'anthropic':'openai');
+    if(!settings.availableProviders.includes(provider))throw failure('NO_API_KEY');
     if(((await usageToday(license)).research||0)>=settings.researchDailyLimit)throw failure('RESEARCH_BUDGET_REACHED');
     const ctx={campaign:{positions:[],direction:'NONE'},structure:{},patternEngine:e.engine};
     const {instructions,brain,examples}=await knowledge(ctx,{depth:'deep'});
     // Do not give a benchmark model retrospective video outcomes or validation/held-out aggregate results.
     // Training-only analogues are allowed; model pretraining and human reference selection are still possible contamination.
     const blindBrain={brainVersion:brain.brainVersion,families:brain.families,similarHistory:brain.similarHistory};
-    const reply=await vault.withKey(license,key=>callModel({key,model:settings.model,effort:settings.researchEffort,
+    const reply=await vault.withKey(license,key=>callModel({key,model,effort:settings.researchEffort,
       system:instructions+'\nBLIND RESEARCH ONLY. Output the lab schema, not an execution decision. The chart is rebased and historical. Assess only the prefix; no future information. Use exact rebased levels and admit uncertainty.',
-      text:JSON.stringify({prefix:e.prefix,quote:e.quote,atr:e.atr,engine:e.engine,apexBrain:blindBrain}),image:e.image,schema:LAB_SCHEMA,fetchImpl,signal:AbortSignal.timeout(180000),maxTokens:16000}));
+      text:JSON.stringify({prefix:e.prefix,quote:e.quote,atr:e.atr,engine:e.engine,apexBrain:blindBrain}),image:e.image,schema:LAB_SCHEMA,fetchImpl,signal:AbortSignal.timeout(180000),maxTokens:16000}),provider);
     await countRequest(license,{kind:'research',tokens:reply.usage});
     if((await vault.settings(license)).revision!==settings.revision)throw failure('SETTINGS_CHANGED');
-    return {prediction:JSON.parse(reply.text),model:settings.model,latencyMs:reply.latencyMs};
+    return {prediction:JSON.parse(reply.text),model,latencyMs:reply.latencyMs};
   }});
   // Research chat has no executable job identifiers or order commands.
   const snapshots=new Map(),chatRunning=new Set(),theses=new Map(),thesisRunning=new Set(),engineSeen=new Map(),lastScreen=new Map();

@@ -36,9 +36,15 @@ try{
   await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
   await page.screenshot({path:'apex-settings-'+size.width+'.png'});
   await page.locator('[data-settings-tab="astra"]').click();
-  await page.locator('#astra-dual-preset').click();
+  assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6-luna');
+  assert.equal(await page.locator('#astra-research-model').inputValue(),'');
+  await page.locator('[data-model-choice="gpt-6.2-sol"]').click();
   assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6.2-sol');
-  assert.equal(await page.locator('#astra-research-model').inputValue(),'gpt-6.2-astra');
+  assert.equal(await page.locator('#astra-research-model').inputValue(),'');
+  await page.locator('[data-model-choice="gpt-6.2-astra"]').click();
+  assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6.2-astra');
+  await page.locator('[data-model-choice="gpt-6-luna"]').click();
+  assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6-luna');
   await page.screenshot({path:'apex-ai-connection-'+size.width+'.png'});
   await page.locator('[data-nav="ai"]:visible').click();
   await page.getByRole('heading',{name:'Apex AI',exact:true}).waitFor();

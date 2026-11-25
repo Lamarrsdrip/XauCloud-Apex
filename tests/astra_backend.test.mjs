@@ -217,3 +217,22 @@ test('explicit uncapped budget persists; independent Sol and Astra model routing
  assert.equal((await v.settings('a')).researchDailyLimit,0);
  svc.close();
 }));
+
+test('Luna is the default for new OpenAI accounts; explicit model choices survive restart',()=>temp(async dir=>{
+  const v=createAstraVault(dir);
+  assert.equal((await v.settings('new')).model,'gpt-6-luna');
+  const x=await v.update('new',{apiKey:fakeKey,enabled:true});
+  assert.equal(x.model,'gpt-6-luna');assert.equal(x.researchModel,null);
+  const bodies=[];
+  const svc=createAstraService({dataDir:dir,fetchImpl:async(_url,init)=>{bodies.push(JSON.parse(init.body));return completed(decision());}});
+  for(const model of ['gpt-6-luna','gpt-6.2-sol','gpt-6.2-astra']){
+    const current=await svc.configure('new',{model,researchModel:null});
+    assert.equal((await v.settings('new')).model,model);
+    await svc.test('new',[strategyFixtures().find(x=>x.name==='TOO_EARLY')],{scope:'CONNECTION'});
+    assert.equal(bodies.at(-1).model,model);
+    assert.equal((await createAstraVault(dir).settings('new')).researchModel,null);
+  }
+  await v.update('new',{apiKey:fakeKey});
+  assert.equal((await v.settings('new')).model,'gpt-6.2-astra');
+  svc.close();
+}));

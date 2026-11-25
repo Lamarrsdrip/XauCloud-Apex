@@ -193,3 +193,7 @@ Build a genuinely intelligent, specialised gold system around the nine reference
 - Don't touch the live XauCloud MT5 (`C:\Program Files\MetaTrader 5`) or XauCloud repos.
 - Owner is OK with you pushing feature branches; merging to `main` deploys production — only verified work.
 - Commit messages end with `Co-Authored-By: <model> <noreply@anthropic.com>` style attribution if you are Claude; PR bodies end with the generated-with line.
+
+
+## 5. GPT continuation — backend milestone (2026-11-25)
+Implemented persisted, license-isolated blind replay in `research/lab.mjs`, with server-only future candles, rebased prices, sealed predictions, native/engine/user/model sources and conservative first-touch scoring. Added service model adapter, authenticated lab endpoints, conversation CRUD, model catalog, learning stats, SSE chat and capability test scopes. Added `tests/apex_lab.test.mjs`. This is a code milestone, NOT a verified release. Benchmark jobs, calibration, frontend integration, true provider tests, full EA bridge/compile/demo and original audit/docs remain. Container cannot resolve GitHub; CI must execute tests. No merge or production deployment performed.

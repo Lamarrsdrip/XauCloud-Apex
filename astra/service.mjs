@@ -12,6 +12,7 @@ import {BRAIN_VERSION} from './brain.mjs';
 import {MODELS,modelInfo} from './models.mjs';
 import {visionTestChart} from './chart-png.mjs';
 import {createConversations} from './conversations.mjs';
+import {createLab,LAB_SCHEMA} from '../research/lab.mjs';
 
 const EVENT_ACTION={ENTER_BUY:'ASTRA_ENTRY',ENTER_SELL:'ASTRA_ENTRY',ADD:'ASTRA_ADD',HOLD:'ASTRA_HOLD',
   STOP_ADDING:'ASTRA_STOP_ADDING',EXIT:'ASTRA_EXIT',REDUCE:'ASTRA_STOP_ADDING',WAIT:'ASTRA_SETUP_WATCH'};
@@ -58,6 +59,19 @@ const THESIS_TTL_MS=10*60000;
 export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clock=Date.now,timeoutMs=7500}={}) {
   const vault=createAstraVault(dataDir),jobs=new Map(),last=new Map(),running=new Map(),recent=new Map();
   const learning=createLearning(dataDir,{clock}),chats=createConversations(dataDir,{clock});
+  const lab=createLab(dataDir,{clock,learning,modelPredict:async(license,e)=>{
+    const settings=await vault.settings(license);
+    if(!settings.hasKey)throw failure('NO_API_KEY');
+    if((await usageToday(license)).research>=settings.researchDailyLimit)throw failure('RESEARCH_BUDGET_REACHED');
+    const ctx={campaign:{positions:[],direction:'NONE'},structure:{},patternEngine:e.engine};
+    const {instructions,brain,examples}=await knowledge(ctx,{depth:'deep'});
+    const reply=await vault.withKey(license,key=>callModel({key,model:settings.model,effort:settings.researchEffort,
+      system:instructions+'\nBLIND RESEARCH ONLY. Output the lab schema, not an execution decision. The chart is rebased and historical. Assess only the prefix; no future information. Use exact rebased levels and admit uncertainty.',
+      text:JSON.stringify({prefix:e.prefix,quote:e.quote,atr:e.atr,engine:e.engine,apexBrain:brain,examples}),image:e.image,schema:LAB_SCHEMA,fetchImpl,signal:AbortSignal.timeout(180000),maxTokens:16000}));
+    await countRequest(license,{kind:'research',tokens:reply.usage});
+    if((await vault.settings(license)).revision!==settings.revision)throw failure('SETTINGS_CHANGED');
+    return {prediction:JSON.parse(reply.text),model:settings.model,latencyMs:reply.latencyMs};
+  }});
   // Research chat has no executable job identifiers or order commands.
   const snapshots=new Map(),chatRunning=new Set(),theses=new Map(),thesisRunning=new Set(),engineSeen=new Map(),lastScreen=new Map();
   // Persisted per-license request counts per UTC day (hashed identity, no license text).
@@ -177,6 +191,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
       }finally{chatRunning.delete(license);}
     },
     conversations:chats,
+    lab,
     async submit(license,snapshot) {
       prune();
       const settings=await available(license);

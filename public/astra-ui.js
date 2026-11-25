@@ -29,7 +29,7 @@
       +'<span class="details-name">AI usage & model</span>'
       +'<span class="details-desc" style="display:block">Choose a supported model and control API requests.</span>'
       +'</span></summary><div class="details-content" style="padding-top:21px">'
-      +'<div class="field"><label for="astra-model">Model</label><input id="astra-model" value="'+esc(a.model||'gpt-6.2-astra')+'" autocomplete="off" spellcheck="false">'
+      +'<div class="field"><label for="astra-model">Model</label><input id="astra-model" list="astra-model-options" value="'+esc(a.model||'gpt-6.2-astra')+'" autocomplete="off" spellcheck="false"><datalist id="astra-model-options"></datalist>'
       +'<div class="hint">Use the exact model ID available to your OpenAI or Anthropic account. A Claude model needs an Anthropic key.</div></div>'
       +'<div class="field"><label for="astra-limit">Daily live-decision request limit</label><input id="astra-limit" type="number" min="10" max="20000" step="10" value="'+esc(a.dailyRequestLimit||2000)+'">'
       +'<div class="hint">Live decision requests are billed by your API provider. Research chat is billed separately and does not consume this live-decision allowance. When reached, native trading takes over until the next UTC day.</div></div>';
@@ -48,9 +48,10 @@
       +'</span></summary><div class="details-content" style="padding-top:14px">'
       +row('Last decision',d.action?label(d.action):'No decision yet')
       +row('AI requests today',(a.requestsToday==null?'—':a.requestsToday)+' / '+(a.dailyRequestLimit||'—'))
+      +row('Research requests today',a.researchToday??'—')+row('Input / output tokens',a.tokensToday?(a.tokensToday.input+' / '+a.tokensToday.output):'—')+row('Last model latency',a.latencyMs==null?'—':a.latencyMs+' ms')
       +row('Last connection issue',a.lastFallbackReason?label(a.lastFallbackReason):'None reported')
       +'<div class="release-actions" style="margin-top:15px">'
-      +'<button class="btn btn-ghost" style="width:auto" id="astra-checks" '+(!hasKey?'disabled':'')+'>Run strategy checks</button>'
+      +'<button class="btn btn-ghost" style="width:auto" id="astra-checks" '+(!hasKey?'disabled':'')+'>Run strategy checks</button><button class="btn btn-ghost" style="width:auto" id="astra-text-test" '+(!hasKey?'disabled':'')+'>Text test</button><button class="btn btn-ghost" style="width:auto" id="astra-vision-test" '+(!hasKey?'disabled':'')+'>Vision test</button>'
       +'<button class="btn btn-danger" style="width:auto" id="astra-remove" '+(!hasKey?'disabled':'')+'>Remove API key</button></div>'
       +'<div class="hint" style="margin-top:10px">Both tests use your saved key and may incur API charges. A successful connection is not proof of trading performance.</div></div></details>'
       +'<div id="astra-result" role="status" aria-live="polite" class="settings-subtle" style="margin-top:13px"></div>'
@@ -64,7 +65,7 @@
   function bind(refresh){
     var save=document.getElementById('astra-save');if(!save)return;
     var result=document.getElementById('astra-result');
-    var buttons=['astra-save','astra-test','astra-checks','astra-remove'].map(function(id){return document.getElementById(id);});
+    var buttons=['astra-save','astra-test','astra-checks','astra-text-test','astra-vision-test','astra-remove'].map(function(id){return document.getElementById(id);});
     async function run(fn){buttons.forEach(function(b){b.disabled=true;});result.textContent='Working…';
       try{await fn();}catch(e){result.textContent=label(e.message);}finally{buttons.forEach(function(b){b.disabled=false;});}}
     save.onclick=function(){run(async function(){
@@ -80,11 +81,14 @@
       var lines=(data.results||[]).map(function(r){
         if(r.error)return r.name+': '+label(r.error);
         var t=r.latencyMs!=null?' · '+r.latencyMs+' ms'+(r.withinDecisionBudget===false?' (too slow for live use)':''):'';
-        return scope==='connection'?'Model replied '+label(r.action)+' / '+label(r.state)+t:r.name+': '+(r.passed?'PASS':'FAIL (got '+label(r.action)+')')+t;});
+        return scope==='connection'?'Model replied '+label(r.action)+' / '+label(r.state)+t:r.name+': '+(r.passed?'PASS':'FAIL'+(r.action?' (got '+label(r.action)+')':''))+t;});
       result.textContent=label(data.status)+' · '+lines.join(' · ');
     });}
     document.getElementById('astra-test').onclick=function(){test('connection');};
     document.getElementById('astra-checks').onclick=function(){test('strategy');};
+    document.getElementById('astra-text-test').onclick=function(){test('text');};
+    document.getElementById('astra-vision-test').onclick=function(){test('vision');};
+    request('GET','/api/session/astra/models').then(function(d){var list=document.getElementById('astra-model-options');if(!list)return;(d.models||[]).filter(function(m){return !m.legacy;}).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.label=m.label+' · '+m.provider;list.appendChild(o);});}).catch(function(){});
   }
   var state={identity:null,history:[],busy:false,epoch:0,refresh:null,status:'',conversationId:null,workspace:'chat',episode:null,loaded:false,stream:''};
   function resetChat(){state.epoch++;state.identity=null;state.history=[];state.busy=false;state.refresh=null;state.status='';state.conversationId=null;state.workspace='chat';state.episode=null;state.benchmarkId=null;state.loaded=false;state.stream='';}

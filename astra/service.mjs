@@ -170,7 +170,8 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
         lastDecision:record?.decision||null,latencyMs:record?.latencyMs??null,
         lastFallbackReason:record?.fallbackReason||null,knowledgeVersion:KNOWLEDGE_VERSION,modelInfo:modelInfo(base.model),
         research:t?{status:t.status,ageSec:Math.round((clock()-t.createdAtMs)/1000),thesis:t.thesis||null,reason:t.reason||null,latencyMs:t.latencyMs??null,running:thesisRunning.has(license)}:{status:thesisRunning.has(license)?'RUNNING':'NONE'},
-        investigation:snap?{observedAt:new Date(snap.observedAtMs).toISOString(),bid:snap.quote.bid,ask:snap.quote.ask,atrM3:snap.patternEngine?.atrM3??null,
+        investigation:snap?{observedAt:new Date(snap.observedAtMs).toISOString(),ageMs:Math.max(0,clock()-snap.observedAtMs),freshness:clock()-snap.observedAtMs<=8000&&clock()-snap.observedAtMs+snap.quote.ageMs<=8000?'RECENT':clock()-snap.observedAtMs<=600000?'HISTORICAL':'STALE',bid:snap.quote.bid,ask:snap.quote.ask,atrM3:snap.patternEngine?.atrM3??null,
+          candles:(snap.candles?.m1||[]).slice(-60).map(({time,open,high,low,close})=>({time,open,high,low,close})),
           candidates:(snap.patternEngine?.candidates||[]).map(({family,direction,stage,entry,invalidation,target,extensionAtr,evidence,fvg})=>({family,direction,stage,entry,invalidation,target,extensionAtr,evidence,fvg}))}:null,
         screenedAt:lastScreen.get(license)||null};
     },

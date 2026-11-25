@@ -555,12 +555,24 @@ function apexIntelligencePanel(me){
   var owner=camp&&camp.strategyOwner?camp.strategyOwner==='ASTRA'?'Apex AI':'Native Apex':'No active campaign';
   var side=d.direction==='BUY'||d.direction==='SELL'?d.direction:s.direction==='BUY'||s.direction==='SELL'?s.direction:'—';
   var phase=s.state?String(s.state).replace(/_/g,' '):'Not reported';
+  var inv=a.investigation||null,th=a.research||{},candidates=inv&&Array.isArray(inv.candidates)?inv.candidates:[],fresh=inv&&inv.freshness==='RECENT',known=inv&&inv.freshness!=='STALE';
+  function price(v){return typeof v==='number'&&Number.isFinite(v)?v.toFixed(2):'—';}
+  function chart(data){
+    if(!Array.isArray(data)||!data.length)return '<div class="intel-empty">No market chart received from the connected Apex terminal.</div>';
+    var valid=data.filter(function(x){return [x.open,x.high,x.low,x.close].every(Number.isFinite);});if(!valid.length)return '<div class="intel-empty">Chart unavailable.</div>';
+    var hi=Math.max.apply(null,valid.map(function(x){return x.high;})),lo=Math.min.apply(null,valid.map(function(x){return x.low;})),span=hi-lo||1,step=550/valid.length;
+    var y=function(v){return 10+(hi-v)/span*125;};
+    return '<svg class="intel-candle-chart" role="img" aria-label="Recent one-minute gold candlesticks" viewBox="0 0 620 154" xmlns="http://www.w3.org/2000/svg">'+[0,1,2,3].map(function(i){var p=hi-span*i/3;return '<path d="M0 '+y(p)+'H555" stroke="#303945" stroke-width=".5"/><text x="560" y="'+(y(p)+3)+'" font-size="10" fill="#b0bac8">'+p.toFixed(2)+'</text>';}).join('')+valid.map(function(b,i){var x=3+step*i,cl=b.close>=b.open?'#36c79b':'#f37584';return '<path d="M'+x+' '+y(b.high)+'V'+y(b.low)+'" stroke="'+cl+'" stroke-width="1"/><rect x="'+(x-step*.28)+'" y="'+Math.min(y(b.open),y(b.close))+'" width="'+Math.max(1,step*.56)+'" height="'+Math.max(1,Math.abs(y(b.open)-y(b.close)))+'" fill="'+cl+'"/>';}).join('')+'</svg>';
+  }
+  var desk='<div class="intel-market"><div class="intel-market-main"><div class="intel-market-top"><div><span class="intel-kicker">XAUUSD · M1 SNAPSHOT</span><strong>'+esc(known?price(inv.bid):'—')+'</strong><small>'+esc(known?'Ask '+price(inv.ask)+' · M3 ATR '+price(inv.atrM3):'Waiting for terminal data')+'</small></div><span class="overview-pill '+(fresh?'ok':'off')+'">'+esc(fresh?'Recent':known?'Historical':'Unavailable')+'</span></div>'+chart(known?inv.candles:null)+'<small class="intel-time">'+esc(inv&&inv.observedAt?'Observed '+fmtDate(inv.observedAt):'No recent snapshot')+'</small></div><div class="intel-candidates"><span class="intel-kicker">DEVELOPING STRUCTURE</span>'+(!known?'<p class="settings-subtle">No current setup evidence.</p>':!candidates.length?'<p class="settings-subtle">No reference-family candidate in the latest snapshot.</p>':candidates.slice(0,4).map(function(c){return '<article><div><strong>'+esc(String(c.family).replace(/_/g,' '))+'</strong><span class="'+(c.direction==='BUY'?'intel-buy':'intel-sell')+'">'+esc(c.direction)+' · '+esc(c.stage)+'</span></div><small>Entry '+price(c.entry)+' · Invalid '+price(c.invalidation)+' · Target '+price(c.target)+'</small><p>'+esc((c.evidence||[]).slice(0,3).join(' · '))+'</p></article>';}).join(''))+'</div></div>';
+  if(th.thesis){var t=th.thesis;desk+='<div class="intel-thesis"><span class="intel-kicker">LAST RESEARCH THESIS · '+esc(th.ageSec==null?'—':th.ageSec+'s old')+'</span><strong>'+esc(t.direction||'—')+' · '+esc(t.stage||'—')+'</strong><p>'+esc(t.summary||'')+'</p><small>Entry condition: '+esc(t.entryCondition||'—')+' · Invalidation: '+esc(t.invalidationCondition||'—')+'</small></div>';}
+  else if(th.status==='RUNNING')desk+='<div class="intel-thesis"><span class="intel-kicker">RESEARCH IN PROGRESS</span><p>Evaluating the developing market structure.</p></div>';
   return '<section class="apex-intel" aria-label="Apex intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / STRATEGY INTELLIGENCE</span><h2>Market &amp; campaign desk</h2></div><a class="intel-link" href="#ai">Open AI research ↗</a></div>'
   +'<div class="intel-grid"><div><span>Setup phase</span><strong>'+esc(phase)+'</strong><small>Native telemetry</small></div>'
   +'<div><span>Direction</span><strong class="'+(side==='BUY'?'intel-buy':side==='SELL'?'intel-sell':'')+'">'+esc(side)+'</strong><small>Last reported</small></div>'
   +'<div><span>AI status</span><strong>'+esc(state)+'</strong><small>'+esc(d.action?String(d.action).replace(/_/g,' '):'No decision')+'</small></div>'
   +'<div><span>Strategy owner</span><strong>'+esc(owner)+'</strong><small>Campaign control</small></div></div>'
-  +'<div class="intel-foot"><span>Reference patterns · chart research</span><a href="#settings">Configure model</a></div></section>';
+  +desk+'<div class="intel-foot"><span>Reference patterns · chart research</span><a href="#settings">Configure model</a></div></section>';
 }
 function overviewTradingCard(me){
   var camp=me.campaign, setup=me.setupStatus||{}, currency=(me.account||{}).currency;

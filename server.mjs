@@ -1446,6 +1446,10 @@ const server=http.createServer(async(req,res)=>{
         if(!String(req.headers['content-type']||'').startsWith('application/json'))return json(res,415,{error:'json_required'});
         if(!throttle('astra-settings:'+s.lic,ip,12,60_000))return json(res,429,{error:'too_many_astra_requests'});
       }
+      if(req.method==='POST'&&u.pathname==='/api/session/astra/chat'){
+        try{return json(res,200,await ASTRA.chat(s.lic,await body(req)));}
+        catch(e){const reason=e.safe?e.message:'AI_ERROR';const status=reason==='INVALID_CHAT_INPUT'||reason==='INVALID_CHAT_IMAGE'?400:reason==='NO_API_KEY'||reason==='SETTINGS_CHANGED'||reason==='CHAT_ALREADY_RUNNING'?409:502;return json(res,status,{error:reason});}
+      }
       if(req.method==='POST'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.configure(s.lic,await body(req)));
       if(req.method==='DELETE'&&u.pathname==='/api/session/astra')return json(res,200,await ASTRA.remove(s.lic));
       if(req.method==='POST'&&u.pathname==='/api/session/astra/test'){

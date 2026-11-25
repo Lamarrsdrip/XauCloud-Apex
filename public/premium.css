@@ -234,3 +234,22 @@ a:hover{text-decoration-color:var(--gold)}
 #apex-notifications-card .apn-btn{min-height:43px;border-radius:11px}
 #apex-notifications-card .apn-btn.primary{background:var(--gold);color:#1b1c1c;border-color:var(--gold)}
 #apex-notifications-card .apn-ios{background:#232d35;border-radius:12px;color:#c6d1da;opacity:1;line-height:1.65}
+
+/* Dedicated research conversation; not a trading control panel. */
+.apex-ai-chat{max-width:840px;margin:0 auto;min-width:0;display:flex;flex-direction:column;gap:14px}
+.apex-ai-chat header{display:flex;align-items:center;gap:12px;padding:0 0 14px;border-bottom:1px solid var(--border)}
+.apex-ai-chat header h2{margin:0;font-size:21px;letter-spacing:-.03em;color:var(--text)}
+.apex-ai-chat header p{margin:2px 0 0;font-size:12px;color:var(--text-dim)}
+.apex-ai-chat header button{margin-left:auto;width:auto}
+.apex-ai-mark{display:grid;place-items:center;width:39px;height:39px;border:1px solid var(--border);border-radius:12px;color:#e4c68f;background:var(--bg-elev);font-size:23px}
+.apex-chat-thread{display:flex;flex-direction:column;gap:20px;min-height:300px;max-height:58dvh;overflow-y:auto;overscroll-behavior:contain;padding:12px 2px;scrollbar-width:thin}
+.apex-chat-assistant,.apex-chat-user{font-size:14px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;max-width:95%;color:var(--text)}
+.apex-chat-assistant{align-self:flex-start;padding:2px 0}
+.apex-chat-user{align-self:flex-end;border:1px solid var(--border);background:var(--bg-elev-2);padding:10px 14px;border-radius:15px}
+.apex-chat-note{color:var(--text-dim);padding:12px;background:var(--bg-elev);border-radius:12px}
+.apex-chat-compose{display:flex;gap:9px;align-items:flex-end}
+.apex-chat-compose textarea{resize:vertical;min-height:54px;max-height:180px;flex:1;min-width:0;border:1px solid var(--border);border-radius:14px;background:var(--bg-elev);color:var(--text);padding:12px;font:inherit}
+.apex-chat-compose button{width:auto;min-height:48px}
+.apex-chat-attachment{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--text-dim);font-size:11px;margin-bottom:8px}
+.apex-chat-attachment input{max-width:100%;font-size:12px}
+#apex-chat-status{margin-top:8px;min-height:18px}

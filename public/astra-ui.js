@@ -31,8 +31,8 @@
       +'</span></summary><div class="details-content" style="padding-top:21px">'
       +'<div class="field"><label for="astra-model">Model</label><input id="astra-model" value="'+esc(a.model||'gpt-6-astra')+'" autocomplete="off" spellcheck="false">'
       +'<div class="hint">Use a model available through your own OpenAI API account.</div></div>'
-      +'<div class="field"><label for="astra-limit">Daily API request limit</label><input id="astra-limit" type="number" min="10" max="5000" step="10" value="'+esc(a.dailyRequestLimit||500)+'">'
-      +'<div class="hint">Astra requests are billed separately by your API provider. This is a request count, not a spending limit. When reached, native trading takes over until the next UTC day.</div></div>';
+      +'<div class="field"><label for="astra-limit">Daily live-decision request limit</label><input id="astra-limit" type="number" min="10" max="5000" step="10" value="'+esc(a.dailyRequestLimit||500)+'">'
+      +'<div class="hint">Live decision requests are billed by your API provider. Research chat is billed separately and does not consume this live-decision allowance. When reached, native trading takes over until the next UTC day.</div></div>';
     var efforts=['low','medium','high','none','default'],eff=a.reasoningEffort||'low';
     html+='<div class="field"><label for="astra-effort">Reasoning effort</label><select id="astra-effort">'
       +efforts.map(function(x){return '<option value="'+x+'"'+(x===eff?' selected':'')+'>'+esc(x==='default'?'Model default':x)+'</option>';}).join('')
@@ -84,5 +84,33 @@
     document.getElementById('astra-test').onclick=function(){test('connection');};
     document.getElementById('astra-checks').onclick=function(){test('strategy');};
   }
-  window.AstraUI={card:card,bind:bind};
+  function chatPage(me){
+    var hasKey=me.astra&&me.astra.hasKey;
+    return '<section class="apex-ai-chat"><header><div class="apex-ai-mark" aria-hidden="true">✦</div><div><h2>Apex AI</h2><p>Gold setup research · Reference pattern intelligence</p></div><button type="button" id="apex-chat-clear" class="btn btn-ghost">Clear</button></header>'
+      +(hasKey?'':'<div class="apex-chat-note">Connect your API key in <a href="#settings">Settings</a> to use Apex AI.</div>')
+      +'<div class="apex-chat-thread" id="apex-chat-thread" role="log" aria-live="polite"><div class="apex-chat-assistant">Send a gold chart or ask me to investigate a setup. I can compare it with Apex’s reference patterns and available market evidence.</div></div>'
+      +'<form id="apex-chat-form"><div class="apex-chat-attachment"><input type="file" id="apex-chat-image" accept="image/png,image/jpeg" aria-label="Attach gold chart"><span>PNG or JPEG · up to 1 MB</span></div><div class="apex-chat-compose"><textarea id="apex-chat-message" aria-label="Message Apex AI" placeholder="Ask about a gold setup…" rows="2" maxlength="4000" '+(hasKey?'':'disabled')+'></textarea><button type="submit" id="apex-chat-send" class="btn btn-primary" '+(hasKey?'':'disabled')+'>Send</button></div><div id="apex-chat-status" class="hint" role="status"></div></form></section>';
+  }
+  function bindChat(){
+    var thread=document.getElementById('apex-chat-thread'),form=document.getElementById('apex-chat-form');
+    if(!thread||!form)return;
+    var message=document.getElementById('apex-chat-message'),attachment=document.getElementById('apex-chat-image'),send=document.getElementById('apex-chat-send'),status=document.getElementById('apex-chat-status'),clear=document.getElementById('apex-chat-clear');
+    var history=[],busy=false;
+    function append(role,text){var node=document.createElement('div');node.className='apex-chat-'+role;node.textContent=text;thread.appendChild(node);thread.scrollTop=thread.scrollHeight;}
+    function readImage(file){return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(reader.result);};reader.onerror=reject;reader.readAsDataURL(file);});}
+    clear.onclick=function(){if(busy)return;history=[];thread.textContent='';status.textContent='';};
+    form.onsubmit=async function(e){e.preventDefault();var value=message.value.trim();if(!value||busy)return;
+      var file=attachment.files[0];if(file&&(file.size>1000000||!['image/png','image/jpeg'].includes(file.type))){status.textContent='Choose a PNG or JPEG chart smaller than 1 MB.';return;}
+      busy=true;send.disabled=true;clear.disabled=true;status.textContent='Researching the setup…';
+      try{
+        var image=file?await readImage(file):null;
+        append('user',value+(file?' · Chart attached':''));message.value='';attachment.value='';
+        var result=await request('POST','/api/session/astra/chat',{message:value,image:image,history:history.slice(-8)});
+        append('assistant',result.answer);history.push({role:'user',text:value},{role:'assistant',text:result.answer.slice(0,6000)});history=history.slice(-8);
+        status.textContent=result.marketStatus==='RECENT_SNAPSHOT'?'Market snapshot: '+result.observedAt:result.marketStatus==='HISTORICAL_SNAPSHOT'?'Historical snapshot: '+result.observedAt:'No Apex market snapshot available';
+      }catch(error){status.textContent='Unable to complete research: '+label(error.message);}
+      finally{busy=false;send.disabled=false;clear.disabled=false;}
+    };
+  }
+  window.AstraUI={card:card,bind:bind,chatPage:chatPage,bindChat:bindChat};
 })();

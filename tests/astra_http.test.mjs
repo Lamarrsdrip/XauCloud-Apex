@@ -19,12 +19,15 @@ test('dashboard key routes authenticate, isolate licenses, reject CSRF, and neve
   }
   try{
     assert.equal((await req('/api/session/astra')).status,401);
+    assert.equal((await req('/api/session/astra/chat',{method:'POST',body:{message:'hello'}})).status,401);
     const a=(await req('/api/auth/login',{method:'POST',body:{license:'A'}})).cookie;
     const b=(await req('/api/auth/login',{method:'POST',body:{license:'B'}})).cookie;
     const fake='sk-test-THIS_IS_A_SYNTHETIC_TEST_KEY_6789';
     const saved=await req('/api/session/astra',{method:'POST',cookie:a,body:{apiKey:fake,enabled:false,model:'gpt-6-astra'}});
     assert.equal(saved.status,200);assert.equal(saved.data.hasKey,true);assert.ok(!JSON.stringify(saved.data).includes(fake));
     assert.equal((await req('/api/session/astra',{cookie:b})).data.hasKey,false);
+    assert.equal((await req('/api/session/astra/chat',{method:'POST',cookie:b,body:{message:'hello'}})).data.error,'NO_API_KEY');
+    assert.equal((await req('/api/session/astra/chat',{method:'POST',cookie:a,body:{message:'hello'},headers:{'sec-fetch-site':'cross-site'}})).status,403);
     assert.equal((await req('/api/session/astra',{method:'POST',cookie:a,body:{enabled:true},headers:{'sec-fetch-site':'cross-site'}})).status,403);
     assert.equal((await req('/api/apex/astra/status?license=A&account=111')).status,405);
     const ea=await req('/api/apex/astra/status',{method:'POST',body:{license:'A',account:'111'}});assert.equal(ea.data.status,'DISABLED');assert.ok(!JSON.stringify(ea.data).includes(fake));

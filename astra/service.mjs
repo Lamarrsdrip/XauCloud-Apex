@@ -5,6 +5,7 @@ import {createAstraVault} from './vault.mjs';
 import {buildContext} from './context.mjs';
 import {DECISION_SCHEMA,KNOWLEDGE_VERSION,bindDecision,validateDecision} from './contract.mjs';
 import {knowledge} from './retrieval.mjs';
+import {callAstraChat,validateChatInput} from './chat.mjs';
 
 const EVENT_ACTION={ENTER_BUY:'ASTRA_ENTRY',ENTER_SELL:'ASTRA_ENTRY',ADD:'ASTRA_ADD',HOLD:'ASTRA_HOLD',
   STOP_ADDING:'ASTRA_STOP_ADDING',EXIT:'ASTRA_EXIT',REDUCE:'ASTRA_STOP_ADDING',WAIT:'ASTRA_SETUP_WATCH'};
@@ -52,6 +53,8 @@ export async function callOpenAI({key,model,effort='default',context,fetchImpl=f
 
 export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clock=Date.now,timeoutMs=6000}={}) {
   const vault=createAstraVault(dataDir),jobs=new Map(),last=new Map(),running=new Map(),recent=new Map();
+  // Research chat has no executable job identifiers or order commands.
+  const snapshots=new Map(),chatRunning=new Set();
   // Persisted per-license request counts per UTC day (hashed identity, no license text).
   const usageFile=path.join(dataDir,'astra-usage.json');let usage=null,usageChain=Promise.resolve();
   const day=()=>new Date(clock()).toISOString().slice(0,10);
@@ -70,6 +73,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
   function prune() {
     const now=clock();for(const [id,job]of jobs)if(now-job.started>180000){job.controller.abort();jobs.delete(id);}
     for(const [id,value]of recent)if(now-value.at>180000)recent.delete(id);
+    for(const [id,value]of snapshots)if(now-value.observedAtMs>600000)snapshots.delete(id);
     // Bounded job retention. Old records have no authority after expiration.
     if(jobs.size>2000)for(const [id,job]of jobs){if(job.status!=='PENDING')jobs.delete(id);if(jobs.size<=1500)break;}
   }
@@ -88,18 +92,34 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
   const service={
     async settings(license) {return service.status(license);},
     async configure(license,patch) {cancel(license);await vault.update(license,patch);last.delete(license);recent.delete(license);return service.status(license);},
-    async remove(license) {cancel(license);await vault.remove(license);last.delete(license);recent.delete(license);return service.status(license);},
+    async remove(license) {cancel(license);snapshots.delete(license);await vault.remove(license);last.delete(license);recent.delete(license);return service.status(license);},
     async status(license) {
       const base=await available(license),record=last.get(license);
       return {...base,status:base.status==='ASTRA_READY'?(record?.status||'ASTRA_READY'):base.status,
         lastDecision:record?.decision||null,latencyMs:record?.latencyMs??null,
         lastFallbackReason:record?.fallbackReason||null,knowledgeVersion:KNOWLEDGE_VERSION};
     },
+    async chat(license,input) {
+      prune();validateChatInput(input);
+      if(chatRunning.has(license))throw failure('CHAT_ALREADY_RUNNING');
+      chatRunning.add(license);
+      try {
+        const settings=await vault.settings(license);
+        if(!settings.hasKey)throw failure('NO_API_KEY');
+        const result=await vault.withKey(license,key=>callAstraChat({key,model:settings.model,effort:settings.reasoningEffort,input,
+          context:snapshots.get(license),fetchImpl,now:clock()}));
+        const after=await vault.settings(license);
+        if(after.revision!==settings.revision||!after.hasKey)throw failure('SETTINGS_CHANGED');
+        return result;
+      }finally{chatRunning.delete(license);}
+    },
     async submit(license,snapshot) {
       prune();
       const settings=await available(license);
       if(settings.status!=='ASTRA_READY')return {status:settings.status,fallbackReason:settings.status};
       const context=buildContext(snapshot,{now:clock()});
+      snapshots.delete(license);snapshots.set(license,context);
+      while(snapshots.size>256)snapshots.delete(snapshots.keys().next().value);
       if(context.campaign.positions.length&&context.campaign.owner!=='ASTRA')return {status:'NATIVE_LIFESTYLE',fallbackReason:'CAMPAIGN_OWNED_BY_NATIVE'};
       const pending=running.get(license);
       if(pending) {

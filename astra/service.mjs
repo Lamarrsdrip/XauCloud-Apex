@@ -205,13 +205,23 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
     },
     conversations:chats,
     lab,
+    async observeMarket(license,snapshot) {
+      prune();
+      const context=buildContext(snapshot,{now:clock()});
+      const previous=snapshots.get(license);
+      if(!previous||context.observedAtMs>=previous.observedAtMs){
+        snapshots.delete(license);snapshots.set(license,context);
+        while(snapshots.size>256)snapshots.delete(snapshots.keys().next().value);
+      }
+      return {status:'OBSERVED',observedAt:new Date(context.observedAtMs).toISOString()};
+    },
     async submit(license,snapshot) {
       prune();
       const settings=await available(license);
-      if(settings.status!=='ASTRA_READY')return {status:settings.status,fallbackReason:settings.status};
       const context=buildContext(snapshot,{now:clock()});
       snapshots.delete(license);snapshots.set(license,context);
       while(snapshots.size>256)snapshots.delete(snapshots.keys().next().value);
+      if(settings.status!=='ASTRA_READY')return {status:settings.status,fallbackReason:settings.status};
       await learning.observe(license,{bid:context.quote.bid,ask:context.quote.ask,atMs:context.observedAtMs});
       await recordEngine(license,context);
       if(context.campaign.positions.length&&context.campaign.owner!=='ASTRA')return {status:'NATIVE_LIFESTYLE',fallbackReason:'CAMPAIGN_OWNED_BY_NATIVE'};
@@ -298,16 +308,18 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
       for(const item of contexts) {
         const started=clock();
         try {
-          const context=buildContext(item.snapshot,{now:clock()});
+          // Synthetic diagnostics use recorded observation time, not execution wall clock.
+          const context=buildContext(item.snapshot,{now:item.snapshot.observedAtMs});
           const raw=await vault.withKey(license,key=>callStrategyModel({key,model:settings.model,effort:settings.reasoningEffort,context,fetchImpl,timeoutMs:60000}));
+          await countRequest(license,{kind:'test',tokens:raw.__usage});
           // Also apply executable contract rules; tests do not submit to MT5.
           bindDecision(raw,context,{now:context.observedAtMs,requestId:crypto.randomUUID()});
           const latencyMs=clock()-started;
           const matched=item.expected.includes(raw.action)&&(!item.expectedStates||item.expectedStates.includes(raw.state));
-          results.push({name:item.name,passed:scope==='CONNECTION'?true:matched,matchedFixture:matched,action:raw.action,state:raw.state,expected:item.expected,latencyMs,
+          results.push({name:item.name,passed:scope==='CONNECTION'?true:matched,matchedFixture:matched,action:raw.action,state:raw.state,expected:item.expected,reasonCodes:raw.reasonCodes,latencyMs,
             withinDecisionBudget:latencyMs<=(settings.executionTimeoutMs||timeoutMs)});
         }catch(e){results.push({name:item.name,passed:false,latencyMs:clock()-started,
-          error:['NO_CREDIT','RATE_LIMITED','AUTH_ERROR','AI_TIMEOUT','AI_INCOMPLETE','AI_REFUSAL','SCHEMA_FAILURE','MODEL_NOT_AVAILABLE','PROVIDER_REJECTED_REQUEST','PROVIDER_UNAVAILABLE'].includes(e.message)?e.message:'AI_ERROR'});}
+          error:[...SAFE_REASONS,'INVALID_MARKET_CONTEXT','PROVIDER_MODEL_MISMATCH'].includes(e.message)?e.message:'AI_ERROR'});}
       }
       const ok=results.length>0&&results.every(x=>x.passed);
       return {ok,status:scope==='CONNECTION'?(ok?'CONNECTED':'CONNECTION_FAILED'):(ok?'TEST_PASSED':'TEST_FAILED'),

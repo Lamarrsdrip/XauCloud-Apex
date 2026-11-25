@@ -236,3 +236,17 @@ test('Luna is the default for new OpenAI accounts; explicit model choices surviv
   assert.equal((await v.settings('new')).model,'gpt-6.2-astra');
   svc.close();
 }));
+
+test('strategy diagnostics keep synthetic snapshots valid through sequential slow calls',()=>temp(async dir=>{
+ let now=Date.now(),calls=0;const svc=createAstraService({dataDir:dir,clock:()=>now,fetchImpl:async()=>{calls++;now+=5000;return completed(decision());}});
+ await svc.configure('L',{apiKey:fakeKey,enabled:true});
+ const result=await svc.test('L',strategyFixtures(now),{scope:'STRATEGY'});
+ assert.equal(calls,9);assert.equal(result.results.length,9);assert.ok(result.results.every(x=>x.error!=='AI_ERROR'&&x.error!=='INVALID_MARKET_CONTEXT'));
+ svc.close();
+}));
+test('market-only snapshots are available without enabling AI or paying for a model',()=>temp(async dir=>{
+ let calls=0;const svc=createAstraService({dataDir:dir,fetchImpl:async()=>{calls++;return completed(decision());}});
+ const snap=fixture();assert.equal((await svc.observeMarket('L',snap)).status,'OBSERVED');
+ const status=await svc.status('L');assert.equal(status.status,'DISABLED');assert.equal(status.investigation.freshness,'RECENT');assert.equal(calls,0);
+ assert.equal((await svc.status('other')).investigation,null);svc.close();
+}));

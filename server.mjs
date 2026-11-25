@@ -1317,6 +1317,11 @@ const server=http.createServer(async(req,res)=>{
         return json(res,200,await ASTRA.status(v.key));
       if(u.pathname==='/api/apex/astra/decision')
         return json(res,200,await ASTRA.decision(v.key,String(b.requestId||'')));
+      if(u.pathname==='/api/apex/astra/market'){
+        if(!throttle('astra-market:'+v.key,ip,12,60_000))return json(res,429,{status:'RATE_LIMITED'});
+        try{return json(res,200,await ASTRA.observeMarket(v.key,b.snapshot));}
+        catch{return json(res,400,{status:'INVALID_MARKET_CONTEXT'});}
+      }
       if(u.pathname==='/api/apex/astra/context'){
         if(!throttle('astra-context:'+v.key,ip,40,60_000))return json(res,429,{status:'RATE_LIMITED',fallbackReason:'REQUEST_RATE_LIMIT'});
         try{return json(res,200,await ASTRA.submit(v.key,b.snapshot));}

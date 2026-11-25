@@ -358,6 +358,22 @@ void AstraExportContext()
 
 // At most ONE short HTTP operation per timer pass, after hard management. The
 // provider request executes asynchronously in the backend, never in WebRequest.
+// Read-only telemetry independent of AI execution.
+ulong g_astraLastMarketMs=0;
+bool AstraMarketTelemetry()
+  {
+   if(IsTester()||!InpAstraBridge||g_astraPending)return false;
+   ulong now=GetTickCount64();
+   if(g_astraLastMarketMs!=0&&now-g_astraLastMarketMs<30000)return false;
+   g_astraLastMarketMs=now;
+   string priorSnapshot=g_astraSnapshotId;
+   string body=AstraSnapshot(),response="";
+   g_astraSnapshotId=priorSnapshot;
+   if(body=="")return false;
+   AstraHttp("POST","/api/apex/astra/market",body,response);
+   return true;
+  }
+
 bool AstraService()
   {
    if(g_astraRestartTakeover)

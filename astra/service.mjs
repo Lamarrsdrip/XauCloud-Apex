@@ -218,10 +218,10 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
     async submit(license,snapshot) {
       prune();
       const settings=await available(license);
+      if(settings.status!=='ASTRA_READY')return {status:settings.status,fallbackReason:settings.status};
       const context=buildContext(snapshot,{now:clock()});
       snapshots.delete(license);snapshots.set(license,context);
       while(snapshots.size>256)snapshots.delete(snapshots.keys().next().value);
-      if(settings.status!=='ASTRA_READY')return {status:settings.status,fallbackReason:settings.status};
       await learning.observe(license,{bid:context.quote.bid,ask:context.quote.ask,atMs:context.observedAtMs});
       await recordEngine(license,context);
       if(context.campaign.positions.length&&context.campaign.owner!=='ASTRA')return {status:'NATIVE_LIFESTYLE',fallbackReason:'CAMPAIGN_OWNED_BY_NATIVE'};

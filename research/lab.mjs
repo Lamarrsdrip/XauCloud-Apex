@@ -96,5 +96,5 @@ export function createLab(dataDir,{clock=Date.now,loadBars=bars,modelPredict,lea
   return visible(e);
  }
  return {newEpisode:(l,o)=>lock(l,async()=>visible(await make(l,o))),get:async(l,id)=>visible(await load(l,id)),
-  predict:(l,id,o)=>lock(l,async()=>predict(l,await load(l,id),o)),reveal:(l,id)=>lock(l,async()=>reveal(l,await load(l,id))};
+  predict:(l,id,o)=>lock(l,async()=>predict(l,await load(l,id),o)),reveal:(l,id)=>lock(l,async()=>reveal(l,await load(l,id)))};
 }

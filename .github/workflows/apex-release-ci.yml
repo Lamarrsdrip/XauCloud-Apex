@@ -6,6 +6,10 @@ on:
   pull_request:
     paths:
       - 'server.mjs'
+      - 'astra/**'
+      - 'data/astra/**'
+      - 'tests/astra*.test.mjs'
+      - 'ea/**'
       - 'release-store.mjs'
       - 'public/index.html'
       - 'public/astra-ui.js'

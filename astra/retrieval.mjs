@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {selectReferenceObservations} from './reference-observations.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
 export async function knowledge(context) {
@@ -25,5 +26,7 @@ export async function knowledge(context) {
   // overlap ranks lower than a spectacular winner. Stable ordering is reproducible.
   const limits=[2,2,2,1,1],examples=groups.flatMap((rows,i)=>rows.map((row,index)=>({row,index,score:rank(row)}))
     .sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,limits[i]).map(x=>x.row));
+  const observed=(await fs.readFile(path.join(root,'data','astra','reference-observations-2026-11-25.jsonl'),'utf8')).split('\n').filter(x=>x.trim()).map(JSON.parse);
+  examples.push(...selectReferenceObservations(observed,context));
   return {instructions,examples};
 }

@@ -37,6 +37,7 @@ try{
   await page.screenshot({path:'apex-settings-'+size.width+'.png'});
   await page.locator('[data-settings-tab="astra"]').click();
   assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6-luna');
+  for(const [id,price] of [['gpt-6-luna','$1.45'],['gpt-6.2-sol','$29'],['gpt-6.2-astra','$116']])assert.ok((await page.locator('[data-model-choice="'+id+'"]').innerText()).includes(price));
   assert.equal(await page.locator('#astra-research-model').inputValue(),'');
   await page.locator('[data-model-choice="gpt-6.2-sol"]').click();
   assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6.2-sol');

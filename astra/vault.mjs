@@ -47,7 +47,7 @@ export function createAstraVault(dataDir) {
   function view(rec={}) {
     const provider=rec.provider||'openai',keys=keysOf(rec),key=keys[provider];
     return {...DEFAULT_RESEARCH,...Object.fromEntries(RESEARCH_KEYS.filter(k=>k in rec).map(k=>[k,rec[k]])),
-      enabled:rec.enabled===true,hasKey:!!key?.ciphertext,model:rec.model||DEFAULT_MODEL_BY_PROVIDER[provider]||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:rec.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,
+      enabled:rec.enabled===true,hasKey:!!key?.ciphertext,model:rec.model||DEFAULT_MODEL_BY_PROVIDER[provider]||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:'dailyRequestLimit' in rec?rec.dailyRequestLimit:DEFAULT_DAILY_REQUEST_LIMIT,
       provider,maskedKey:mask(provider,key),keyAddedAt:key?.keyAddedAt||null,availableProviders:['openai','anthropic'].filter(p=>!!keys[p]?.ciphertext),providerKeys:Object.fromEntries(['openai','anthropic'].map(p=>[p,{hasKey:!!keys[p]?.ciphertext,maskedKey:mask(p,keys[p]),keyAddedAt:keys[p]?.keyAddedAt||null}])),revision:rec.revision||0};
   }
   return {
@@ -84,6 +84,7 @@ export function createAstraVault(dataDir) {
         rec.providerKeys=keys;
         for(const field of cryptoFields)delete rec[field];
         Object.assign(rec,research);
+        if(rec.researchModel&&Object.keys(keys).length&&!keys[providerOfModel(rec.researchModel)]?.ciphertext)throw safeError('RESEARCH_PROVIDER_KEY_MISSING');
         if('reasoningEffort'in patch)rec.reasoningEffort=patch.reasoningEffort;
         if('dailyRequestLimit'in patch)rec.dailyRequestLimit=patch.dailyRequestLimit;
         rec.revision=(rec.revision||0)+1;
@@ -93,7 +94,7 @@ export function createAstraVault(dataDir) {
     async remove(license) {
       return locked(async()=>{
         const rows=await read(),id=identity(license),old=rows[id]||{};
-        rows[id]={enabled:false,model:old.model||DEFAULT_MODEL,reasoningEffort:old.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:old.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,revision:(old.revision||0)+1};
+        rows[id]={enabled:false,model:old.model||DEFAULT_MODEL,reasoningEffort:old.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:'dailyRequestLimit' in old?old.dailyRequestLimit:DEFAULT_DAILY_REQUEST_LIMIT,revision:(old.revision||0)+1};
         await write(rows);return view(rows[id]);
       });
     },

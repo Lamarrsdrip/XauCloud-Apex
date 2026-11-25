@@ -35,6 +35,11 @@ try{
   await page.locator('[data-nav="settings"]:visible').click();
   await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
   await page.screenshot({path:'apex-settings-'+size.width+'.png'});
+  await page.locator('[data-settings-tab="astra"]').click();
+  await page.locator('#astra-dual-preset').click();
+  assert.equal(await page.locator('#astra-model').inputValue(),'gpt-6.2-sol');
+  assert.equal(await page.locator('#astra-research-model').inputValue(),'gpt-6.2-astra');
+  await page.screenshot({path:'apex-ai-connection-'+size.width+'.png'});
   await page.locator('[data-nav="ai"]:visible').click();
   await page.getByRole('heading',{name:'Apex AI',exact:true}).waitFor();
   await page.getByRole('textbox',{name:'Message Apex AI'}).fill('Explain the chart');

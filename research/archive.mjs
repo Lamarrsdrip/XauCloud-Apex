@@ -20,7 +20,8 @@ export function splitOf(ms){for(const [k,v] of Object.entries(SPLITS))if(ms>=v.f
 const cache=new Map();
 function monthKey(ms){const d=new Date(ms);return d.getUTCFullYear()+'_'+String(d.getUTCMonth()+1).padStart(2,'0');}
 export function loadMonth(key,dir=ARCHIVE_DIR){
-  if(cache.has(key))return cache.get(key);
+  const cacheKey=path.resolve(dir,key);
+  if(cache.has(cacheKey))return cache.get(cacheKey);
   const file=path.join(dir,'XAUUSD_M1_'+key+'.csv.gz');
   const bars=[];
   if(fs.existsSync(file)){
@@ -31,7 +32,7 @@ export function loadMonth(key,dir=ARCHIVE_DIR){
       bars.push({t,o,h,l,c,spread:+p[5]||0,ticks:+p[6]||0});
     }
   }
-  cache.set(key,bars);
+  cache.set(cacheKey,bars);
   while(cache.size>14)cache.delete(cache.keys().next().value);
   return bars;
 }

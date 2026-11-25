@@ -1447,6 +1447,9 @@ const server=http.createServer(async(req,res)=>{
       }
       try{
         if(req.method==='POST'&&u.pathname==='/api/session/lab/new')return json(res,200,await ASTRA.lab.newEpisode(s.lic,await body(req)));
+        if(req.method==='POST'&&u.pathname==='/api/session/lab/benchmark')return json(res,202,await ASTRA.lab.benchmark(s.lic,await body(req)));
+        const benchmark=u.pathname.match(/^\/api\/session\/lab\/benchmark\/([0-9a-f-]{36})$/);
+        if(benchmark&&req.method==='GET')return json(res,200,await ASTRA.lab.getBenchmark(s.lic,benchmark[1]));
         const match=u.pathname.match(/^\/api\/session\/lab\/([0-9a-f-]{36})(?:\/(predict|reveal))?$/);
         if(match){
           if(req.method==='GET'&&!match[2])return json(res,200,await ASTRA.lab.get(s.lic,match[1]));

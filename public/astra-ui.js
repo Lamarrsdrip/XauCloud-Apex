@@ -87,7 +87,7 @@
     document.getElementById('astra-checks').onclick=function(){test('strategy');};
   }
   var state={identity:null,history:[],busy:false,epoch:0,refresh:null,status:'',conversationId:null,workspace:'chat',episode:null,loaded:false,stream:''};
-  function resetChat(){state.epoch++;state.identity=null;state.history=[];state.busy=false;state.refresh=null;state.status='';state.conversationId=null;state.workspace='chat';state.episode=null;state.loaded=false;state.stream='';}
+  function resetChat(){state.epoch++;state.identity=null;state.history=[];state.busy=false;state.refresh=null;state.status='';state.conversationId=null;state.workspace='chat';state.episode=null;state.benchmarkId=null;state.loaded=false;state.stream='';}
   function chatPage(me){
     var id=String((me.license||{}).key||(me.license||{}).account||'session');if(state.identity!==id){resetChat();state.identity=id;}
     var key=!!(me.astra&&me.astra.hasKey);
@@ -133,7 +133,7 @@
     if(!result)throw new Error('CHAT_STREAM_INTERRUPTED');return result;
   }
   function labPage(me){
-    return '<section class="apex-lab"><div class="intel-heading"><div><span class="intel-kicker">HISTORICAL / BLIND REPLAY</span><h2>Strategy Research Lab</h2></div><button id="lab-back" class="btn btn-ghost">Back to AI</button></div><p class="settings-subtle">Price and date are masked until reveal. Compare decisions on the same historical prefix; no live orders.</p><div class="lab-controls"><label>Dataset <select id="lab-split"><option value="VALIDATION">Validation · 2025</option><option value="HELD_OUT">Held-out · 2026</option></select></label><label>Sampling <select id="lab-mode"><option value="setup">Developing setups</option><option value="random">Random windows</option></select></label><button id="lab-new" class="btn btn-primary">New episode</button></div><div id="lab-content"></div><div id="lab-status" class="settings-subtle" role="status" aria-live="polite"></div></section>';
+    return '<section class="apex-lab"><div class="intel-heading"><div><span class="intel-kicker">HISTORICAL / BLIND REPLAY</span><h2>Strategy Research Lab</h2></div><button id="lab-back" class="btn btn-ghost">Back to AI</button></div><p class="settings-subtle">Price and date are masked until reveal. Compare decisions on the same historical prefix; no live orders.</p><div class="lab-controls"><label>Dataset <select id="lab-split"><option value="VALIDATION">Validation · 2025</option><option value="HELD_OUT">Held-out · 2026</option></select></label><label>Sampling <select id="lab-mode"><option value="setup">Developing setups</option><option value="random">Random windows</option></select></label><button id="lab-new" class="btn btn-primary">New episode</button></div><div id="lab-content"></div><details class="settings-details lab-benchmark"><summary>Benchmark on identical blind windows</summary><div class="lab-controls"><label>Episodes <input id="lab-n" type="number" min="1" max="100" value="10"></label><label><input type="checkbox" id="lab-model"> Include configured AI (up to 20 paid calls)</label><button id="lab-benchmark" class="btn btn-ghost">Run benchmark</button></div><div id="lab-benchmark-results" role="status"></div></details><div id="lab-status" class="settings-subtle" role="status" aria-live="polite"></div></section>';
   }
   function bindLab(me){
     var root=document.getElementById('lab-content'),status=document.getElementById('lab-status'),busy=false;
@@ -157,7 +157,15 @@
       document.getElementById('lab-reveal').onclick=function(){run(function(){return request('POST','/api/session/lab/'+e.id+'/reveal',{});});};
     }
     async function run(fn){if(busy)return;busy=true;status.textContent='Working…';root.setAttribute('aria-busy','true');try{state.episode=await fn();status.textContent='';render();}catch(e){status.textContent=label(e.message);}finally{busy=false;root.removeAttribute('aria-busy');}}
-    document.getElementById('lab-new').onclick=function(){run(function(){return request('POST','/api/session/lab/new',{split:document.getElementById('lab-split').value,mode:document.getElementById('lab-mode').value});});};render();
+    document.getElementById('lab-new').onclick=function(){run(function(){return request('POST','/api/session/lab/new',{split:document.getElementById('lab-split').value,mode:document.getElementById('lab-mode').value});});};
+    var bench=document.getElementById('lab-benchmark-results'),benchButton=document.getElementById('lab-benchmark');
+    function showBenchmark(j){
+      if(!bench.isConnected)return;
+      bench.innerHTML='<p class="settings-subtle">'+esc(j.status)+' · '+j.completed+' / '+j.n+' episodes'+(j.errors.length?' · '+j.errors.length+' provider failures':'')+'</p>'+Object.keys(j.results||{}).map(function(k){var x=j.results[k];return '<article class="lab-pred"><strong>'+esc(k)+'</strong><div>Entries '+x.entered+' · Abstentions '+x.abstained+' · Resolved win rate '+(x.winRateResolved==null?'—':(x.winRateResolved*100).toFixed(1)+'%')+'</div><div class="settings-subtle">Coverage '+(x.coverage*100).toFixed(0)+'% · MFE '+(x.avgMfeAtr==null?'—':x.avgMfeAtr.toFixed(2))+' ATR · MAE '+(x.avgMaeAtr==null?'—':x.avgMaeAtr.toFixed(2))+' ATR</div></article>';}).join('');
+    }
+    async function pollBenchmark(id){if(!bench.isConnected)return;try{var j=await request('GET','/api/session/lab/benchmark/'+id);showBenchmark(j);if(j.status==='RUNNING')setTimeout(function(){pollBenchmark(id);},3500);else benchButton.disabled=false;}catch(e){bench.textContent=label(e.message);benchButton.disabled=false;}}
+    benchButton.onclick=async function(){if(benchButton.disabled)return;var model=document.getElementById('lab-model').checked,n=Number(document.getElementById('lab-n').value);if(model&&!confirm('This benchmark may make up to '+n+' paid model requests using your key. Continue?'))return;benchButton.disabled=true;try{var j=await request('POST','/api/session/lab/benchmark',{n:n,includeModel:model,split:document.getElementById('lab-split').value,mode:document.getElementById('lab-mode').value});state.benchmarkId=j.id;showBenchmark(j);pollBenchmark(j.id);}catch(e){bench.textContent=label(e.message);benchButton.disabled=false;}};
+    if(state.benchmarkId){benchButton.disabled=true;pollBenchmark(state.benchmarkId);}render();
   }
   window.AstraUI={card:card,bind:bind,chatPage:chatPage,bindChat:bindChat,resetChat:resetChat};
 })();

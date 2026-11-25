@@ -284,3 +284,16 @@ a:hover{text-decoration-color:var(--gold)}
 #apex-chat-status{font-size:11px;min-height:14px;margin-top:6px;overflow-wrap:anywhere}.apex-chat-note{margin:8px 12px;font-size:12px}
 @media(max-width:899px){.main[data-page="ai"]{padding:0 0 calc(76px + var(--safe-b))}.apex-ai-chat{height:calc(100dvh - 136px - var(--safe-t) - var(--safe-b));min-height:260px;border:0;border-radius:0}.intel-grid{grid-template-columns:1fr 1fr}.intel-grid>div:nth-child(2){border-right:0}.intel-grid>div:nth-child(-n+2){border-bottom:1px solid var(--border)}.intel-grid>div{padding:11px 13px}.bottomnav .navitem{font-size:10px;min-width:0;min-height:54px;padding:6px 2px}.intel-heading{padding:13px}.intel-heading h2{font-size:15px}.intel-foot{padding:10px 13px}.overview-layout{grid-template-columns:1fr}.apex-chat-heading p{font-size:10px}}
 @media(max-width:380px){.apex-ai-chat header{padding:10px}.apex-chat-heading p{display:none}.intel-link{font-size:11px}.bottomnav .navitem{font-size:9px}}
+
+.apex-chat-tools{display:flex;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-dim);flex-wrap:wrap}
+.apex-chat-tools select{flex:1;min-width:100px;max-width:100%;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px;font:inherit}
+.apex-chat-tools .btn,.apex-copy{width:auto;min-height:28px;padding:4px 8px;font-size:11px}
+.apex-copy{display:block;margin-top:5px;background:transparent;border:0;color:var(--text-dim);cursor:pointer}
+.apex-lab{max-width:1050px;margin:0 auto;padding:18px;border:1px solid var(--border);border-radius:14px;background:var(--bg-elev)}
+.apex-lab .intel-heading{padding:0 0 10px}.apex-lab .btn{width:auto;min-height:38px}
+.lab-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:14px 0}.lab-controls label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim)}
+.lab-controls select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px;border-radius:8px;max-width:100%}
+.lab-empty,.lab-pred,.lab-chart{border:1px solid var(--border);border-radius:10px;padding:14px;margin:10px 0;background:var(--bg)}
+.lab-chart-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);margin-bottom:10px}
+.lab-chart canvas{width:100%;height:auto;display:block;border-radius:6px}.lab-pred p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.5}.lab-pred small{color:var(--text-dim);font-family:monospace}
+@media(max-width:600px){.apex-lab{padding:12px;margin:8px}.apex-ai-chat header{flex-wrap:wrap}.apex-ai-chat header button{margin-left:0}.apex-chat-heading{flex:1}.apex-chat-tools{gap:5px}.lab-controls .btn{flex:1}.apex-chat-tools select{min-width:80px}}

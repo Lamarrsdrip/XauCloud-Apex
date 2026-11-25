@@ -8,19 +8,19 @@
     var a=me.astra||{},d=a.lastDecision||{};
     var connected=a.status==='ASTRA_ACTIVE',hasKey=a.hasKey===true,enabled=a.enabled===true;
     var state=connected?'Connected':enabled?(hasKey?'Checking connection':'Finish setup'):'Off';
-    var html='<section class="card" aria-label="Astra AI settings">'
-      +'<div class="release-head"><div><h3 style="margin:0 0 5px">Astra AI</h3>'
+    var html='<section class="card" aria-label="Apex AI settings">'
+      +'<div class="release-head"><div><h3 style="margin:0 0 5px">Apex AI</h3>'
       +'<div class="settings-subtle">Optional AI decisions, managed from your Apex account.</div></div>'
       +'<span class="overview-pill '+(connected?'ok':enabled?'':'off')+'">'+esc(state)+'</span></div>';
     if(!editing){
-      html+='<div class="settings-subtle" style="margin-top:13px">'+(connected?'Astra is connected to Apex.':'Apex is using its native trading strategy.')+'</div>';
+      html+='<div class="settings-subtle" style="margin-top:13px">'+(connected?'Apex AI is connected.':'Apex is using its native trading strategy.')+'</div>';
       return html+'</section>';
     }
     html+='<p class="settings-section-intro" style="margin:18px 0">Astra can help evaluate trade setups. If it is switched off or unavailable, Apex uses its native trading rules. Enabling AI does not guarantee profitable trades.</p>';
     html+='<div class="overview-inline-control" style="margin:0 0 21px"><div>'
-      +'<label class="control-title" for="astra-enabled" style="display:block;cursor:pointer">Use Astra AI</label>'
+      +'<label class="control-title" for="astra-enabled" style="display:block;cursor:pointer">Use Apex AI</label>'
       +'<div class="control-desc">'+(hasKey?'A key is securely saved for this license.':'Connect your OpenAI or Anthropic API key to enable Apex AI.')+'</div>'
-      +'</div><label class="switch"><input id="astra-enabled" type="checkbox" aria-label="Enable Astra AI" '+(enabled?'checked':'')+'>'
+      +'</div><label class="switch"><input id="astra-enabled" type="checkbox" aria-label="Enable Apex AI" '+(enabled?'checked':'')+'>'
       +'<span class="track"></span><span class="knob"></span></label></div>';
     html+='<div class="field"><label for="astra-key">Model API key</label>'
       +'<input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Paste your API key here')+'">'
@@ -40,10 +40,10 @@
       +'<div class="field"><label for="astra-research-effort">Research reasoning effort</label><select id="astra-research-effort">'+efforts.map(function(x){return '<option value="'+x+'"'+(x===(a.researchEffort||'high')?' selected':'')+'>'+esc(x)+'</option>';}).join('')+'</select></div><div class="field"><label for="astra-research-limit">Daily research requests</label><input id="astra-research-limit" type="number" min="0" max="5000" value="'+esc(a.researchDailyLimit??300)+'"></div><label><input id="astra-research-enabled" type="checkbox" '+(a.researchEnabled?'checked':'')+'> Background deep research</label>'
       +'</div></details>';
     html+='<div class="release-actions" style="margin-top:8px">'
-      +'<button class="btn btn-primary" id="astra-save" style="width:auto">Save Astra settings</button>'
+      +'<button class="btn btn-primary" id="astra-save" style="width:auto">Save AI settings</button>'
       +'<button class="btn btn-ghost" id="astra-test" style="width:auto" '+(!hasKey?'disabled':'')+'>Test connection</button></div>';
     html+='<details class="settings-details" style="margin-top:18px"><summary><span>'
-      +'<span class="details-name">Advanced Astra tools</span>'
+      +'<span class="details-name">Diagnostics &amp; tests</span>'
       +'<span class="details-desc" style="display:block">Run strategy checks, review diagnostics or remove your saved key.</span>'
       +'</span></summary><div class="details-content" style="padding-top:14px">'
       +row('Last decision',d.action?label(d.action):'No decision yet')
@@ -92,12 +92,13 @@
   }
   var state={identity:null,history:[],busy:false,epoch:0,refresh:null,status:'',conversationId:null,workspace:'chat',episode:null,loaded:false,stream:''};
   function resetChat(){state.epoch++;state.identity=null;state.history=[];state.busy=false;state.refresh=null;state.status='';state.conversationId=null;state.workspace='chat';state.episode=null;state.benchmarkId=null;state.loaded=false;state.stream='';}
-  function chatPage(me){
+  function chatPage(me,workspace){
     var id=String((me.license||{}).key||(me.license||{}).account||'session');if(state.identity!==id){resetChat();state.identity=id;}
+    if(workspace)state.workspace=workspace;
     var key=!!(me.astra&&me.astra.hasKey);
     if(state.workspace==='lab')return labPage(me);
     return '<section class="apex-ai-chat"><header><div class="apex-ai-mark">✦</div><div class="apex-chat-heading"><h2>Apex AI</h2><p>Gold setup &amp; chart research</p></div><button type="button" id="apex-lab-open" class="btn btn-ghost">Research Lab</button><button type="button" id="apex-chat-clear" class="btn btn-ghost">New chat</button></header><div class="apex-chat-tools"><label for="apex-conversations">Conversations</label><select id="apex-conversations"><option value="">New chat</option></select><button id="apex-chat-rename" class="btn btn-ghost" type="button">Rename</button><button id="apex-chat-delete" class="btn btn-ghost" type="button">Delete</button></div>'
-    +(key?'':'<div class="apex-chat-note">Connect your API key in <a href="#settings">Settings → Astra AI</a> to begin.</div>')
+    +(key?'':'<div class="apex-chat-note">Connect your API key in <a href="#settings-ai">AI connection</a> to begin.</div>')
     +'<div class="apex-chat-thread" id="apex-chat-thread" role="log" aria-live="polite"></div><form id="apex-chat-form"><div id="apex-chat-preview" class="apex-chat-file" hidden><img id="apex-chat-thumb" alt="Chart preview"><span id="apex-chat-name"></span><button id="apex-chat-remove" type="button" aria-label="Remove chart">×</button></div><div class="apex-chat-compose"><label class="apex-attach-button" for="apex-chat-image" title="Attach a gold chart">＋</label><input class="apex-file-input" type="file" id="apex-chat-image" accept="image/png,image/jpeg" aria-label="Attach gold chart"><textarea id="apex-chat-message" aria-label="Message Apex AI" placeholder="Ask about a gold setup…" rows="2" maxlength="4000" '+(key?'':'disabled')+'></textarea><button id="apex-chat-send" type="submit" class="btn btn-primary" '+(key?'':'disabled')+'>Send ↑</button></div><div id="apex-chat-status" class="hint" role="status"></div></form></section>';
   }
   function bindChat(me){
@@ -115,7 +116,7 @@
     conversations.onchange=async function(){if(state.busy){conversations.value=state.conversationId||'';return;}var id=conversations.value;try{var c=id?await request('GET','/api/session/astra/conversations/'+encodeURIComponent(id)):null;if(!thread.isConnected)return;state.conversationId=id||null;state.history=c?(c.messages||[]).map(function(m){return {role:m.role,text:m.text};}):[];state.status='';render();}catch(e){state.status=label(e.message);render();}};
     document.getElementById('apex-chat-delete').onclick=async function(){if(state.busy||!state.conversationId||!confirm('Delete this conversation?'))return;try{await request('DELETE','/api/session/astra/conversations/'+state.conversationId,{});state.conversationId=null;state.history=[];await listChats();render();}catch(e){state.status=label(e.message);render();}};
     document.getElementById('apex-chat-rename').onclick=async function(){if(state.busy||!state.conversationId)return;var name=prompt('Conversation name');if(!name||!name.trim())return;try{await request('PATCH','/api/session/astra/conversations/'+state.conversationId,{title:name.trim()});await listChats();}catch(e){state.status=label(e.message);render();}};
-    document.getElementById('apex-lab-open').onclick=function(){if(state.busy)return;state.workspace='lab';var p=thread.closest('.apex-ai-chat');p.outerHTML=labPage(me);bindLab(me);};listChats();
+    document.getElementById('apex-lab-open').onclick=function(){if(state.busy)return;location.hash='#lab';};listChats();
     function clearImage(){selection++;image=null;attachment.value='';preview.hidden=true;thumb.removeAttribute('src');}
     attachment.onchange=function(){var f=attachment.files[0],n=++selection;image=null;preview.hidden=true;if(!f)return;if(f.size>1000000||!['image/png','image/jpeg'].includes(f.type)){clearImage();status.textContent='Choose a PNG or JPEG under 1 MB.';return;}var r=new FileReader();r.onload=function(){if(n!==selection||!thread.isConnected)return;image=r.result;thumb.src=image;document.getElementById('apex-chat-name').textContent=f.name;preview.hidden=false;};r.onerror=function(){clearImage();status.textContent='Unable to read chart.';};r.readAsDataURL(f);};
     document.getElementById('apex-chat-remove').onclick=clearImage;
@@ -141,7 +142,7 @@
   }
   function bindLab(me){
     var root=document.getElementById('lab-content'),status=document.getElementById('lab-status'),busy=false;
-    document.getElementById('lab-back').onclick=function(){if(busy)return;state.workspace='chat';root.closest('.apex-lab').outerHTML=chatPage(me);bindChat(me);};
+    document.getElementById('lab-back').onclick=function(){if(busy)return;location.hash='#ai';};
     function draw(canvas,bars,cut){
       var w=canvas.width=900,h=canvas.height=330,ctx=canvas.getContext('2d'),hi=Math.max.apply(null,bars.map(function(b){return b.h;})),lo=Math.min.apply(null,bars.map(function(b){return b.l;})),pad=(hi-lo)*.08||1,y=function(v){return 10+(hi+pad-v)/(hi-lo+2*pad)*(h-30);},step=(w-75)/bars.length;
       ctx.fillStyle='#101720';ctx.fillRect(0,0,w,h);ctx.font='12px system-ui';ctx.strokeStyle='#293442';ctx.fillStyle='#a8b2bf';for(var j=0;j<5;j++){var p=hi-(hi-lo)*j/4;ctx.beginPath();ctx.moveTo(0,y(p));ctx.lineTo(w-65,y(p));ctx.stroke();ctx.fillText(p.toFixed(2),w-61,y(p)+4);}

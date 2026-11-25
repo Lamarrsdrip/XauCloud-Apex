@@ -87,7 +87,7 @@ test('mobile navigation retains Account and Settings; Insights remains accessibl
   assert.ok(ids.includes('account'));
   assert.ok(ids.includes('settings'));
   assert.ok(app.pageHistory({...sample,history:[]}).includes('history-insights-link'));
-  assert.match(html,/NAV\.filter\(function\(n\)\{return n\.id!=='learning';\}\)/);
+  assert.match(html,/\['dashboard','campaigns','ai','lab','settings'\]\.map/);assert.ok(ids.includes('lab'));assert.match(html,/id="shell-account"/);assert.match(app.pageCampaigns(sample),/href="#history"/);
 });
 
 test('status pills do not claim trading is running with disconnected MT5',()=>{
@@ -107,4 +107,13 @@ test('UI stylesheet and Astra / notification scripts remain linked and parsable'
     assert.match(css,new RegExp('\\.'+cls.replace(/-/g,'\\-')));
 });
 
-test('AI route versioned assets and graceful reload fallback',()=>{assert.match(html,/astra-ui\.js\?v=2026-11-25-intelligence-lab/);assert.match(html,/typeof window\.AstraUI\.chatPage/);assert.match(html,/reload-ai/);assert.match(astra,/apex-chat-welcome/);});
+test('AI route versioned assets and graceful reload fallback',()=>{assert.match(html,/astra-ui\.js\?v=2026-11-25-command-desk/);assert.match(html,/typeof window\.AstraUI\.chatPage/);assert.match(html,/reload-ai/);assert.match(astra,/apex-chat-welcome/);});
+
+test('command desk places balances before intelligence and keeps execution separate',()=>{
+ const {app}=browserFunctions(),out=app.pageDashboard(sample);
+ assert.ok(out.indexOf('desk-account-strip')<out.indexOf('Market intelligence'));
+ assert.match(out,/desk-primary/);assert.match(out,/desk-secondary/);
+ assert.match(out,/id="arm-toggle"/);
+ assert.doesNotMatch(app.pageCampaigns(sample),/Market &amp; campaign desk|class="apex-intel"/);
+ assert.match(app.pageLearning(sample),/AI learning ledger/);
+});

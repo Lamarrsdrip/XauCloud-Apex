@@ -212,7 +212,7 @@ button{cursor:pointer}
 .container{max-width:640px}
 .center-note{text-align:center;color:var(--text-faint);font-size:12.5px;margin-top:18px}
 </style>
-<link rel="stylesheet" href="/premium.css?v=2026-11-25-intelligence-lab" media="all">
+<link rel="stylesheet" href="/premium.css?v=2026-11-25-command-desk" media="all">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#d8b15a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -222,24 +222,24 @@ button{cursor:pointer}
 <body>
 
 <div id="login">
-  <div class="login-card">
-    <div class="brand"><div class="brand-mark">X</div><div class="brand-name">XAUCLOUD · PRIVATE</div></div>
-    <h1>XauCloud Apex</h1>
-    <p>Enter your Apex license to access your trading command center.</p>
+  <div class="apex-login-layout"><section class="apex-login-intro"><div class="login-wordmark"><span class="brand-mark brand-mark-apex">A</span> XAUCLOUD / APEX</div><span class="login-kicker">PRIVATE TRADING WORKSPACE</span><h2>Gold.<br>In focus.</h2><p>One workspace for your MetaTrader account, market intelligence and automated trading campaigns.</p><div class="login-capabilities"><span>01 &nbsp; Market intelligence</span><span>02 &nbsp; Campaign management</span><span>03 &nbsp; AI research & replay</span></div></section><div class="login-card">
+    <div class="brand"><div class="brand-mark">A</div><div class="brand-name">APEX / SECURE ACCESS</div></div>
+    <h1>Access your workspace</h1>
+    <p>Sign in with your Apex license.</p>
     <form id="login-form">
-      <input class="license-input" id="license-input" placeholder="APEX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <label class="login-label" for="license-input">License key</label><input class="license-input" id="license-input" placeholder="APEX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
       <div class="form-row"><button class="btn btn-primary" id="login-btn" type="submit">Continue</button></div>
     </form>
     <div class="err-box" id="login-err"></div>
     <div class="login-foot">Private access only. Contact the account owner for a license.</div>
-  </div>
+  </div></div>
 </div>
 
 <div id="app-shell">
   <div class="topbar">
     <div class="topbar-inner">
       <div class="topbar-brand"><div class="brand-mark brand-mark-apex" aria-label="Apex">A</div><span>XauCloud Apex</span></div>
-      <div class="pills" id="status-pills" aria-live="polite"></div>
+      <div class="pills" id="status-pills" aria-live="polite"></div><button class="shell-account" id="shell-account" type="button" aria-label="Open account" title="Account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></button>
     </div>
   </div>
   <div class="layout">
@@ -251,7 +251,7 @@ button{cursor:pointer}
 
 <div class="toast" id="toast"></div>
 
-<script src="/astra-ui.js?v=2026-11-25-intelligence-lab"></script>
+<script src="/astra-ui.js?v=2026-11-25-command-desk"></script>
 <script>
 (function(){
 'use strict';
@@ -262,7 +262,8 @@ var NAV = [
   {id:'dashboard',label:'Overview'},
   {id:'campaigns',label:'Trades'},
   {id:'history',label:'History'},
-  {id:'ai',label:'AI'},
+  {id:'ai',label:'Apex AI'},
+  {id:'lab',label:'Research Lab'},
   {id:'learning',label:'Insights'},
   {id:'settings',label:'Settings'},
   {id:'account',label:'Account'}
@@ -273,6 +274,7 @@ function navIcon(id){
     campaigns:'<path d="M3 17l6-6 4 4 8-9"/><path d="M16 6h5v5"/>',
     history:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     ai:'<path d="M12 2l2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2L12 2z"/>',
+    lab:'<path d="M9 3h6M10 3v7L5 19a1.5 1.5 0 0 0 1.3 2h11.4a1.5 1.5 0 0 0 1.3-2l-5-9V3M8 16h8"/>',
     learning:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 2 5-7"/>',
     settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9L7 7m10 10 2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
     account:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'
@@ -415,7 +417,15 @@ function startPolling(){
     api('/api/auth/me').then(function(me){
       STATE.me = me;
       renderStatusPills();
-      if (['dashboard','campaigns','history','learning'].indexOf(STATE.page)>=0) renderPage();
+      if (['dashboard','campaigns','history','learning'].indexOf(STATE.page)>=0){
+        var main=document.getElementById('main');
+        if(main&&main.querySelector('#arm-toggle:disabled'))return;
+        var opened=main?Array.from(main.querySelectorAll('.hist-item.open')).map(function(x){return x.id;}):[];
+        var details=main?Array.from(main.querySelectorAll('details')).map(function(x){return x.open;}):[];
+        renderPage();
+        opened.forEach(function(id){var x=document.getElementById(id);if(x){x.classList.add('open');var b=x.querySelector('[data-history-toggle]');if(b)b.setAttribute('aria-expanded','true');}});
+        if(main)Array.from(main.querySelectorAll('details')).forEach(function(x,i){if(i<details.length)x.open=details[i];});
+      }
     }).catch(function(e){
       if (e.status===401){if(window.AstraUI&&window.AstraUI.resetChat)window.AstraUI.resetChat(); STATE.me=null; stopPolling(); showLogin(); }
     });
@@ -428,6 +438,7 @@ window.addEventListener('hashchange', route);
 function route(){
   var h = (location.hash||'#dashboard').replace('#','');
   if (h.indexOf('admin')===0){ STATE.page='admin'; stopPolling(); renderAdmin(); return; }
+  if(h==='settings-ai'){STATE.settingsTab='astra';h='settings';}
   var valid = NAV.some(function(n){return n.id===h});
   STATE.page = valid? h : 'dashboard';
   renderNav();
@@ -436,15 +447,16 @@ function route(){
 }
 
 function renderNav(){
-  var itemsHtml = NAV.map(function(n){
-    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'"><span class="ic">'+navIcon(n.id)+'</span><span>'+n.label+'</span></button>';
-  }).join('');
-  var sidebar = document.getElementById('sidebar');
-  var bottomnav = document.getElementById('bottomnav');
-  sidebar.innerHTML = itemsHtml + '<button class="navitem" id="logout-btn" style="margin-top:auto"><span class="ic">&#10162;</span><span>Sign Out</span></button>';
-  bottomnav.innerHTML = NAV.filter(function(n){return n.id!=='learning';}).map(function(n){
-    return '<button class="navitem'+(STATE.page===n.id?' active':'')+'" data-nav="'+n.id+'" style="flex:1"><span class="ic">'+navIcon(n.id)+'</span><span>'+n.label+'</span></button>';
-  }).join('');
+  function item(n,mobile){
+    var selected=STATE.page===n.id||(mobile&&n.id==='campaigns'&&['history','learning'].includes(STATE.page))||(mobile&&n.id==='settings'&&STATE.page==='account');
+    var title=mobile?(n.id==='dashboard'?'Home':n.id==='ai'?'AI':n.id==='lab'?'Lab':n.label):n.label;
+    return '<button class="navitem'+(selected?' active':'')+'" data-nav="'+n.id+'" '+(selected?'aria-current="page"':'')+'><span class="ic">'+navIcon(n.id)+'</span><span>'+title+'</span></button>';
+  }
+  var sidebar=document.getElementById('sidebar'),bottomnav=document.getElementById('bottomnav');
+  var groups=[{name:'WORKSPACE',ids:['dashboard','campaigns','history']},{name:'INTELLIGENCE',ids:['ai','lab','learning']},{name:'MANAGEMENT',ids:['settings','account']}];
+  sidebar.innerHTML=groups.map(function(g){return '<div class="nav-group"><div class="nav-caption">'+g.name+'</div>'+g.ids.map(function(id){return item(NAV.find(function(n){return n.id===id;}),false);}).join('')+'</div>';}).join('')+'<div class="sidebar-footer"><span>PRIVATE WORKSPACE</span><button class="navitem" id="logout-btn"><span class="ic">&#10162;</span><span>Sign out</span></button></div>';
+  bottomnav.innerHTML=['dashboard','campaigns','ai','lab','settings'].map(function(id){return item(NAV.find(function(n){return n.id===id;}),true);}).join('');
+  var accountButton=document.getElementById('shell-account');if(accountButton)accountButton.onclick=function(){location.hash='#account';};
   Array.prototype.forEach.call(document.querySelectorAll('[data-nav]'), function(el){
     el.addEventListener('click', function(){ location.hash = '#'+el.getAttribute('data-nav'); });
   });
@@ -473,11 +485,12 @@ function renderPage(){
   else if (STATE.page==='campaigns') main.innerHTML = pageCampaigns(me);
   else if (STATE.page==='history') main.innerHTML = pageHistory(me);
   else if (STATE.page==='learning') main.innerHTML = pageLearning(me);
-  else if (STATE.page==='ai') {if(window.AstraUI&&typeof window.AstraUI.chatPage==='function'&&typeof window.AstraUI.bindChat==='function'){main.innerHTML=window.AstraUI.chatPage(me);window.AstraUI.bindChat(me);}else{main.innerHTML='<section class="card"><h1>Apex AI</h1><p>The research interface could not load. Reload to retrieve the current version.</p><button id="reload-ai" class="btn btn-primary">Reload Apex</button></section>';document.getElementById('reload-ai').onclick=function(){location.reload();};}}
+  else if (STATE.page==='ai'||STATE.page==='lab') {if(window.AstraUI&&typeof window.AstraUI.chatPage==='function'&&typeof window.AstraUI.bindChat==='function'){main.innerHTML=window.AstraUI.chatPage(me,STATE.page==='lab'?'lab':'chat');window.AstraUI.bindChat(me);}else{main.innerHTML='<section class="card"><h1>Apex AI</h1><p>The research interface could not load. Reload to retrieve the current version.</p><button id="reload-ai" class="btn btn-primary">Reload Apex</button></section>';document.getElementById('reload-ai').onclick=function(){location.reload();};}}
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
   else if (STATE.page==='account') main.innerHTML = pageAccount(me);
   wireDashboardControls();
   if (STATE.page==='dashboard')wireOverviewControls();
+  if(STATE.page==='learning')loadLearningLedger();
   if (STATE.page==='history')wireHistoryControls();
   if (STATE.page==='account'){
     var setup=document.getElementById('account-setup-link');
@@ -508,50 +521,28 @@ function releaseCard(me){
 }
 
 // ---------- Dashboard ----------
+function deskMetric(label,value,tone,sub){
+  return '<div class="desk-metric"><span>'+esc(label)+'</span><strong class="'+(tone||'')+'">'+esc(value)+'</strong>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>';
+}
 function pageDashboard(me){
-  var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{};
-  var broker=acc.broker||'Broker not reported', account=acc.account||lic.account||'Not connected';
-  var html='<div class="overview-top"><div><div class="overview-eyebrow">XauCloud Apex</div>'
-    +'<h1 class="overview-title">Command center</h1>'
-    +'<div class="overview-desc">Gold setup intelligence and campaign execution.</div></div>'
-    +'<div class="overview-meta">Last account update: '+esc(fmtAgo(acc.asOf||mt5.lastSeen))+'</div></div>';
-  html+=apexIntelligencePanel(me);
-  if(!me.dataAvailable){
-    html+=dataUnavailableCard(me);
-    if(lic.status==='ACTIVE')html+='<div class="overview-inline-control"><div><div class="control-title">Get Apex connected</div>'
-      +'<div class="control-desc">Install the bot in MT5, then connect your license. The full setup is in Settings.</div></div>'
-      +'<button type="button" class="btn btn-primary" style="width:auto" id="overview-open-setup">Setup guide</button></div>';
-    return html;
+  var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{},ctrl=me.control||{};
+  var connected=mt5.status==='CONNECTED',available=!!me.dataAvailable;
+  var html='<div class="desk-page-head"><div><div class="overview-eyebrow">WORKSPACE / OVERVIEW</div><h1 class="overview-title">Command center</h1><p>Gold market intelligence and account execution.</p></div><div class="desk-head-meta"><span>'+esc(acc.broker||'MT5 terminal')+'</span><small>'+esc(available?'Account '+(acc.account||lic.account||'—')+' · '+fmtAgo(acc.asOf||mt5.lastSeen):'Awaiting account data')+'</small></div></div>';
+  if(!available){
+    html+='<div class="desk-offline"><div><span class="overview-eyebrow">TERMINAL CONNECTION</span><h2>Get Apex connected</h2><p>'+esc(lic.status==='ACTIVE'?'Install the bot in MetaTrader 5 to unlock account and market data.':'Your license is not active. Check your account details.')+'</p></div><button type="button" class="btn btn-primary" id="overview-open-setup">Setup guide</button></div>';
+    return html+apexIntelligencePanel(me);
   }
-  html+='<div class="overview-layout">'
-    +'<section class="balance-hero" aria-label="Trading account balances">'
-    +'<div class="balance-label">Account balance</div>'
-    +'<div class="balance-figure">'+esc(fmtMoney(acc.balance,acc.currency))+'</div>'
-    +'<div class="balance-meta">'+esc(broker)+'<span aria-hidden="true">·</span> MT5 '+esc(account)+'</div>'
-    +'<div class="balance-divider"></div>'
-    +'<div class="balance-support"><div><div class="label">Equity</div><div class="value">'+esc(fmtMoney(acc.equity,acc.currency))+'</div></div>'
-    +'<div><div class="label">Open trade P/L</div><div class="value '+(camp&&camp.floatingPL!=null?(camp.floatingPL>=0?'pos':'neg'):'')+'">'+esc(camp?fmtMoney(camp.floatingPL,acc.currency):'—')+'</div></div></div>'
-    +'</section>'
-    +'<section class="summary-card" aria-label="Account details"><div>'
-    +'<div class="summary-card-title">Account at a glance</div><div class="summary-card-sub">The essentials, without the trading jargon.</div>'
-    +'<div class="summary-metric"><span>Account type</span><strong>'+esc(me.accountProfile==='NORMAL'?'Standard':me.accountProfile==='UNLIMITED'?'Unlimited':me.accountProfile||'Standard')+'</strong></div>'
-    +'<div class="summary-metric"><span>Available margin</span><strong>'+esc(fmtMoney(acc.freeMargin,acc.currency))+'</strong></div>'
-    +'<div class="summary-metric"><span>Open trades</span><strong>'+(camp&&camp.layers!=null?esc(camp.layers):camp?'—':'0')+'</strong></div>'
-    +'</div><button type="button" id="overview-view-account" class="text-link summary-action">View account details →</button></section></div>';
-  html+='<section class="overview-section" aria-label="Trading status">'
-    +'<div class="overview-section-head"><h2>Trading status</h2><button type="button" id="overview-view-settings" class="text-link">Manage settings →</button></div>'
-    +armDisarmCard(me)
-    +overviewTradingCard(me)
-    +'</section>';
-  html+='<section class="overview-section" aria-label="Activity">'
-    +'<div class="overview-section-head"><h2>Recent activity</h2><button type="button" class="text-link" id="overview-view-history">Trade history →</button></div>'
-    +recentFeedCard(me.recentHuman||[])+'</section>';
+  var pnl=camp?camp.floatingPL:null;
+  html+='<section class="desk-account-strip" aria-label="Trading account balances">'+deskMetric('Account balance',fmtMoney(acc.balance,acc.currency),'',acc.currency||'')+deskMetric('Equity',fmtMoney(acc.equity,acc.currency))+deskMetric('Open trade P/L',pnl==null?'—':fmtMoney(pnl,acc.currency),pnl==null?'':pnl>=0?'desk-positive':'desk-negative')+deskMetric('Free margin',fmtMoney(acc.freeMargin,acc.currency))+deskMetric('Positions',camp?(camp.layers==null?'—':String(camp.layers)):'0')+'<button id="overview-view-account" class="desk-metric-link" type="button" aria-label="View account details">Account ↗</button></section>';
+  html+='<div class="desk-workspace"><div class="desk-primary">'+apexIntelligencePanel(me)+'</div><aside class="desk-secondary" aria-label="Execution and activity"><section class="desk-panel desk-execution"><div class="desk-section-head"><div><span class="overview-eyebrow">EXECUTION</span><h2>Trading control</h2></div><button class="text-link" type="button" id="overview-view-settings">Settings ↗</button></div>'+armDisarmCard(me)+overviewTradingCard(me)+'</section>';
+  if(camp){var p=camp.weightedEntry??camp.firstEntry;html+='<section class="desk-panel"><div class="desk-section-head"><h2>Active campaign</h2><a class="text-link" href="#campaigns">Details ↗</a></div><div class="desk-campaign-side '+(camp.direction==='BUY'?'desk-positive':camp.direction==='SELL'?'desk-negative':'')+'">'+esc(camp.direction||'Active')+' <small>XAUUSD</small></div><div class="row"><span class="k">Entry</span><span class="v">'+esc(p==null?'—':Number(p).toFixed(2))+'</span></div><div class="row"><span class="k">Strategy owner</span><span class="v">'+esc(camp.strategyOwner==='ASTRA'?'Apex AI':camp.strategyOwner==='LIFESTYLE_NATIVE'?'Native Apex':'—')+'</span></div></section>';}
+  html+='<section class="desk-panel desk-activity"><div class="desk-section-head"><h2>Recent activity</h2><button class="text-link" type="button" id="overview-view-history">History ↗</button></div>'+recentFeedCard(me.recentHuman||[])+'</section></aside></div>';
   return html;
 }
 
 function apexIntelligencePanel(me){
   var a=me.astra||{},d=a.lastDecision||{},s=me.setupStatus||{},camp=me.campaign;
-  var state=!a.hasKey?'Not configured':!a.enabled?'Research only':a.status==='ASTRA_ACTIVE'?'Decision recorded':a.status==='ASTRA_READY'?'Ready':String(a.status||'Checking').replace(/_/g,' ');
+  var state=!a.hasKey?'Not configured':!a.enabled?'Research only':a.status==='ASTRA_ACTIVE'||a.status==='ACTIVE'?'Decision recorded':a.status==='ASTRA_READY'?'Ready':String(a.status||'Checking').replace(/_/g,' ');
   var owner=camp&&camp.strategyOwner?camp.strategyOwner==='ASTRA'?'Apex AI':'Native Apex':'No active campaign';
   var side=d.direction==='BUY'||d.direction==='SELL'?d.direction:s.direction==='BUY'||s.direction==='SELL'?s.direction:'—';
   var phase=s.state?String(s.state).replace(/_/g,' '):'Not reported';
@@ -567,12 +558,12 @@ function apexIntelligencePanel(me){
   var desk='<div class="intel-market"><div class="intel-market-main"><div class="intel-market-top"><div><span class="intel-kicker">XAUUSD · M1 SNAPSHOT</span><strong>'+esc(known?price(inv.bid):'—')+'</strong><small>'+esc(known?'Ask '+price(inv.ask)+' · M3 ATR '+price(inv.atrM3):'Waiting for terminal data')+'</small></div><span class="overview-pill '+(fresh?'ok':'off')+'">'+esc(fresh?'Recent':known?'Historical':'Unavailable')+'</span></div>'+chart(known?inv.candles:null)+'<small class="intel-time">'+esc(inv&&inv.observedAt?'Observed '+fmtDate(inv.observedAt):'No recent snapshot')+'</small></div><div class="intel-candidates"><span class="intel-kicker">DEVELOPING STRUCTURE</span>'+(!known?'<p class="settings-subtle">No current setup evidence.</p>':!candidates.length?'<p class="settings-subtle">No reference-family candidate in the latest snapshot.</p>':candidates.slice(0,4).map(function(c){return '<article><div><strong>'+esc(String(c.family).replace(/_/g,' '))+'</strong><span class="'+(c.direction==='BUY'?'intel-buy':'intel-sell')+'">'+esc(c.direction)+' · '+esc(c.stage)+'</span></div><small>Entry '+price(c.entry)+' · Invalid '+price(c.invalidation)+' · Target '+price(c.target)+'</small><p>'+esc((c.evidence||[]).slice(0,3).join(' · '))+'</p></article>';}).join(''))+'</div></div>';
   if(th.thesis){var t=th.thesis;desk+='<div class="intel-thesis"><span class="intel-kicker">LAST RESEARCH THESIS · '+esc(th.ageSec==null?'—':th.ageSec+'s old')+'</span><strong>'+esc(t.direction||'—')+' · '+esc(t.stage||'—')+'</strong><p>'+esc(t.summary||'')+'</p><small>Entry condition: '+esc(t.entryCondition||'—')+' · Invalidation: '+esc(t.invalidationCondition||'—')+'</small></div>';}
   else if(th.status==='RUNNING')desk+='<div class="intel-thesis"><span class="intel-kicker">RESEARCH IN PROGRESS</span><p>Evaluating the developing market structure.</p></div>';
-  return '<section class="apex-intel" aria-label="Apex intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / STRATEGY INTELLIGENCE</span><h2>Market &amp; campaign desk</h2></div><a class="intel-link" href="#ai">Open AI research ↗</a></div>'
+  return '<section class="apex-intel" aria-label="Apex intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / STRATEGY INTELLIGENCE</span><h2>Market intelligence</h2></div><a class="intel-link" href="#ai">Open AI research ↗</a></div>'
   +'<div class="intel-grid"><div><span>Setup phase</span><strong>'+esc(phase)+'</strong><small>Native telemetry</small></div>'
   +'<div><span>Direction</span><strong class="'+(side==='BUY'?'intel-buy':side==='SELL'?'intel-sell':'')+'">'+esc(side)+'</strong><small>Last reported</small></div>'
   +'<div><span>AI status</span><strong>'+esc(state)+'</strong><small>'+esc(d.action?String(d.action).replace(/_/g,' '):'No decision')+'</small></div>'
   +'<div><span>Strategy owner</span><strong>'+esc(owner)+'</strong><small>Campaign control</small></div></div>'
-  +desk+'<div class="intel-foot"><span>Reference patterns · chart research</span><a href="#settings">Configure model</a></div></section>';
+  +desk+(d.action?'<div class="intel-thesis"><span class="intel-kicker">LAST AI DECISION · NOT A LIVE ORDER</span><strong>'+esc(String(d.action).replace(/_/g,' '))+'</strong><p>'+esc(d.reasoning||d.reason||'')+'</p><small>Confidence '+esc(typeof d.confidence==='number'?(d.confidence*100).toFixed(0)+'%':'—')+' · '+esc(d.direction||'—')+'</small></div>':'')+'<div class="intel-foot"><span>Reference patterns · chart research</span><a href="#settings-ai">Configure AI</a></div></section>';
 }
 function overviewTradingCard(me){
   var camp=me.campaign, setup=me.setupStatus||{}, currency=(me.account||{}).currency;
@@ -644,10 +635,12 @@ function campaignSummaryCard(camp,cur,showLayers){
     +statTile('Unrealised P/L',fmtMoney(camp.floatingPL,cur),camp.floatingPL>=0?'pos':'neg')
     +statTile('Open positions',count)
     +'</div>'
-    +'<details class="settings-details" style="margin-top:12px"><summary><span>'
+    +'<details class="settings-details" style="margin-top:12px" '+(showLayers?'open':'')+'><summary><span>'
     +'<span class="details-name">Trade details</span><span class="details-desc" style="display:block">Prices, volume, exits and live campaign information.</span>'
     +'</span></summary><div class="details-content">'
     +'<div class="row"><span class="k">First entry</span><span class="v">'+(camp.firstEntry==null?'—':esc(Number(camp.firstEntry).toFixed(2)))+'</span></div>'
+    +'<div class="row"><span class="k">Weighted entry</span><span class="v">'+(camp.weightedEntry==null?'—':esc(Number(camp.weightedEntry).toFixed(2)))+'</span></div>'
+    +'<div class="row"><span class="k">Strategy owner</span><span class="v">'+esc(camp.strategyOwner==='ASTRA'?'Apex AI':camp.strategyOwner==='LIFESTYLE_NATIVE'?'Native Apex':'—')+'</span></div>'
     +'<div class="row"><span class="k">Total volume</span><span class="v">'+volume+' lots</span></div>'
     +'<div class="row"><span class="k">Profit floor</span><span class="v">'+esc(fmtPct(camp.profitFloor))+'</span></div>'
     +'<div class="row"><span class="k">Trade status</span><span class="v">'+esc((camp.campaignState||camp.state||'—').replace(/_/g,' '))+'</span></div>'
@@ -825,11 +818,12 @@ function wireDashboardControls(){
 
 // ---------- Campaigns ----------
 function pageCampaigns(me){
-  var html = '<h1 class="page-title">Trades</h1><p class="page-sub">Open positions, setup state and strategy ownership.</p>'+apexIntelligencePanel(me);
-  if (!me.dataAvailable) return html + dataUnavailableCard(me);
-  if (me.campaign) html += campaignProgressCard(me.campaign, (me.account||{}).currency) + campaignSummaryCard(me.campaign, (me.account||{}).currency, true);
-  else html += watchingCard(me);
-  return html;
+  var html='<div class="desk-page-head"><div><span class="overview-eyebrow">WORKSPACE / EXECUTION</span><h1 class="page-title">Trades</h1><p>Active positions and campaign management.</p></div><a class="btn btn-ghost desk-action" href="#history">Trade history ↗</a></div>';
+  if(!me.dataAvailable)return html+dataUnavailableCard(me);
+  var cur=(me.account||{}).currency;
+  if(me.campaign)html+='<div class="desk-trade-grid">'+campaignSummaryCard(me.campaign,cur,true)+campaignProgressCard(me.campaign,cur)+'</div>';
+  else html+=watchingCard(me);
+  return html+'<div class="desk-links"><a href="#dashboard">Market intelligence ↗</a><a href="#learning">Trade insights ↗</a></div>';
 }
 
 // ---------- History ----------
@@ -865,7 +859,7 @@ function pageHistory(me){
 
 // ---------- Learning ----------
 function pageLearning(me){
-  var html = '<h1 class="page-title">Trade insights</h1><p class="page-sub">A summary of completed campaigns. This is for your review; Apex does not automatically rewrite its trading strategy based on these statistics.</p>';
+  var html = '<div class="desk-page-head"><div><span class="overview-eyebrow">INTELLIGENCE / PERFORMANCE</span><h1 class="page-title">Trade insights</h1><p>Completed campaigns and recorded AI research outcomes.</p></div><a class="btn btn-ghost desk-action" href="#lab">Research Lab ↗</a></div><section class="desk-panel" id="ai-ledger"><div class="desk-section-head"><h2>AI learning ledger</h2></div><p class="settings-subtle" id="ai-ledger-body">Loading recorded predictions…</p></section>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   var L = me.learning || {};
   if (!L.completedCampaigns){
@@ -897,13 +891,27 @@ function pageLearning(me){
   return html;
 }
 
+var ledgerInFlight=false,ledgerCache=null;
+function loadLearningLedger(){
+  var target=document.getElementById('ai-ledger-body');if(!target)return;
+  function show(data){
+    var el=document.getElementById('ai-ledger-body');if(!el||STATE.page!=='learning')return;
+    var items=Array.isArray(data.bySource)?data.bySource:[];
+    el.innerHTML='<div class="ledger-stats">'+deskMetric('Predictions',String(data.predictions??'—'))+deskMetric('Resolved',String(data.resolved??'—'))+'</div>'+(items.length?items.map(function(x){return '<div class="row"><span class="k">'+esc(String(x.source).replace(/_/g,' '))+'</span><span class="v">'+esc(x.favourable)+' favourable · '+esc(x.adverse)+' adverse · '+esc(x.flat)+' flat</span></div>';}).join(''):'<p>No resolved AI predictions yet.</p>');
+  }
+  var identity=(STATE.me&&STATE.me.license||{}).key;
+  if(ledgerCache&&ledgerCache.identity===identity)show(ledgerCache.data);
+  if(ledgerInFlight)return;ledgerInFlight=true;
+  api('/api/session/astra/learning').then(function(d){if((STATE.me&&STATE.me.license||{}).key!==identity)return;ledgerCache={identity:identity,data:d};show(d);}).catch(function(){var el=document.getElementById('ai-ledger-body');if(el&&STATE.page==='learning')el.textContent='Learning ledger currently unavailable.';}).finally(function(){ledgerInFlight=false;});
+}
+
 // ---------- Settings ----------
 function settingsTabs(){
   var tabs=[
     {id:'setup',label:'Setup & updates'},
     {id:'trading',label:'Trading'},
     {id:'protection',label:'Protection'},
-    {id:'astra',label:'Astra AI'},
+    {id:'astra',label:'AI connection'},
     {id:'more',label:'More'}
   ];
   return '<div class="settings-tabs" role="tablist" aria-label="Settings sections">'+tabs.map(function(tab){
@@ -1036,7 +1044,7 @@ function pageSettings(me){
     + '</div>';
 
   html+='</div></details></section>';
-  html+=startSettingsPanel('astra','Astra AI','Optional AI-powered trade decisions. Apex still has its native trading strategy when Astra is off or unavailable.');
+  html+=startSettingsPanel('astra','AI connection','Manage provider credentials, model selection and research preferences.');
   if(window.AstraUI)html+=window.AstraUI.card(me,true);
   html+='</section>';
   html+=startSettingsPanel('more','More preferences','Notifications and specialist strategy controls.');

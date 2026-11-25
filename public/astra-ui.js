@@ -25,7 +25,16 @@
     html+='<div class="field"><label for="astra-key">Model API key</label>'
       +'<input id="astra-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="'+esc(a.maskedKey||'Paste your API key here')+'">'
       +'<div class="hint">Save a key for each provider separately; choosing a model switches to its saved provider key. Use <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI</a> or <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Anthropic</a> and enable API billing. Your key is encrypted on Apex and never goes into MT5. Leave this empty to keep an existing key.</div></div>';
-    html+='<div class="ai-model-duo"><div class="ai-model-heading"><span class="intel-kicker">MODEL ROUTING</span><h3>Two roles. One Apex Brain.</h3><p>Choose the model that handles fast bot decisions and the model that studies market context.</p></div><button id="astra-dual-preset" type="button" class="btn btn-ghost">Use Sol + Astra</button></div><div class="ai-role-grid"><div class="ai-role"><span class="ai-role-tag">01 / EXECUTION</span><label for="astra-model">Bot decision model</label><input id="astra-model" list="astra-model-options" value="'+esc(a.model||'gpt-6.2-astra')+'" autocomplete="off" spellcheck="false"><datalist id="astra-model-options"></datalist><p>Time-sensitive entries and campaign decisions.</p></div><div class="ai-role"><span class="ai-role-tag">02 / INTELLIGENCE</span><label for="astra-research-model">Research &amp; chat model</label><input id="astra-research-model" list="astra-model-options" value="'+esc(a.researchModel||'')+'" placeholder="Same as bot model" autocomplete="off" spellcheck="false"><p>Deep setup research, AI chat and default historical replay.</p></div></div><details class="settings-details" style="margin-bottom:18px"><summary><span>'
+    var selectedModel=a.model||'gpt-6-luna';
+    html+='<div class="ai-model-duo"><div class="ai-model-heading"><span class="intel-kicker">MODEL</span><h3>Choose your Apex intelligence</h3><p>One model for bot execution, deep research, chat and historical replay by default.</p></div></div>'
+      +'<div class="ai-model-choices" role="group" aria-label="Choose AI model">'+[
+        ['gpt-6-luna','Luna 6','Default · economical','$0.10','$0.50','$0.01','$1.45'],
+        ['gpt-6.2-sol','Sol 6.2','Balanced reasoning','$2','$10','$0.10','$29'],
+        ['gpt-6.2-astra','Astra 6.2','Advanced reasoning','$8','$40','$0.40','$116']
+      ].map(function(x){return '<button type="button" class="ai-model-choice'+(selectedModel===x[0]?' selected':'')+'" data-model-choice="'+x[0]+'" aria-pressed="'+(selectedModel===x[0]?'true':'false')+'"><strong>'+x[1]+'</strong><small>'+x[2]+'</small><span class="ai-model-cost">'+x[6]+'<small> / example day</small></span><span class="ai-model-rate">Input '+x[3]+' · Output '+x[4]+'<br>Cached input '+x[5]+'</span></button>';}).join('')+'</div><p class="hint ai-model-price-note">USD per 1M tokens. Example day: 400 execution requests (20k input / 1k output each) and 100 research requests (25k input / 4k output each), before caching, extra chat or lab use. Not a fixed fee or a measured bill. Your API provider bills actual usage. <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener noreferrer">OpenAI Standard rates</a> · checked Nov 25, 2026.</p>'
+      +'<div class="field"><label for="astra-model">Selected model</label><input id="astra-model" list="astra-model-options" value="'+esc(selectedModel)+'" autocomplete="off" spellcheck="false"><datalist id="astra-model-options"></datalist><div class="hint">Choose a model above or enter a supported custom model ID.</div></div>'
+      +'<details class="settings-details" '+(a.researchModel?'open':'')+' style="margin-bottom:14px"><summary><span><span class="details-name">Advanced model routing</span><span class="details-desc">'+(a.researchModel?'Separate research model is configured':'Same model for all tasks')+'</span></span></summary><div class="details-content"><div class="field"><label for="astra-research-model">Optional research model override</label><input id="astra-research-model" list="astra-model-options" value="'+esc(a.researchModel||'')+'" placeholder="Same as selected model" autocomplete="off" spellcheck="false"><div class="hint">Leave blank to use the selected model for every task. Choosing a model above clears this override.</div></div></div></details>'
+      +'<details class="settings-details" style="margin-bottom:18px"><summary><span>'
       +'<span class="details-name">Reasoning &amp; optional spending controls</span>'
       +'<span class="details-desc" style="display:block">Choose a supported model and control API requests.</span>'
       +'</span></summary><div class="details-content" style="padding-top:21px">'
@@ -67,23 +76,31 @@
       try{await fn();}catch(e){result.textContent=label(e.message);}finally{buttons.forEach(function(b){b.disabled=false;});}}
     function bindCap(check,field){var c=document.getElementById(check),v=document.getElementById(field);c.onchange=function(){v.disabled=c.checked;};}
     bindCap('astra-unlimited','astra-limit');bindCap('astra-research-unlimited','astra-research-limit');
-    document.getElementById('astra-dual-preset').onclick=function(){document.getElementById('astra-model').value='gpt-6.2-sol';document.getElementById('astra-research-model').value='gpt-6.2-astra';document.getElementById('astra-effort').value='low';document.getElementById('astra-research-effort').value='high';result.textContent='Sol for execution, Astra for research. Save AI settings to apply.';};
+    var modelInput=document.getElementById('astra-model'),researchInput=document.getElementById('astra-research-model'),choices=Array.from(document.querySelectorAll('[data-model-choice]'));
+    function syncChoices(){choices.forEach(function(b){var active=b.dataset.modelChoice===modelInput.value.trim();b.classList.toggle('selected',active);b.setAttribute('aria-pressed',String(active));});}
+    choices.forEach(function(b){b.onclick=function(){modelInput.value=b.dataset.modelChoice;researchInput.value='';syncChoices();result.textContent='One model for all tasks. Save AI settings to apply.';};});
+    modelInput.addEventListener('input',function(){researchInput.value='';syncChoices();});
     save.onclick=function(){run(async function(){
       var input=document.getElementById('astra-key'),patch={enabled:document.getElementById('astra-enabled').checked,model:document.getElementById('astra-model').value.trim(),reasoningEffort:document.getElementById('astra-effort').value,dailyRequestLimit:document.getElementById('astra-unlimited').checked?null:parseInt(document.getElementById('astra-limit').value,10)};
       patch.researchEnabled=document.getElementById('astra-research-enabled').checked;patch.researchEffort=document.getElementById('astra-research-effort').value;patch.researchModel=document.getElementById('astra-research-model').value.trim()||null;patch.researchDailyLimit=document.getElementById('astra-research-unlimited').checked?null:parseInt(document.getElementById('astra-research-limit').value,10);
       if((patch.dailyRequestLimit===null||patch.researchDailyLimit===null)&&!confirm('No Apex spending cap means your API provider may charge for all qualifying requests. Save these settings?'))return;
-      if(input.value.trim()){patch.apiKey=input.value.trim();var anthropic=patch.apiKey.startsWith('sk-ant-');if(anthropic!==/^claude-/i.test(patch.model))patch.model=anthropic?'claude-opus-5-5':'gpt-6.2-astra';}
+      if(input.value.trim()){patch.apiKey=input.value.trim();var anthropic=patch.apiKey.startsWith('sk-ant-');if(anthropic!==/^claude-/i.test(patch.model)){patch.model=anthropic?'claude-opus-5-5':'gpt-6-luna';patch.researchModel=null;}}
       try{await request('POST','/api/session/astra',patch);}finally{input.value='';delete patch.apiKey;}
       await refresh();
     });};
     document.getElementById('astra-remove').onclick=function(){if(!confirm('Remove both saved provider keys and disable AI decisions?'))return;run(async function(){await request('DELETE','/api/session/astra',{});document.getElementById('astra-key').value='';await refresh();});};
     function test(scope){run(async function(){
       var data=await request('POST','/api/session/astra/test',{scope:scope});
-      var lines=(data.results||[]).map(function(r){
-        if(r.error)return r.name+': '+label(r.error);
-        var t=r.latencyMs!=null?' · '+r.latencyMs+' ms'+(r.withinDecisionBudget===false?' (too slow for live use)':''):'';
-        return scope==='connection'?'Model replied '+label(r.action)+' / '+label(r.state)+t:r.name+': '+(r.passed?'PASS':'FAIL'+(r.action?' (got '+label(r.action)+')':''))+t;});
-      result.textContent=label(data.status)+' · '+lines.join(' · ');
+      result.textContent='';var heading=document.createElement('strong');heading.textContent=label(data.status);result.appendChild(heading);
+      var list=document.createElement('div');list.className='ai-test-results';
+      (data.results||[]).forEach(function(r){
+        var item=document.createElement('div');item.className='ai-test-row';
+        var title=document.createElement('strong');title.textContent=label(r.name);item.appendChild(title);
+        var outcome=document.createElement('span');outcome.className=r.passed?'test-ok':'test-fail';
+        outcome.textContent=r.error?label(r.error):r.passed?'PASS':'Mismatch: '+label(r.action);item.appendChild(outcome);
+        var detail=document.createElement('small');detail.textContent=(r.expected?'Expected '+r.expected.join(' / ')+' · ':'')+(r.latencyMs!=null?r.latencyMs+' ms':'')+(r.withinDecisionBudget===false?' · too slow for live use':'')+(r.reasonCodes?' · '+r.reasonCodes.map(label).join(', '):'');item.appendChild(detail);
+        list.appendChild(item);
+      });result.appendChild(list);
     });}
     document.getElementById('astra-test').onclick=function(){test('connection');};
     document.getElementById('astra-checks').onclick=function(){test('strategy');};
@@ -96,10 +113,10 @@
   function chatPage(me,workspace){
     var id=String((me.license||{}).key||(me.license||{}).account||'session');if(state.identity!==id){resetChat();state.identity=id;}
     if(workspace)state.workspace=workspace;
-    var key=!!(me.astra&&me.astra.hasKey);
+    var key=!!(me.astra&&me.astra.hasKey),market=me.astra&&me.astra.investigation;
     if(state.workspace==='lab')return labPage(me);
     return '<section class="apex-ai-chat"><header><div class="apex-ai-mark">✦</div><div class="apex-chat-heading"><h2>Apex AI</h2><p>Gold setup &amp; chart research</p></div><button type="button" id="apex-lab-open" class="btn btn-ghost">Research Lab</button><button type="button" id="apex-chat-clear" class="btn btn-ghost">New chat</button></header><div class="apex-chat-tools"><label for="apex-conversations">Conversations</label><select id="apex-conversations"><option value="">New chat</option></select><button id="apex-chat-rename" class="btn btn-ghost" type="button">Rename</button><button id="apex-chat-delete" class="btn btn-ghost" type="button">Delete</button></div>'
-    +(key?'':'<div class="apex-chat-note">Connect your API key in <a href="#settings-ai">AI connection</a> to begin.</div>')
+    +(key?'<div class="apex-market-state">'+(market&&market.freshness==='RECENT'?'Recent MT5 market snapshot':market&&market.freshness==='HISTORICAL'?'Historical MT5 snapshot · not live':'No current MT5 candles · attach a chart or connect Bridge V2')+'</div>':'<div class="apex-chat-note">Connect your API key in <a href="#settings-ai">AI connection</a> to begin.</div>')
     +'<div class="apex-chat-thread" id="apex-chat-thread" role="log" aria-live="polite"></div><form id="apex-chat-form"><div id="apex-chat-preview" class="apex-chat-file" hidden><img id="apex-chat-thumb" alt="Chart preview"><span id="apex-chat-name"></span><button id="apex-chat-remove" type="button" aria-label="Remove chart">×</button></div><div class="apex-chat-compose"><label class="apex-attach-button" for="apex-chat-image" title="Attach a gold chart">＋</label><input class="apex-file-input" type="file" id="apex-chat-image" accept="image/png,image/jpeg" aria-label="Attach gold chart"><textarea id="apex-chat-message" aria-label="Message Apex AI" placeholder="Ask about a gold setup…" rows="2" maxlength="4000" '+(key?'':'disabled')+'></textarea><button id="apex-chat-send" type="submit" class="btn btn-primary" '+(key?'':'disabled')+'>Send ↑</button></div><div id="apex-chat-status" class="hint" role="status"></div></form></section>';
   }
   function bindChat(me){
@@ -109,7 +126,7 @@
     var key=!!(me.astra&&me.astra.hasKey),image=null,selection=0;
     function append(role,text,url){var node=document.createElement('div');node.className='apex-chat-'+role;if(url){var img=document.createElement('img');img.src=url;img.alt='Uploaded gold chart';img.className='apex-chat-chart';node.appendChild(img);}var body=document.createElement('div');if(role==='assistant'){body.innerHTML=esc(text).replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');}else body.textContent=text;node.appendChild(body);if(role==='assistant'&&text!=='Researching market evidence…'){var copy=document.createElement('button');copy.type='button';copy.className='apex-copy';copy.textContent='Copy';copy.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(text).then(function(){copy.textContent='Copied';}).catch(function(){copy.textContent='Copy unavailable';});};node.appendChild(copy);}thread.appendChild(node);}
     function render(){if(!thread.isConnected)return;thread.textContent='';
-      if(!state.history.length&&!state.busy){var w=document.createElement('div');w.className='apex-chat-welcome';w.innerHTML='<span class="intel-kicker">REFERENCE PATTERN DESK</span><h3>Find the setup.<br>Understand the move.</h3><p>Research a gold chart, developing rejection or active campaign.</p>';['Recognize a setup on my chart','Explain the latest Apex decision','Compare reversal and continuation'].forEach(function(q){var b=document.createElement('button');b.type='button';b.className='apex-chat-suggestion';b.textContent=q;b.disabled=!key;b.onclick=function(){message.value=q;message.focus();};w.appendChild(b);});thread.appendChild(w);}
+      if(!state.history.length&&!state.busy){var w=document.createElement('div');w.className='apex-chat-welcome';w.innerHTML='<span class="intel-kicker">REFERENCE PATTERN DESK</span><h3>Find the setup.<br>Understand the move.</h3><p>Research a gold chart, developing rejection or active campaign.</p>';['Analyze an uploaded chart','Explain the latest Apex decision','Compare reversal and continuation'].forEach(function(q){var b=document.createElement('button');b.type='button';b.className='apex-chat-suggestion';b.textContent=q;b.disabled=!key;b.onclick=function(){message.value=q;if(q==='Analyze an uploaded chart'&&!image)attachment.click();else message.focus();};w.appendChild(b);});thread.appendChild(w);}
       state.history.forEach(function(m){append(m.role,m.text,m.image);});if(state.busy)append('assistant',state.stream||'Researching market evidence…');send.disabled=!key||state.busy;clear.disabled=state.busy;status.textContent=state.status;thread.scrollTop=thread.scrollHeight;}
     state.refresh=render;render();
     var conversations=document.getElementById('apex-conversations');

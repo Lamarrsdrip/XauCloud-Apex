@@ -104,7 +104,10 @@ export function createLab(dataDir,{clock=Date.now,loadBars=bars,modelPredict,lea
  async function getBenchmark(l,id){
   if(!validId(id))throw fail('BENCHMARK_NOT_FOUND',404);
   let j;try{j=JSON.parse(await fs.readFile(path.join(dir(l),'benchmarks',id+'.json'),'utf8'));}catch(e){if(e.code==='ENOENT')throw fail('BENCHMARK_NOT_FOUND',404);throw e;}
-  if(j.status==='RUNNING'&&runningBenchmarks.get(l)!==id)return {...j,status:'INTERRUPTED',reason:'SERVER_RESTARTED'};
+  if(j.status==='RUNNING'&&runningBenchmarks.get(l)!==id){
+   j=JSON.parse(await fs.readFile(path.join(dir(l),'benchmarks',id+'.json'),'utf8'));
+   if(j.status==='RUNNING'&&runningBenchmarks.get(l)!==id)return {...j,status:'INTERRUPTED',reason:'SERVER_RESTARTED'};
+  }
   return j;
  }
  function summarize(rows,requested){

@@ -217,3 +217,36 @@ test('explicit uncapped budget persists; independent Sol and Astra model routing
  assert.equal((await v.settings('a')).researchDailyLimit,0);
  svc.close();
 }));
+
+test('Luna is the default for new OpenAI accounts; explicit model choices survive restart',()=>temp(async dir=>{
+  const v=createAstraVault(dir);
+  assert.equal((await v.settings('new')).model,'gpt-6-luna');
+  const x=await v.update('new',{apiKey:fakeKey,enabled:true});
+  assert.equal(x.model,'gpt-6-luna');assert.equal(x.researchModel,null);
+  const bodies=[];
+  const svc=createAstraService({dataDir:dir,fetchImpl:async(_url,init)=>{bodies.push(JSON.parse(init.body));return completed(decision());}});
+  for(const model of ['gpt-6-luna','gpt-6.2-sol','gpt-6.2-astra']){
+    const current=await svc.configure('new',{model,researchModel:null});
+    assert.equal((await v.settings('new')).model,model);
+    await svc.test('new',[strategyFixtures().find(x=>x.name==='TOO_EARLY')],{scope:'CONNECTION'});
+    assert.equal(bodies.at(-1).model,model);
+    assert.equal((await createAstraVault(dir).settings('new')).researchModel,null);
+  }
+  await v.update('new',{apiKey:fakeKey});
+  assert.equal((await v.settings('new')).model,'gpt-6.2-astra');
+  svc.close();
+}));
+
+test('strategy diagnostics keep synthetic snapshots valid through sequential slow calls',()=>temp(async dir=>{
+ let now=Date.now(),calls=0;const svc=createAstraService({dataDir:dir,clock:()=>now,fetchImpl:async()=>{calls++;now+=5000;return completed(decision());}});
+ await svc.configure('L',{apiKey:fakeKey,enabled:true});
+ const result=await svc.test('L',strategyFixtures(now),{scope:'STRATEGY'});
+ assert.equal(calls,9);assert.equal(result.results.length,9);assert.ok(result.results.every(x=>x.error!=='AI_ERROR'&&x.error!=='INVALID_MARKET_CONTEXT'));
+ svc.close();
+}));
+test('market-only snapshots are available without enabling AI or paying for a model',()=>temp(async dir=>{
+ let calls=0;const svc=createAstraService({dataDir:dir,fetchImpl:async()=>{calls++;return completed(decision());}});
+ const snap=fixture();assert.equal((await svc.observeMarket('L',snap)).status,'OBSERVED');
+ const status=await svc.status('L');assert.equal(status.status,'DISABLED');assert.equal(status.investigation.freshness,'RECENT');assert.equal(calls,0);
+ assert.equal((await svc.status('other')).investigation,null);svc.close();
+}));

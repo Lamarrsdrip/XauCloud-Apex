@@ -4033,7 +4033,7 @@ void OnTimer()
    if(!astraNetwork)
      {
       if(cloudDue){CloudSync();lastCfg=now;}
-      else FlushEventQueue();
+      else if(g_observerOnly||!AstraMarketTelemetry())FlushEventQueue();
      }
    ulong used=GetTickCount64()-t0;
    if(used>(ulong)MathMax(400,InpCloudTickBudgetMs))

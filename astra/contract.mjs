@@ -1,9 +1,9 @@
 import crypto from 'node:crypto';
 
 export const KNOWLEDGE_VERSION = 'tradingcartel-breakfast-v1';
-// gpt-6.2-astra replaced gpt-6-astra as OpenAI's flagship (official model catalog, read 2026-11-25).
-// Saved gpt-6-astra settings stay valid; see astra/models.mjs for the full verified catalog.
-export const DEFAULT_MODEL = 'gpt-6.2-astra';
+// Luna is the economical OpenAI default. Explicit saved model choices remain valid.
+import {DEFAULT_MODEL_BY_PROVIDER} from './models.mjs';
+export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.openai;
 // Reasoning models spend latency before answering; decisions expire after 8s.
 export const REASONING_EFFORTS = ['default','none','low','medium','high','xhigh','max'];
 export const DEFAULT_REASONING_EFFORT = 'low';

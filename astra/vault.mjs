@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {modelId,DEFAULT_MODEL,reasoningEffort,DEFAULT_REASONING_EFFORT,dailyRequestLimit,DEFAULT_DAILY_REQUEST_LIMIT} from './contract.mjs';
+import {modelId,DEFAULT_MODEL,reasoningEffort,DEFAULT_REASONING_EFFORT,dailyRequestLimit,DEFAULT_DAILY_REQUEST_LIMIT,DEFAULT_RESEARCH,researchSettings} from './contract.mjs';
+import {DEFAULT_MODEL_BY_PROVIDER} from './models.mjs';
+const RESEARCH_KEYS=Object.keys(DEFAULT_RESEARCH);
 
 const safeError = code => Object.assign(new Error(code),{httpStatus:400});
 
@@ -33,17 +35,20 @@ export function createAstraVault(dataDir) {
   }
   const identity=license=>crypto.createHash('sha256').update(license).digest('hex');
   function view(rec={}) {
-    return {enabled:rec.enabled===true,hasKey:!!rec.ciphertext,model:rec.model||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:rec.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,
-      provider:rec.provider||'openai',maskedKey:rec.ciphertext?'sk-••••••••••••'+rec.suffix:null,revision:rec.revision||0};
+    const provider=rec.provider||'openai';
+    return {...DEFAULT_RESEARCH,...Object.fromEntries(RESEARCH_KEYS.filter(k=>k in rec).map(k=>[k,rec[k]])),
+      enabled:rec.enabled===true,hasKey:!!rec.ciphertext,model:rec.model||DEFAULT_MODEL_BY_PROVIDER[provider]||DEFAULT_MODEL,reasoningEffort:rec.reasoningEffort||DEFAULT_REASONING_EFFORT,dailyRequestLimit:rec.dailyRequestLimit||DEFAULT_DAILY_REQUEST_LIMIT,
+      provider,maskedKey:rec.ciphertext?(provider==='anthropic'?'sk-ant-••••••••':'sk-••••••••••••')+rec.suffix:null,keyAddedAt:rec.keyAddedAt||null,revision:rec.revision||0};
   }
   return {
     async settings(license){return view((await read())[identity(license)]);},
     async update(license,patch) {
-      if(!patch||typeof patch!=='object'||Array.isArray(patch)||Object.keys(patch).some(k=>!['enabled','model','reasoningEffort','dailyRequestLimit','apiKey'].includes(k)))throw safeError('INVALID_ASTRA_SETTINGS');
+      if(!patch||typeof patch!=='object'||Array.isArray(patch)||Object.keys(patch).some(k=>!['enabled','model','reasoningEffort','dailyRequestLimit','apiKey',...RESEARCH_KEYS].includes(k)))throw safeError('INVALID_ASTRA_SETTINGS');
       if('enabled'in patch&&typeof patch.enabled!=='boolean')throw safeError('INVALID_ASTRA_SETTINGS');
       if('model'in patch)modelId(patch.model);
       if('reasoningEffort'in patch)reasoningEffort(patch.reasoningEffort);
       if('dailyRequestLimit'in patch)dailyRequestLimit(patch.dailyRequestLimit);
+      let research;try{research=researchSettings(patch);}catch{throw safeError('INVALID_ASTRA_SETTINGS');}
       if('apiKey'in patch&&(typeof patch.apiKey!=='string'||!/^sk-[A-Za-z0-9_-]{16,500}$/.test(patch.apiKey)))throw safeError('INVALID_API_KEY_FORMAT');
       return locked(async()=>{
         const rows=await read(),id=identity(license),rec={...(rows[id]||{})};
@@ -54,11 +59,14 @@ export function createAstraVault(dataDir) {
           const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',await master(!existingCiphertext),iv);
           cipher.setAAD(Buffer.from(id));
           rec.ciphertext=Buffer.concat([cipher.update(patch.apiKey,'utf8'),cipher.final()]).toString('base64');
-          rec.iv=iv.toString('base64');rec.tag=cipher.getAuthTag().toString('base64');rec.suffix=patch.apiKey.slice(-4);rec.provider=patch.apiKey.startsWith('sk-ant-')?'anthropic':'openai';
+          rec.iv=iv.toString('base64');rec.tag=cipher.getAuthTag().toString('base64');rec.suffix=patch.apiKey.slice(-4);rec.provider=patch.apiKey.startsWith('sk-ant-')?'anthropic':'openai';rec.keyAddedAt=new Date().toISOString();
+          // A key for the other provider brings that provider's recommended model unless one is chosen in the same request.
+          if(!('model'in patch)&&rec.model&&(rec.provider==='anthropic')!==/^claude-/i.test(rec.model))delete rec.model;
         }
         if('enabled'in patch)rec.enabled=patch.enabled;
         if('model'in patch)rec.model=patch.model;
-        if(rec.ciphertext&&((rec.provider==='anthropic')!==/^claude-/i.test(rec.model||DEFAULT_MODEL)))throw safeError('PROVIDER_MODEL_MISMATCH');
+        if(rec.ciphertext&&rec.model&&((rec.provider==='anthropic')!==/^claude-/i.test(rec.model)))throw safeError('PROVIDER_MODEL_MISMATCH');
+        Object.assign(rec,research);
         if('reasoningEffort'in patch)rec.reasoningEffort=patch.reasoningEffort;
         if('dailyRequestLimit'in patch)rec.dailyRequestLimit=patch.dailyRequestLimit;
         rec.revision=(rec.revision||0)+1;

@@ -1,0 +1,180 @@
+{
+ "version": "apex-brain-base-rates-2026-11-25",
+ "engineVersion": "apex-pattern-engine-1.0.0",
+ "meaning": "Share of detections where price moved +1 M3-ATR in the trade direction before -1 M3-ATR (spread included, same-bar ambiguity = loss), from the XauCloud M1 archive. A value near the random baseline means the shape alone carries no measurable edge.",
+ "splits": {
+  "TRAIN": "2021-11..2024-12",
+  "VALIDATION": "2025",
+  "HELD_OUT": "2026-01..2026-10 (run once, after freezing)"
+ },
+ "baselines": {
+  "random": {
+   "TRAIN": 0.419,
+   "VALIDATION": 0.466,
+   "HELD_OUT": 0.479
+  },
+  "native": {
+   "TRAIN": 0.369,
+   "VALIDATION": 0.492,
+   "HELD_OUT": 0.438
+  },
+  "referenceComposite": {
+   "TRAIN": {
+    "n": 3806,
+    "perDay": 5.41,
+    "win1to1Atr": 0.442,
+    "expR2to1": -0.129
+   },
+   "VALIDATION": {
+    "n": 1183,
+    "perDay": 5.33,
+    "win1to1Atr": 0.507,
+    "expR2to1": -0.018
+   },
+   "HELD_OUT": {
+    "n": 865,
+    "perDay": 4.65,
+    "win1to1Atr": 0.469,
+    "expR2to1": -0.042
+   }
+  }
+ },
+ "byFamily": {
+  "V_RECOVERY_FAILURE|SELL": {
+   "TRAIN": {
+    "n": 7176,
+    "win1to1Atr": 0.427,
+    "expR2to1": -0.148
+   },
+   "VALIDATION": {
+    "n": 2412,
+    "win1to1Atr": 0.473,
+    "expR2to1": -0.056
+   },
+   "HELD_OUT": {
+    "n": 2011,
+    "win1to1Atr": 0.514,
+    "expR2to1": 0.045
+   }
+  },
+  "V_RECOVERY_FAILURE|BUY": {
+   "TRAIN": {
+    "n": 7066,
+    "win1to1Atr": 0.433,
+    "expR2to1": -0.155
+   },
+   "VALIDATION": {
+    "n": 2046,
+    "win1to1Atr": 0.463,
+    "expR2to1": -0.093
+   },
+   "HELD_OUT": {
+    "n": 1760,
+    "win1to1Atr": 0.435,
+    "expR2to1": -0.142
+   }
+  },
+  "SPIKE_REJECTION|SELL": {
+   "TRAIN": {
+    "n": 9026,
+    "win1to1Atr": 0.412,
+    "expR2to1": -0.165
+   },
+   "VALIDATION": {
+    "n": 2769,
+    "win1to1Atr": 0.442,
+    "expR2to1": -0.131
+   },
+   "HELD_OUT": {
+    "n": 2316,
+    "win1to1Atr": 0.468,
+    "expR2to1": -0.034
+   }
+  },
+  "SPIKE_REJECTION|BUY": {
+   "TRAIN": {
+    "n": 8955,
+    "win1to1Atr": 0.422,
+    "expR2to1": -0.159
+   },
+   "VALIDATION": {
+    "n": 2946,
+    "win1to1Atr": 0.482,
+    "expR2to1": -0.045
+   },
+   "HELD_OUT": {
+    "n": 2704,
+    "win1to1Atr": 0.467,
+    "expR2to1": -0.063
+   }
+  },
+  "BREAK_PAUSE_CONTINUATION|SELL": {
+   "TRAIN": {
+    "n": 2070,
+    "win1to1Atr": 0.409,
+    "expR2to1": -0.188
+   },
+   "VALIDATION": {
+    "n": 527,
+    "win1to1Atr": 0.416,
+    "expR2to1": -0.177
+   },
+   "HELD_OUT": {
+    "n": 492,
+    "win1to1Atr": 0.488,
+    "expR2to1": 0.022
+   }
+  },
+  "BREAK_PAUSE_CONTINUATION|BUY": {
+   "TRAIN": {
+    "n": 2245,
+    "win1to1Atr": 0.413,
+    "expR2to1": -0.168
+   },
+   "VALIDATION": {
+    "n": 878,
+    "win1to1Atr": 0.48,
+    "expR2to1": -0.036
+   },
+   "HELD_OUT": {
+    "n": 519,
+    "win1to1Atr": 0.474,
+    "expR2to1": -0.056
+   }
+  },
+  "RECOVERY_CONTINUATION|SELL": {
+   "TRAIN": {
+    "n": 2554,
+    "win1to1Atr": 0.426,
+    "expR2to1": -0.142
+   },
+   "VALIDATION": {
+    "n": 778,
+    "win1to1Atr": 0.425,
+    "expR2to1": -0.137
+   },
+   "HELD_OUT": {
+    "n": 673,
+    "win1to1Atr": 0.455,
+    "expR2to1": -0.052
+   }
+  },
+  "RECOVERY_CONTINUATION|BUY": {
+   "TRAIN": {
+    "n": 2632,
+    "win1to1Atr": 0.43,
+    "expR2to1": -0.143
+   },
+   "VALIDATION": {
+    "n": 776,
+    "win1to1Atr": 0.465,
+    "expR2to1": -0.049
+   },
+   "HELD_OUT": {
+    "n": 621,
+    "win1to1Atr": 0.476,
+    "expR2to1": -0.114
+   }
+  }
+ }
+}

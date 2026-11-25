@@ -177,7 +177,7 @@ test('daily request budget is enforced, persisted across restart, and never bloc
   let calls=0;const fetchImpl=async()=>{calls++;return completed(decision());};
   let now=Date.now();const clock=()=>now;
   const svc=createAstraService({dataDir:dir,fetchImpl,clock});
-  await svc.configure('L',{apiKey:fakeKey,enabled:true,dailyRequestLimit:10});
+  await svc.configure('L',{apiKey:fakeKey,enabled:true,dailyRequestLimit:10,researchEnabled:false});
   const snap=i=>{const s=strategyFixtures(now).find(x=>x.name==='TOO_EARLY').snapshot;s.snapshotId='budget-'+i;return s;};
   let last;
   for(let i=0;i<10;i++){now+=2500;last=await svc.submit('L',snap(i));await svc.drain();}

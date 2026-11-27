@@ -159,7 +159,7 @@ export function scanPullbacks(bars:Bar[],spread=.25,slippage=.10):PullbackCase[]
  }
  return cases;
 }
-export function trainKnowledge(cases:TradingCase[],pullbacks:PullbackCase[],trainEnd:number,validationEnd:number,dataThrough:number):Knowledge{
+export function trainKnowledge(cases:TradingCase[],pullbacks:PullbackCase[],trainEnd:number,validationEnd:number,dataThrough:number,pullbackSplit={trainEnd,validationEnd}):Knowledge{
  if(![trainEnd,validationEnd,dataThrough].every(Number.isFinite)||!(trainEnd<validationEnd&&validationEnd<dataThrough))throw Error("INVALID_SPLITS");
  const resolved=cases.filter(c=>Number.isFinite(Date.parse(c.at))&&Date.parse(c.at)+270*60000<=dataThrough);
  const trEnd=new Date(trainEnd).toISOString(),vaEnd=new Date(validationEnd).toISOString();
@@ -174,11 +174,13 @@ export function trainKnowledge(cases:TradingCase[],pullbacks:PullbackCase[],trai
  };
  const hourRows=Array.from({length:24},(_,h)=>({h,train:hourStats(h,-Infinity,trainEnd),validation:hourStats(h,trainEnd,validationEnd)}));
  const hours=hourRows.filter(x=>x.train.n>=15&&x.validation.n>=8&&x.train.avgR>0&&x.validation.avgR>0).sort((a,b)=>b.validation.avgR-a.validation.avgR).map(x=>x.h);
- const groups=[...new Set(pullbacks.map(c=>c.group))].map(group=>({group,train:stat(pullbacks.filter(c=>c.group===group&&c.at+20*60000<=trainEnd)),validation:stat(pullbacks.filter(c=>c.group===group&&c.at>=trainEnd&&c.at+20*60000<=validationEnd))}));
+ const pbTrain=pullbackSplit.trainEnd,pbVal=pullbackSplit.validationEnd;
+ if(!(pbTrain<pbVal&&pbVal<dataThrough))throw Error('INVALID_PULLBACK_SPLITS');
+ const groups=[...new Set(pullbacks.filter(c=>c.at<pbVal).map(c=>c.group))].map(group=>({group,train:stat(pullbacks.filter(c=>c.group===group&&c.at+20*60000<=pbTrain)),validation:stat(pullbacks.filter(c=>c.group===group&&c.at>=pbTrain&&c.at+20*60000<=pbVal))}));
  const selected=groups.filter(g=>g.train.n>=25&&g.validation.n>=10&&g.train.avgR>0&&g.validation.avgR>0);
- const holdout=pullbacks.filter(c=>c.at>=validationEnd&&c.at+20*60000<=dataThrough&&selected.some(g=>g.group===c.group));
+ const holdout=pullbacks.filter(c=>c.at>=pbVal&&c.at+20*60000<=dataThrough&&selected.some(g=>g.group===c.group));
  const lessons=[...discoverLessons(training,"OUTLOOK",trEnd,vaEnd),...discoverLessons(training,"M10_ENGINE",trEnd,vaEnd)];
- return {version:VERSION,builtAt:Date.now(),dataThrough,rules,history,hours,pullbacks:selected,diagnostics:{hourRows,pullbackGroups:groups,pullbackHoldout:stat(holdout),outlookHoldout:validateQuality(eligible,rules,vaEnd),exam:holdoutExam(eligible,lessons,vaEnd),lessons,strategyEvidence:STRATEGY_EVIDENCE,caseCount:eligible.length,pullbackCaseCount:pullbacks.length,trainEnd,validationEnd}};
+ return {version:VERSION,builtAt:Date.now(),dataThrough,rules,history,hours,pullbacks:selected,diagnostics:{hourRows,pullbackGroups:groups,pullbackHoldout:stat(holdout),outlookHoldout:validateQuality(eligible,rules,vaEnd),exam:holdoutExam(eligible,lessons,vaEnd),lessons,strategyEvidence:STRATEGY_EVIDENCE,caseCount:eligible.length,pullbackCaseCount:pullbacks.length,trainEnd,validationEnd,pullbackSplit}};
 }
 export function selectIndependentPlan(raw:Bar[],q:Quote,now:number,k:Knowledge|null,canonical?:Parameters<typeof outlookFromCanonicalEvidence>[0]){
  const local=localOutlookResearch(raw,q,now);

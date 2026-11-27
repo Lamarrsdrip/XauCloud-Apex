@@ -201,6 +201,6 @@ export function selectIndependentPlan(raw:Bar[],q:Quote,now:number,k:Knowledge|n
  return {plan:null,local,status:p?"PULLBACK_UNCALIBRATED":"NO_PULLBACK"};
 }
 export function wire(p:Plan|null):string{
- if(!p||!planOK(p))return "NONE|NO_FRESH_STRONG";
- return ["APEX4",p.id,p.side,p.entry,p.sl,p.tp1,p.tp2,Math.floor(p.published/1000),Math.floor(p.expires/1000)].join("|");
+ if(!p||!planOK(p))return "NONE|ARMED_NO_PLAN";
+ return ["APEX4",p.id,p.side,p.entry,p.sl,p.tp1,p.tp2,Math.floor(p.published/1000),Math.floor(p.expires/1000),p.kind].join("|");
 }

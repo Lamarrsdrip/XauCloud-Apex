@@ -15,6 +15,7 @@ const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'
 const CONFIG_SCHEMA=Number(MANIFEST.configSchema||2);
 const PORT=Number(process.env.PORT||8787);
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
+const APEX4_PREVIEW=process.env.APEX4_CANDIDATE==='1';
 
 // APEX-AUDIT-024: the public fallback strings are accepted ONLY outside production.
 // A production process refuses to start without real, sufficiently long secrets.
@@ -1136,12 +1137,13 @@ async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const desiredHash=configHash(cfg);
   const release=await RELEASE_STORE.status();
+  const candidate=APEX4_PREVIEW?await import('./intelligence/apex4-runtime.mjs').then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
     unlimitedEntitled:licenseAllowsUnlimited(lic),
     expiresAt:lic?.expiresAt||null,customer:lic?.customer||null};
   if(status!=='ACTIVE')
-    return {license:base,release,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},
+    return {license:base,release,candidate,dataAvailable:false,armed:false,mt5:{status:'DISCONNECTED',lastSeen:null},
       settings:settingsView(cfg),learning:learningShape([]),
       bridge:{configured:bridgeConfigured(),ok:false,reason:'LICENSE_'+status,sync:bridgeSyncState}};
 
@@ -1192,7 +1194,7 @@ async function buildMe(key){
                      eaTradeAllowed===true&&!observerOnly&&preflightBlock===''&&cfg.armed===true;
 
   return {
-    license:base,release,dataAvailable:Boolean(lastSeen),waitingForFirstContact:!lastSeen,
+    license:base,release,candidate,dataAvailable:Boolean(lastSeen),waitingForFirstContact:!lastSeen,
     armed:cfg.armed,accountProfile:cfg.accountProfile,
     mt5:{status:mt5,lastSeen:lastSeen||null},
     // desired vs applied vs unknown, never merged into a single "armed" light
@@ -1300,7 +1302,7 @@ const server=http.createServer(async(req,res)=>{
 
     if(req.method==='GET'&&u.pathname==='/health')
       return json(res,200,{ok:true,service:'xaucloud-apex',
-        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,
+        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,candidateMode:APEX4_PREVIEW?'APEX4_DEMO':null,
         configSchema:CONFIG_SCHEMA,webRequestOrigin:MANIFEST.webRequestOrigin,
         bridge:{configured:bridgeConfigured(),sync:bridgeSyncState},
         secretsAcceptableForProduction:secretProblems().length===0,
@@ -1465,6 +1467,7 @@ const server=http.createServer(async(req,res)=>{
     // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
     if(u.pathname.startsWith('/api/session/lab/')){
       const s=await notificationSession(req,res);if(!s)return;
+      if(APEX4_PREVIEW)return json(res,409,{error:'legacy_lab_disabled_in_apex4'});
       if(!throttle('astra-lab:'+s.lic,ip,20,60_000))return json(res,429,{error:'too_many_lab_requests'});
       if(req.method!=='GET'){
         if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
@@ -1570,6 +1573,7 @@ const server=http.createServer(async(req,res)=>{
       if(!String(req.headers['content-type']||'').startsWith('application/json'))
         return json(res,415,{error:'json_required'});
       if(u.pathname==='/api/admin/release'){
+        if(APEX4_PREVIEW)return json(res,409,{error:'candidate_mode_cannot_publish_stable_release'});
         if(!throttle('release-publish',ip,5,60*60*1000))return json(res,429,{error:'too_many_release_uploads'});
         const b=await body(req,8_000_000);
         const published=await RELEASE_STORE.publish(b);

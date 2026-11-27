@@ -1,0 +1,23 @@
+name: Apex4 candidate tests
+on:
+  pull_request:
+    paths:
+      - 'intelligence/**'
+      - 'scripts/*apex4*'
+      - 'scripts/*v4-knowledge*'
+      - 'ea/XauCloud-Apex-v4.0.0-DEMO-Candidate.mq5'
+      - 'server.mjs'
+      - 'astra/**'
+      - '.github/workflows/apex4-candidate.yml'
+jobs:
+  apex4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test
+      - run: node --experimental-strip-types --test intelligence/tests/*.test.ts
+      - run: node --check server.mjs && node --check astra/service.mjs && node --check astra/chat.mjs && node --check intelligence/apex4-runtime.mjs && node --check scripts/train-apex4-knowledge.mjs && node --check scripts/export-xaucloud-v4-knowledge.mjs

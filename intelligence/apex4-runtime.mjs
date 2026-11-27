@@ -58,7 +58,7 @@ export async function analyzeBroker(key,account,input,now=Date.now()){
  const state={key,account,bars,quote:q,at:now,status:decision.status,local:decision.local,plan:decision.plan};
  states.delete(id);states.set(id,state);
  while(states.size>64)states.delete(states.keys().next().value);
- return {status:decision.status,text:wire(decision.plan),local:decision.local?.status??null};
+ return {status:decision.status,text:!k?'NONE|KNOWLEDGE_MISSING':decision.status==='MISSING_BROKER_DATA'?'NONE|STALE_QUOTE':wire(decision.plan),local:decision.local?.status??null};
 }
 export async function chatContext(key,now=Date.now()){
  const latest=[...states.values()].filter(s=>s.key===key).sort((a,b)=>b.at-a.at)[0];
@@ -72,4 +72,16 @@ export async function chatContext(key,now=Date.now()){
    outlookQuality:k.history,pullbackHoldout:k.diagnostics?.pullbackHoldout,strategyEvidence:k.diagnostics?.strategyEvidence}:null,
   caveat:'Historical evidence is not guaranteed performance. Experimental local Outlook is not parity with the original M10 producer. No chat response can execute an order.'
  };
+}
+
+// Dashboard projection is license-scoped; never claim an order has filled from a plan.
+export async function dashboardStatus(key,account,now=Date.now()){
+ const s=states.get(idOf(key,String(account||''))),k=await knowledge();
+ const fresh=!!s&&now>=s.at&&now-s.at<=8000&&now-Date.parse(s.quote.at)<=8000;
+ return {mode:'APEX4_DEMO',fresh,observedAt:s?new Date(s.at).toISOString():null,
+  status:s?(fresh?s.status:'MARKET_STALE'):'AWAITING_CANDIDATE',
+  quote:fresh?s.quote:null,plan:fresh&&s.plan&&s.plan.expires>now?s.plan:null,
+  candles:s?s.bars.slice(-60):[],knowledge:{loaded:!!k,through:k?new Date(k.dataThrough).toISOString():null,hoursWAT:k?.hours??[],pullbackGroups:k?.pullbacks?.length??0},
+  canonicalProducerConfigured:!!process.env.APEX4_LOCAL_EVIDENCE_DIR&&!!process.env.APEX4_CANONICAL_SOURCE_COMMIT,
+  execution:'DEMO_ONLY',modelExecution:false};
 }

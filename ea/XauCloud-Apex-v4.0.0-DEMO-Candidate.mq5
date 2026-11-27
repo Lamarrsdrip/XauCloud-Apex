@@ -6,7 +6,7 @@ input string ApexLicense="";
 input bool EnableDemoExecution=false;
 input bool EnablePullback=true;
 input bool DemoMarginStress=false; // explicitly opt in, demo only; never a production setting
-input int MaximumDemoLayers=40;    // zero = no software layer cap, DEMO only
+input int MaximumDemoLayers=0;    // zero = no software layer cap, DEMO only
 input double BasketRiskPercent=10.0;
 input double MaxSpreadUSD=0.35;
 input int EntryWindowSeconds=25;
@@ -95,7 +95,7 @@ void Manage(){
  if(!running||!DemoOK())return;
  MqlTick t;if(!SymbolInfoTick(_Symbol,t))return;
  double exitQuote=active.side==1?t.bid:t.ask;
- if(sent>0&&PositionsOwned()==0&&!HasOrder()){
+ if((sent>0||TimeGMT()>=active.entryUntil)&&PositionsOwned()==0&&!HasOrder()){
    running=false;addAllowed=false;return;
  }
  if(TimeGMT()>=active.tradeUntil||active.side*(exitQuote-active.tp2)>=0||active.side*(exitQuote-active.sl)<=0){

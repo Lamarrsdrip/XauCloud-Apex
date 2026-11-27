@@ -1,26 +1,27 @@
 #property strict
 #property version "4.000"
-#property description "Apex 4 separate DEMO candidate: Outlook + local pullback, no external model execution"
+#property description "Apex 4 independent DEMO candidate: broker M1 to Apex backend, no provider execution"
 #include <Trade/Trade.mqh>
 input string ApexLicense="";
 input bool EnableDemoExecution=false;
 input bool EnablePullback=true;
 input bool DemoMarginStress=false; // explicitly opt in, demo only; never a production setting
-input int MaximumDemoLayers=40;    // bounded even in stress mode
+input int MaximumDemoLayers=40;    // zero = no software layer cap, DEMO only
 input double BasketRiskPercent=10.0;
 input double MaxSpreadUSD=0.35;
 input int EntryWindowSeconds=25;
 input int OrderGapMs=250;
 input long Magic=90400001;
-const string URL="https://xaucloud.io/api/cloud/apex/outlook-v4";
+input string ApexBackendURL="https://apex.xaucloud.io/api/apex/v4/market";
 CTrade trade;
-struct Plan { string id; int side; double ref,sl,tp1,tp2; datetime published,entryUntil; };
+struct Plan { string id; int side; double ref,sl,tp1,tp2; datetime published,entryUntil,tradeUntil; string kind; };
 Plan active;
-bool running=false,addAllowed=false,placedUncertain=false;
+bool running=false,addAllowed=false,placedUncertain=false,needHistory=true,marginPaused=false;
+double pausedFree=0;
 int sent=0;
 double initialEquity=0;
 ulong lastPoll=0,lastOrder=0;
-datetime armedUntil=0,lastBar=0;
+datetime armedUntil=0;
 string lockKey="";
 double clip(double equity) {
  if(equity>=1000)return .50;
@@ -62,22 +63,23 @@ bool Claim(string id){
  if(GlobalVariableSet(key,(double)TimeGMT())==0)return false;
  GlobalVariablesFlush();return true;
 }
-bool Valid(Plan &p,MqlTick &t){
+bool Valid(Plan &p,MqlTick &t,bool adding=false){
  if(p.side!=1&&p.side!=-1)return false;
- if(p.sl<=0||p.tp2<=0||p.ref<=0||p.tp1<=0||TimeGMT()>=p.entryUntil||t.ask<t.bid||t.bid<=0)return false;
+ if(p.sl<=0||p.tp2<=0||p.ref<=0||p.tp1<=0||TimeGMT()>=(adding&&DemoMarginStress&&sent>0?p.tradeUntil:p.entryUntil)||t.ask<t.bid||t.bid<=0)return false;
  if(t.ask-t.bid>MaxSpreadUSD)return false;
  // Quote-side geometry, stop & target spacing, no chase after TP1.
  double entry=p.side==1?t.ask:t.bid;
  double exitQuote=p.side==1?t.bid:t.ask;
  double risk=MathAbs(p.ref-p.sl);
- if(risk<=0||MathAbs(entry-p.ref)>risk*.25)return false;
- return p.side*(exitQuote-p.sl)>0 && p.side*(p.tp1-entry)>0 &&
+ if(risk<=0||(!(adding&&DemoMarginStress&&sent>0)&&MathAbs(entry-p.ref)>risk*.25))return false;
+ double nextTarget=(adding&&DemoMarginStress&&sent>0)?p.tp2:p.tp1;
+ return p.side*(exitQuote-p.sl)>0 && p.side*(nextTarget-entry)>0 &&
         p.side*(p.tp2-p.tp1)>0 && p.side*(p.ref-p.sl)>0;
 }
 void Start(Plan &p){
  if(running||placedUncertain||PositionsOwned()>0||HasOrder()||OtherExposure()||TimeGMT()>=armedUntil)return;
  MqlTick t;if(!SymbolInfoTick(_Symbol,t)||!Valid(p,t)||!Claim(p.id))return;
- active=p;running=true;addAllowed=true;sent=0;initialEquity=AccountInfoDouble(ACCOUNT_EQUITY);
+ active=p;running=true;addAllowed=true;sent=0;marginPaused=false;initialEquity=AccountInfoDouble(ACCOUNT_EQUITY);
  Print("APEX4 DEMO PLAN ",p.id," side=",p.side," stop=",p.sl," TP2=",p.tp2);
 }
 void CloseBasket(){
@@ -96,10 +98,10 @@ void Manage(){
  if(sent>0&&PositionsOwned()==0&&!HasOrder()){
    running=false;addAllowed=false;return;
  }
- if(active.side*(exitQuote-active.tp2)>=0||active.side*(exitQuote-active.sl)<=0){
+ if(TimeGMT()>=active.tradeUntil||active.side*(exitQuote-active.tp2)>=0||active.side*(exitQuote-active.sl)<=0){
    CloseBasket();if(PositionsOwned()==0&&!HasOrder()){running=false;addAllowed=false;}return;
  }
- if(TimeGMT()>=active.entryUntil||TimeGMT()>=armedUntil||!Valid(active,t))addAllowed=false;
+ if(TimeGMT()>=(DemoMarginStress&&sent>0?active.tradeUntil:active.entryUntil))addAllowed=false;
 }
 double BasketLoss(double sl){
  double total=0;
@@ -113,12 +115,14 @@ double BasketLoss(double sl){
  return total;
 }
 void AddOne(){
- if(!DemoOK()||!EnableDemoExecution||!running||!addAllowed||placedUncertain||OtherExposure()||HasOrder())return;
+ if(!DemoOK()||!EnableDemoExecution||!running||!addAllowed||placedUncertain||OtherExposure()||HasOrder()||TimeGMT()>=armedUntil)return;
  ulong now=GetTickCount64();if(now-lastOrder<(ulong)MathMax(100,OrderGapMs))return;
- if(sent>=MathMax(1,MathMin(200,MaximumDemoLayers))){addAllowed=false;return;}
- MqlTick t;if(!SymbolInfoTick(_Symbol,t)||!Valid(active,t)){addAllowed=false;return;}
+ if(MaximumDemoLayers>0&&sent>=MaximumDemoLayers){addAllowed=false;return;}
+ MqlTick t;if(!SymbolInfoTick(_Symbol,t)||!Valid(active,t,true))return;
  if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)||!MQLInfoInteger(MQL_TRADE_ALLOWED)){addAllowed=false;return;}
  double eq=AccountInfoDouble(ACCOUNT_EQUITY),free=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+ if(marginPaused&&free<pausedFree+MathMax(.10,MathAbs(pausedFree)*.005))return;
+ marginPaused=false;
  // Freeze the tier at campaign start; never increase the clip as equity fluctuates.
  double volume=clip(initialEquity),step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
  if(step<=0||volume<=0){addAllowed=false;return;}
@@ -129,7 +133,7 @@ void AddOne(){
  if(!OrderCalcMargin(type,_Symbol,volume,entry,margin)||!OrderCalcProfit(type,_Symbol,volume,entry,active.sl,loss)||
     !OrderCalcProfit(type,_Symbol,volume,entry,active.side==1?t.bid:t.ask,spreadLoss)){addAllowed=false;return;}
  double cushion=MathMax(0.50,eq*.02);
- if(eq<=cushion||free<margin+MathMax(0,-spreadLoss)+cushion){addAllowed=false;return;}
+ if(eq<=cushion||free<margin+MathMax(0,-spreadLoss)+cushion){marginPaused=true;pausedFree=free;return;}
  if(!DemoMarginStress && BasketLoss(active.sl)+MathMax(0,-loss)>initialEquity*BasketRiskPercent/100.0){addAllowed=false;return;}
  double tickSize=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
  if(tickSize<=0){addAllowed=false;return;}
@@ -138,59 +142,62 @@ void AddOne(){
  double minDist=SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
  double exitQuote=active.side==1?t.bid:t.ask;
  if(active.side*(exitQuote-sl)<=minDist||active.side*(tp-exitQuote)<=minDist){addAllowed=false;return;}
- lastOrder=now;sent++;
+ lastOrder=now;
  bool ok=trade.PositionOpen(_Symbol,type,volume,entry,sl,tp,"AX4 "+StringSubstr(active.id,0,12));
  uint ret=trade.ResultRetcode();
- Print("APEX4 DEMO ORDER ",sent," ",volume," ret=",ret," deal=",trade.ResultDeal());
+ Print("APEX4 DEMO ORDER ",sent+1," ",volume," ret=",ret," deal=",trade.ResultDeal());
+ if(ret==TRADE_RETCODE_NO_MONEY){marginPaused=true;pausedFree=AccountInfoDouble(ACCOUNT_MARGIN_FREE);return;}
+ if(ok&&(ret==TRADE_RETCODE_DONE||ret==TRADE_RETCODE_DONE_PARTIAL)){sent++;return;}
  if(!ok||(ret!=TRADE_RETCODE_DONE&&ret!=TRADE_RETCODE_DONE_PARTIAL)){
    // Do not retry an ambiguous broker acknowledgement. Inspect before any further entry.
    addAllowed=false;placedUncertain=true;
  }
 }
+long BrokerOffsetSeconds(){
+ datetime server=TimeTradeServer();if(server<=0)return 0;
+ return (long)MathRound((double)(server-TimeGMT())/60.0)*60;
+}
+string BarPayload(long offset,int count){
+ MqlRates rates[];ArraySetAsSeries(rates,false);
+ int got=CopyRates(_Symbol,PERIOD_M1,1,count,rates);
+ if(got<1)return "[]";
+ string rows="[";
+ for(int i=0;i<got;i++){
+   if(i)rows+=",";
+   rows+="{\"t\":"+IntegerToString(((long)rates[i].time-offset)*1000)+",\"o\":"+DoubleToString(rates[i].open,_Digits)+",\"h\":"+DoubleToString(rates[i].high,_Digits)+",\"l\":"+DoubleToString(rates[i].low,_Digits)+",\"c\":"+DoubleToString(rates[i].close,_Digits)+"}";
+ }
+ return rows+"]";
+}
 bool Poll(){
- ulong now=GetTickCount64();MqlDateTime dt;TimeToStruct(TimeGMT(),dt);
- ulong gap=(dt.min<2)?1000:5000;
+ ulong now=GetTickCount64();
+ // One snapshot per second while flat, less often while accumulating. No
+ // network request per order. Server must measure actual latency in demo.
+ ulong gap=running?3000:1000;
  if(now-lastPoll<gap)return false;lastPoll=now;
- string payload="{\"license\":\""+ApexLicense+"\",\"account\":\""+IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))+"\"}";
+ MqlTick t;if(!SymbolInfoTick(_Symbol,t)||t.bid<=0||TimeTradeServer()<=0)return false;
+ long offset=BrokerOffsetSeconds(),utcTick=t.time_msc-offset*1000;
+ string payload="{\"license\":\""+ApexLicense+"\",\"account\":\""+IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))+"\",\"environment\":\"DEMO\",\"quote\":{\"bid\":"+DoubleToString(t.bid,_Digits)+",\"ask\":"+DoubleToString(t.ask,_Digits)+",\"atMs\":"+IntegerToString(utcTick)+"},\"bars\":"+BarPayload(offset,needHistory?7500:6)+"}";
  char data[],result[];string headers;
  StringToCharArray(payload,data,0,WHOLE_ARRAY,CP_UTF8);ArrayResize(data,ArraySize(data)-1);
- int status=WebRequest("POST",URL,"Content-Type: application/json\r\n",800,data,result,headers);
+ int status=WebRequest("POST",ApexBackendURL,"Content-Type: application/json\r\n",800,data,result,headers);
  if(status!=200){armedUntil=0;return true;}
  string line=CharArrayToString(result,0,-1,CP_UTF8),a[];
  int n=StringSplit(line,'|',a);
- if(n==2&&a[0]=="NONE"&&a[1]=="NO_FRESH_STRONG"){armedUntil=TimeGMT()+8;return true;}
- if(n!=9||a[0]!="APEX4"||(a[2]!="BUY"&&a[2]!="SELL")||StringLen(a[1])!=24){armedUntil=0;return true;}
+ if(n==2&&a[0]=="NONE"&&a[1]=="NEED_HISTORY"){needHistory=true;armedUntil=0;return true;}
+ if(n==2&&a[0]=="NONE"&&a[1]=="ARMED_NO_PLAN"){needHistory=false;armedUntil=TimeGMT()+8;return true;}
+ if(n!=10||a[0]!="APEX4"||(a[2]!="BUY"&&a[2]!="SELL")||StringLen(a[1])!=24||(a[9]!="OUTLOOK"&&a[9]!="PULLBACK")){armedUntil=0;return true;}
  for(int i=0;i<24;i++){ushort c=StringGetCharacter(a[1],i);if(!((c>=48&&c<=57)||(c>=97&&c<=102))){armedUntil=0;return true;}}
- Plan p;p.id=a[1];p.side=a[2]=="BUY"?1:-1;p.ref=StringToDouble(a[3]);p.sl=StringToDouble(a[4]);p.tp1=StringToDouble(a[5]);p.tp2=StringToDouble(a[6]);
+ needHistory=false;armedUntil=TimeGMT()+8;
+ if(a[9]=="PULLBACK"&&!EnablePullback)return true;
+ Plan p;p.id=a[1];p.kind=a[9];p.side=a[2]=="BUY"?1:-1;p.ref=StringToDouble(a[3]);p.sl=StringToDouble(a[4]);p.tp1=StringToDouble(a[5]);p.tp2=StringToDouble(a[6]);
  p.published=(datetime)StringToInteger(a[7]);p.entryUntil=(datetime)MathMin(StringToInteger(a[8]),(long)p.published+MathMin(90,EntryWindowSeconds));
- if(p.published>TimeGMT()+2||TimeGMT()>=p.entryUntil){armedUntil=TimeGMT()+8;return true;}
- armedUntil=TimeGMT()+8;Start(p);return true;
-}
-// Candidate only, not a calibrated XauCloud model: detect a countertrend retracement
-// after an impulse, using completed M1 candles, M5 direction, ATR and break of microstructure.
-bool Pullback(Plan &p){
- MqlRates m[],h[];ArraySetAsSeries(m,true);ArraySetAsSeries(h,true);
- if(CopyRates(_Symbol,PERIOD_M1,1,16,m)!=16||CopyRates(_Symbol,PERIOD_M5,1,8,h)!=8)return false;
- if(m[0].time==lastBar)return false;lastBar=m[0].time;
- double atr=0;for(int i=0;i<14;i++)atr+=MathMax(m[i].high-m[i].low,MathMax(MathAbs(m[i].high-m[i+1].close),MathAbs(m[i].low-m[i+1].close)));
- atr/=14;if(atr<=0)return false;
- double impulse=m[3].close-m[9].close,trend=h[1].close-h[7].close;
- int side=0;
- if(impulse>=2*atr&&trend>0&&m[0].close<m[1].low&&m[1].high<m[2].high&&m[0].close>m[9].close+atr*.5)side=-1;
- if(impulse<=-2*atr&&trend<0&&m[0].close>m[1].high&&m[1].low>m[2].low&&m[0].close<m[9].close-atr*.5)side=1;
- if(!side)return false;
- MqlTick t;if(!SymbolInfoTick(_Symbol,t))return false;
- double entry=side==1?t.ask:t.bid;
- double sl=side==1?MathMin(m[1].low,m[2].low)-atr*.2:MathMax(m[1].high,m[2].high)+atr*.2;
- double tp2=entry+side*atr*1.1;
- // Don't trade if the retracement target would overshoot the original impulse origin.
- if(side==-1&&tp2<=m[9].close||side==1&&tp2>=m[9].close)return false;
- p.id="P"+IntegerToString((long)m[0].time);p.side=side;p.ref=entry;p.sl=sl;p.tp1=entry+side*atr*.55;p.tp2=tp2;p.published=TimeGMT();p.entryUntil=TimeGMT()+MathMin(15,EntryWindowSeconds);
- return true;
+ p.tradeUntil=p.published+(p.kind=="OUTLOOK"?3600:1200);
+ if(p.published>TimeGMT()+2||TimeGMT()>=p.entryUntil)return true;
+ Start(p);return true;
 }
 int OnInit(){
  if(!EnableDemoExecution||!DemoOK()||!LicenseOK()||StringFind(_Symbol,"XAUUSD")!=0||Magic<=0||
- BasketRiskPercent<=0||BasketRiskPercent>100||MaxSpreadUSD<=0||EntryWindowSeconds<1||MaximumDemoLayers<1){
+ BasketRiskPercent<=0||BasketRiskPercent>100||MaxSpreadUSD<=0||EntryWindowSeconds<1||MaximumDemoLayers<0||_Period!=PERIOD_M1||StringFind(ApexBackendURL,"https://")!=0){
  Print("Apex4 candidate: explicit DEMO USD hedging authorization and XAUUSD license required.");return INIT_FAILED;}
  // Prevent multiple EA instances in the same terminal. Stale locks require manual review.
  lockKey="AX4.LOCK."+IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))+"."+IntegerToString(Magic);
@@ -205,11 +212,7 @@ void OnTick(){Manage();}
 void OnTimer(){
  if(!DemoOK())return;
  Manage();
- // Never perform a network request for every order; use one locally cached publication.
- if(running&&addAllowed){AddOne();return;}
+ if(running&&addAllowed)AddOne();
  Poll();
- if(!running&&EnablePullback&&!placedUncertain&&TimeGMT()<armedUntil){
-   MqlDateTime t;TimeToStruct(TimeGMT(),t);
-   if(t.min>=2){Plan p;if(Pullback(p))Start(p);} // reserve first two minutes for Outlook
- }
+ if(running&&addAllowed)AddOne();
 }

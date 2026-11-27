@@ -1,0 +1,69 @@
+{
+  "repository": "Lamarrsdrip/XauAI-Sniper",
+  "commit": "9e5f137753a9687670ed2105311f72b30891e29e",
+  "files": [
+    {
+      "file": "intelligence/xaucloud/aiOpportunityEngine.ts",
+      "source": "backend_node/src/services/aiOpportunityEngine.ts",
+      "blob": "7c2bddc6a4c3327bd72f39ca830da9d694939d98",
+      "mode": "full source",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/aiCurrentOpportunity.ts",
+      "source": "backend_node/src/services/aiCurrentOpportunity.ts",
+      "blob": "429285d0c2a3f0b85ded1abd19c4d0d47bf8051f",
+      "mode": "full source",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/aiTraderBrain.ts",
+      "source": "backend_node/src/services/aiTraderBrain.ts",
+      "blob": "7cb66c6010830138885039ef65f75ccf14625294",
+      "mode": "pure-function subset",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/aiOpinionLearning.ts",
+      "source": "backend_node/src/services/aiOpinionLearning.ts",
+      "blob": "6912fdb79859cac8ed5077f8d2d81991b284716b",
+      "mode": "pure-function subset",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/aiTradingEducation.ts",
+      "source": "backend_node/src/services/aiTradingEducation.ts",
+      "blob": "6bbd46d2df290c47539df320722ec16fa87b9c03",
+      "mode": "full source",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/aiOutlookQuality.ts",
+      "source": "backend_node/src/services/aiOutlookQuality.ts",
+      "blob": "6c06e15b878643430c419271a97b60420a047c8b",
+      "mode": "full source",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/marketOutlookCore.ts",
+      "source": "backend_node/src/services/marketOutlookCore.ts",
+      "blob": "079c53a1c5bf2e2ac9ac3ca18182ae2678c321d0",
+      "mode": "full source",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/marketOutlookConfidence.ts",
+      "source": "backend_node/src/services/marketOutlookConfidence.ts",
+      "blob": "09b3180c3bae496cd1e1bf801be51a5823228148",
+      "mode": "pure-function subset",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    },
+    {
+      "file": "intelligence/xaucloud/marketOutlookSignal.ts",
+      "source": "backend_node/src/services/marketOutlookSignal.ts",
+      "blob": "da2ccafa396d3055761c51bd98f70669b77a89d1",
+      "mode": "pure-function subset",
+      "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
+    }
+  ]
+}

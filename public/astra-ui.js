@@ -4,7 +4,13 @@
   function pct(v){return typeof v==='number'?Math.round(v*100)+'%':'—';}
   function row(k,v){return '<div class="row"><span class="k">'+esc(k)+'</span><span class="v">'+esc(v==null?'—':v)+'</span></div>';}
   function label(v){return String(v||'NO SETUP').replace(/_/g,' ');}
+  function chatOnlyCard(me,editing){
+    var a=me.astra||{},html='<section class="card" aria-label="Apex AI chat settings"><div class="release-head"><div><h3>Apex AI</h3><p class="settings-subtle">Chat only. The independent trading engine does not require an API key.</p></div><span class="overview-pill">'+(a.hasKey?'Key saved':'Optional')+'</span></div>';
+    if(!editing)return html+'</section>';
+    return html+'<div class="field"><label for="astra4-key">Chat API key</label><input type="password" id="astra4-key" autocomplete="new-password" placeholder="'+esc(a.maskedKey||'Optional API key')+'"></div><div class="field"><label for="astra4-model">Chat model</label><input id="astra4-model" value="'+esc(a.researchModel||a.model||'gpt-6-luna')+'" autocomplete="off"></div><div class="release-actions"><button class="btn btn-primary" id="astra4-save">Save chat settings</button><button class="btn btn-ghost" id="astra4-test" '+(!a.hasKey?'disabled':'')+'>Test connection</button><button class="btn btn-danger" id="astra4-remove" '+(!a.hasKey?'disabled':'')+'>Remove keys</button></div><p class="hint">Only chat and explicit connection tests may consume API tokens. No background strategy requests in demo preview.</p><p id="astra4-result" role="status"></p></section>';
+  }
   function card(me,editing){
+    if(me.candidate)return chatOnlyCard(me,editing);
     var a=me.astra||{},d=a.lastDecision||{};
     var connected=a.status==='ASTRA_ACTIVE',hasKey=a.hasKey===true,enabled=a.enabled===true;
     var state=connected?'Connected':enabled?(hasKey?'Checking connection':'Finish setup'):'Off';
@@ -69,6 +75,15 @@
     var data=await response.json();if(!response.ok)throw new Error(data.error||'ASTRA_REQUEST_FAILED');return data;
   }
   function bind(refresh){
+    var chatSave=document.getElementById('astra4-save');
+    if(chatSave){
+      var out=document.getElementById('astra4-result');
+      async function runChat(fn){chatSave.disabled=true;try{await fn();}catch(e){out.textContent=label(e.message);}finally{chatSave.disabled=false;}}
+      chatSave.onclick=function(){runChat(async function(){var key=document.getElementById('astra4-key'),model=document.getElementById('astra4-model').value.trim();if(!model)throw Error('MODEL_REQUIRED');var patch={model:model,researchModel:model,enabled:false,researchEnabled:false};if(key.value.trim())patch.apiKey=key.value.trim();try{await request('POST','/api/session/astra',patch);}finally{key.value='';delete patch.apiKey;}await refresh();});};
+      document.getElementById('astra4-test').onclick=function(){runChat(async function(){var result=await request('POST','/api/session/astra/test',{scope:'connection'});out.textContent=label(result.status);});};
+      document.getElementById('astra4-remove').onclick=function(){if(confirm('Remove all chat API keys?'))runChat(async function(){await request('DELETE','/api/session/astra',{});await refresh();});};
+      return;
+    }
     var save=document.getElementById('astra-save');if(!save)return;
     var result=document.getElementById('astra-result');
     var buttons=['astra-save','astra-test','astra-checks','astra-text-test','astra-vision-test','astra-remove'].map(function(id){return document.getElementById(id);});
@@ -114,6 +129,7 @@
     var id=String((me.license||{}).key||(me.license||{}).account||'session');if(state.identity!==id){resetChat();state.identity=id;}
     if(workspace)state.workspace=workspace;
     var key=!!(me.astra&&me.astra.hasKey),market=me.astra&&me.astra.investigation;
+    if(state.workspace==='lab'&&me.candidate){state.workspace='chat';}
     if(state.workspace==='lab')return labPage(me);
     return '<section class="apex-ai-chat"><header><div class="apex-ai-mark">✦</div><div class="apex-chat-heading"><h2>Apex AI</h2><p>Gold setup &amp; chart research</p></div><button type="button" id="apex-lab-open" class="btn btn-ghost">Research Lab</button><button type="button" id="apex-chat-clear" class="btn btn-ghost">New chat</button></header><div class="apex-chat-tools"><label for="apex-conversations">Conversations</label><select id="apex-conversations"><option value="">New chat</option></select><button id="apex-chat-rename" class="btn btn-ghost" type="button">Rename</button><button id="apex-chat-delete" class="btn btn-ghost" type="button">Delete</button></div>'
     +(key?'<div class="apex-market-state">'+(market&&market.freshness==='RECENT'?'Recent MT5 market snapshot':market&&market.freshness==='HISTORICAL'?'Historical MT5 snapshot · not live':'No current MT5 candles · attach a chart or connect Bridge V2')+'</div>':'<div class="apex-chat-note">Connect your API key in <a href="#settings-ai">AI connection</a> to begin.</div>')
@@ -126,7 +142,7 @@
     var key=!!(me.astra&&me.astra.hasKey),image=null,selection=0;
     function append(role,text,url){var node=document.createElement('div');node.className='apex-chat-'+role;if(url){var img=document.createElement('img');img.src=url;img.alt='Uploaded gold chart';img.className='apex-chat-chart';node.appendChild(img);}var body=document.createElement('div');if(role==='assistant'){body.innerHTML=esc(text).replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');}else body.textContent=text;node.appendChild(body);if(role==='assistant'&&text!=='Researching market evidence…'){var copy=document.createElement('button');copy.type='button';copy.className='apex-copy';copy.textContent='Copy';copy.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(text).then(function(){copy.textContent='Copied';}).catch(function(){copy.textContent='Copy unavailable';});};node.appendChild(copy);}thread.appendChild(node);}
     function render(){if(!thread.isConnected)return;thread.textContent='';
-      if(!state.history.length&&!state.busy){var w=document.createElement('div');w.className='apex-chat-welcome';w.innerHTML='<span class="intel-kicker">REFERENCE PATTERN DESK</span><h3>Find the setup.<br>Understand the move.</h3><p>Research a gold chart, developing rejection or active campaign.</p>';['Analyze an uploaded chart','Explain the latest Apex decision','Compare reversal and continuation'].forEach(function(q){var b=document.createElement('button');b.type='button';b.className='apex-chat-suggestion';b.textContent=q;b.disabled=!key;b.onclick=function(){message.value=q;if(q==='Analyze an uploaded chart'&&!image)attachment.click();else message.focus();};w.appendChild(b);});thread.appendChild(w);}
+      if(!state.history.length&&!state.busy){var w=document.createElement('div');w.className='apex-chat-welcome';w.innerHTML=me.candidate?'<span class="intel-kicker">OUTLOOK &amp; PULLBACK DESK</span><h3>Read the move.</h3><p>Ask about M1 structure, retracement and historical evidence.</p>':'<span class="intel-kicker">REFERENCE PATTERN DESK</span><h3>Find the setup.<br>Understand the move.</h3><p>Research a gold chart, developing rejection or active campaign.</p>';['Analyze an uploaded chart','Explain the latest Apex decision','Compare reversal and continuation'].forEach(function(q){var b=document.createElement('button');b.type='button';b.className='apex-chat-suggestion';b.textContent=q;b.disabled=!key;b.onclick=function(){message.value=q;if(q==='Analyze an uploaded chart'&&!image)attachment.click();else message.focus();};w.appendChild(b);});thread.appendChild(w);}
       state.history.forEach(function(m){append(m.role,m.text,m.image);});if(state.busy)append('assistant',state.stream||'Researching market evidence…');send.disabled=!key||state.busy;clear.disabled=state.busy;status.textContent=state.status;thread.scrollTop=thread.scrollHeight;}
     state.refresh=render;render();
     var conversations=document.getElementById('apex-conversations');

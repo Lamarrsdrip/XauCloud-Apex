@@ -62,6 +62,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
   const vault=createAstraVault(dataDir),jobs=new Map(),last=new Map(),running=new Map(),recent=new Map();
   const learning=createLearning(dataDir,{clock}),chats=createConversations(dataDir,{clock});
   const lab=createLab(dataDir,{clock,learning,modelPredict:async(license,e)=>{
+    if(process.env.APEX4_CANDIDATE==='1')throw failure('APEX4_CHAT_ONLY');
     const settings=await vault.settings(license);
     const model=e.requestedModel||settings.researchModel||settings.model,info=modelInfo(model),provider=info?.provider||(model.startsWith('claude-')?'anthropic':'openai');
     if(!settings.availableProviders.includes(provider))throw failure('NO_API_KEY');
@@ -194,8 +195,9 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
         const history=conv?conv.messages.slice(-24).map(({role,text})=>({role,text:text.slice(0,6000)})):(input.history||[]);
         const researchModel=settings.researchModel||settings.model,researchProvider=providerForModel(researchModel);
         if(!settings.availableProviders.includes(researchProvider))throw failure('NO_API_KEY');
+        const apex4Context=process.env.APEX4_CANDIDATE==='1'?await import('../intelligence/apex4-runtime.mjs').then(m=>m.chatContext(license,clock())):null;
         const result=await vault.withKey(license,key=>callAstraChat({key,model:researchModel,effort:settings.researchModel?settings.researchEffort:settings.reasoningEffort,
-          input:{message:input.message,image:input.image??null,history},context:snapshots.get(license),fetchImpl,now:clock(),onDelta}),researchProvider);
+          input:{message:input.message,image:input.image??null,history},context:apex4Context?null:snapshots.get(license),fetchImpl,now:clock(),onDelta,apex4Context}),researchProvider);
         const after=await vault.settings(license);
         if(after.revision!==settings.revision||!after.hasKey)throw failure('SETTINGS_CHANGED');
         await countRequest(license,{kind:'chat',tokens:result.usage});
@@ -216,6 +218,7 @@ export function createAstraService({dataDir,emit=async()=>{},fetchImpl=fetch,clo
       return {status:'OBSERVED',observedAt:new Date(context.observedAtMs).toISOString()};
     },
     async submit(license,snapshot) {
+      if(process.env.APEX4_CANDIDATE==='1')return {status:'DISABLED',fallbackReason:'APEX4_CHAT_ONLY'};
       prune();
       const settings=await available(license);
       if(settings.status!=='ASTRA_READY')return {status:settings.status,fallbackReason:settings.status};

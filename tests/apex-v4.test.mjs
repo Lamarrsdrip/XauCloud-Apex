@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {clip,parseWire,validPlan,pullback,stressBasket,hourStudy} from '../research/apex-v4.mjs';
+const id='a'.repeat(24), wire='APEX4|'+id+'|SELL|3650|3655|3645|3640|100|190';
+const p=parseWire(wire,101), q={bid:3650,ask:3650.2,at:101};
+test('user tiers with proposed 500 and 1000 tiers',()=>assert.deepEqual([19,20,49,50,99,100,199,200,499,500,999,1000].map(clip),[0,.01,.01,.02,.02,.05,.05,.1,.1,.2,.2,.5]));
+test('wire freshness and malformed plans',()=>{assert.ok(p);assert.equal(parseWire(wire,125),null);assert.equal(parseWire(wire.replace('SELL','WAIT'),101),null);assert.equal(parseWire(wire.replace('3650','NaN'),101),null);});
+test('geometry, spread, drift and already-consumed entry',()=>{assert.equal(validPlan(p,q,101),true);assert.equal(validPlan(p,{bid:3644,ask:3644.1},101),false);assert.equal(validPlan(p,{bid:3650,ask:3651},101),false);assert.equal(validPlan({...p,tp2:3647},q,101),false);});
+test('stress replay adds while losing, stops adding at budget and closes at TP2',()=>{const quotes=[q,{bid:3650.1,ask:3650.3,at:102},{bid:3650.2,ask:3650.4,at:103},{bid:3639.7,ask:3639.9,at:110}];const x=stressBasket({equity:20,plan:p,quotes,stress:true,maxLayers:2});assert.equal(x.fills.length,2);assert.equal(x.stopped,'TP2');assert.ok(x.realized>0);});
+test('risk budget refuses unsafe first clip',()=>assert.equal(stressBasket({equity:20,plan:p,quotes:[q]}).fills.length,0));
+test('stress can lose full balance and more after a gap',()=>{const x=stressBasket({equity:20,plan:p,stress:true,quotes:[q,{...q,at:102},{bid:3661,ask:3661.2,at:103}]});assert.equal(x.stopped,'EQUITY_EXHAUSTED');assert.ok(x.equity<=0);});
+test('no invented pullback with insufficient or flat data',()=>{assert.equal(pullback([],[],q,101),null);const b=Array.from({length:16},(_,i)=>({high:3651,low:3649,close:3650,time:100-i}));assert.equal(pullback(b,b,q,101),null);});
+test('WAT hour study measures fast TP1 rather than assuming it',()=>{const a=hourStudy([{publishedAt:'2026-11-27T07:00:00Z',grade:'STRONG',r:1,tp1Seconds:45},{publishedAt:'2026-11-27T07:00:00Z',grade:'STRONG',r:-1,tp1Seconds:null}]);assert.equal(a[0].hour,8);assert.equal(a[0].fastTP1Rate,.5);assert.equal(a[0].avgR,0);});

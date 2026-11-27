@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import {normalizeBars,selectIndependentPlan,wire,brokerFrames} from './apex4-engine.ts';
 import {buildEvidencePack} from './xaucloud/aiTraderBrain.ts';
 const states=new Map();
@@ -23,6 +24,22 @@ function sanitizeQuote(raw,now){
  if(!raw||!Number.isFinite(raw.bid)||!Number.isFinite(raw.ask)||!Number.isFinite(raw.atMs)||raw.bid<=0||raw.ask<raw.bid||raw.atMs>now+2000||now-raw.atMs>3000)return null;
  return {bid:raw.bid,ask:raw.ask,at:new Date(raw.atMs).toISOString()};
 }
+// Optional local adapter for the ORIGINAL evidence producer. The operator must
+// install it on the Apex host; never infer canonical M10 evidence from a published signal.
+async function canonicalEvidence(id,account,q,now){
+ const root=process.env.APEX4_LOCAL_EVIDENCE_DIR;
+ if(!root)return undefined;
+ try{
+  const f=path.join(root,id+'.json'),st=await fs.stat(f);if(st.size>256000)return undefined;
+  const d=JSON.parse(await fs.readFile(f,'utf8'));
+  if(d.schema!=='XAUCLOUD_CANONICAL_M10_EVIDENCE_V1'||String(d.account)!==String(account)||d.symbol!=='XAUUSD'||d.sourceCommit!==process.env.APEX4_CANONICAL_SOURCE_COMMIT||
+    !process.env.APEX4_CANONICAL_SOURCE_COMMIT||!d.canonicalM10||!d.thesis||d.htfComplete!==true||!Number.isFinite(d.observedAt)||now-d.observedAt>3000||d.observedAt>now+2000)return undefined;
+  const eq=sanitizeQuote(d.quote,now);
+  if(!eq||Math.abs(eq.bid-q.bid)>.05||Math.abs(eq.ask-q.ask)>.05)return undefined;
+  return {canonicalM10:d.canonicalM10,thesis:d.thesis,quote:eq,htfComplete:true,brainRecommendation:d.brainRecommendation,observedAt:d.observedAt};
+ }catch{return undefined;}
+}
+
 export async function analyzeBroker(key,account,input,now=Date.now()){
  const q=sanitizeQuote(input.quote,now);
  if(!q)return {status:'STALE_QUOTE',text:'NONE|STALE_QUOTE'};
@@ -36,7 +53,8 @@ export async function analyzeBroker(key,account,input,now=Date.now()){
  const k=await knowledge();
  // Local broker M1 ingestion only. Never accept arbitrary user-supplied M10 evidence
  // as "the XauCloud EA". The original producer must be integrated and attested first.
- const decision=selectIndependentPlan(bars,q,now,k);
+ const canonical=now%3600000<25000?await canonicalEvidence(id,account,q,now):undefined;
+ const decision=selectIndependentPlan(bars,q,now,k,canonical);
  const state={key,account,bars,quote:q,at:now,status:decision.status,local:decision.local,plan:decision.plan};
  states.delete(id);states.set(id,state);
  while(states.size>64)states.delete(states.keys().next().value);

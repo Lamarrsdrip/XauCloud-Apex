@@ -90,14 +90,14 @@ void CloseBasket(){
  }
 }
 void Manage(){
- if(!running)return;
+ if(!running||!DemoOK())return;
  MqlTick t;if(!SymbolInfoTick(_Symbol,t))return;
  double exitQuote=active.side==1?t.bid:t.ask;
- if(active.side*(exitQuote-active.tp2)>=0||active.side*(exitQuote-active.sl)<=0){
-   CloseBasket();return;
- }
  if(sent>0&&PositionsOwned()==0&&!HasOrder()){
    running=false;addAllowed=false;return;
+ }
+ if(active.side*(exitQuote-active.tp2)>=0||active.side*(exitQuote-active.sl)<=0){
+   CloseBasket();if(PositionsOwned()==0&&!HasOrder()){running=false;addAllowed=false;}return;
  }
  if(TimeGMT()>=active.entryUntil||TimeGMT()>=armedUntil||!Valid(active,t))addAllowed=false;
 }
@@ -194,7 +194,7 @@ int OnInit(){
  Print("Apex4 candidate: explicit DEMO USD hedging authorization and XAUUSD license required.");return INIT_FAILED;}
  // Prevent multiple EA instances in the same terminal. Stale locks require manual review.
  lockKey="AX4.LOCK."+IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))+"."+IntegerToString(Magic);
- if(!GlobalVariableTemp(lockKey))return INIT_FAILED;
+ if(!GlobalVariableTemp(lockKey)){lockKey="";return INIT_FAILED;}
  if(!GlobalVariableSetOnCondition(lockKey,1,0)){lockKey="";return INIT_FAILED;}
  trade.SetExpertMagicNumber(Magic);trade.SetAsyncMode(false);trade.SetDeviationInPoints(10);trade.SetTypeFillingBySymbol(_Symbol);
  if(PositionsOwned()>0||HasOrder()){placedUncertain=true;Print("Apex4 restart: broker SL/TP remain; no new basket until operator review.");}

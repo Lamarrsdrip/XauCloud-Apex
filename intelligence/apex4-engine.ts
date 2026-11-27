@@ -87,7 +87,9 @@ export function localOutlookResearch(raw:Bar[],quote:Quote,now:number):{plan:Pla
 // Quote is observed NOW. Completed candles never include future or forming highs/lows.
 export function pullbackCandidate(raw:Bar[],q:Quote,now:number):Plan|null{
  const mk=brokerFrames(raw,q,now);
- if(!mk||!isMarketOpen(new Date(now)))return null;
+ return mk&&isMarketOpen(new Date(now))?pullbackFromMarket(mk,q,now):null;
+}
+function pullbackFromMarket(mk:Market,q:Quote,now:number):Plan|null{
  const f=mk.m1!,slow=mk.m5!,higher=mk.m15!;
  const s=slow.trend==="UP"?-1:slow.trend==="DOWN"?1:0;
  if(!s||higher.trend==="RANGE")return null;
@@ -120,7 +122,7 @@ export function replayPullback(p:Plan,bars:Bar[],spread:number,slippage:number,h
  if(!(risk>0)||s*(p.tp2-fill)<=0)return null;
  let mae=0,exit=fill,hit=false,minutes=0;
  for(const b of after){
-   const low=b.l-(s>0?0:0),high=b.h+(s<0?spread:0);
+   const low=b.l,high=b.h+(s<0?spread:0);
    const adverse=s>0?low:high,favorable=s>0?b.h:b.l+spread;
    mae=Math.max(mae,Math.max(0,s*(fill-adverse))/risk);minutes=(b.t-p.published)/60000+1;
    if(s*(adverse-p.sl)<=0){exit=p.sl-s*slippage;break;}
@@ -132,10 +134,24 @@ export function replayPullback(p:Plan,bars:Bar[],spread:number,slippage:number,h
 export function scanPullbacks(bars:Bar[],spread=.25,slippage=.10):PullbackCase[]{
  if(!Number.isFinite(spread)||spread<=0||!Number.isFinite(slippage)||slippage<0)throw Error("INVALID_COSTS");
  const cases:PullbackCase[]=[];
- // No overlapping cases. Signal at current minute open; prefix excludes that minute.
+ const end=bars.at(-1)?.t??0;
+ const f5=aggregate(bars,5,end+60000,5),f15=aggregate(bars,15,end+60000,14);
+ let i5=0,i15=0,cache5:Frame|null=null,cache15:Frame|null=null;
+ const recent=(a:number)=>bars.slice(Math.max(0,a-150),a);
+ // Pre-aggregated bars are consumed only after their complete interval ended.
+ // This avoids rescanning five days of history per minute in a long archive.
  for(let i=450;i<bars.length-20;){
    const now=bars[i]!.t,open=bars[i]!.o;
-   const p=pullbackCandidate(bars.slice(Math.max(0,i-7500),i),{bid:open,ask:open+spread,at:new Date(now).toISOString()},now);
+   let a=i5,b=i15;
+   while(i5<f5.length&&f5[i5]!.t+300000<=now)i5++;
+   while(i15<f15.length&&f15[i15]!.t+900000<=now)i15++;
+   if(a!==i5||!cache5)cache5=analyzeFrame(f5.slice(Math.max(0,i5-120),i5));
+   if(b!==i15||!cache15)cache15=analyzeFrame(f15.slice(Math.max(0,i15-120),i15));
+   const m1=analyzeFrame(recent(i)),last=bars[i-1]!;
+   if(!cache5||!cache15||!m1||now-last.t>150000||recent(i).filter(x=>x.t>=now-150*60000).length<135||!isMarketOpen(new Date(now))){i++;continue;}
+   const q={bid:open,ask:open+spread,at:new Date(now).toISOString()};
+   const mk:Market={now,bid:q.bid,ask:q.ask,m1,m5:cache5,m15:cache15,h1:null};
+   const p=pullbackFromMarket(mk,q,now);
    if(!p){i++;continue;}
    const c=replayPullback(p,bars.slice(i,i+20),spread,slippage);
    if(c)cases.push(c);

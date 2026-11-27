@@ -504,6 +504,7 @@ function renderPage(){
 // ---------- Compiled Apex release — Settings only ----------
 function releaseCard(me){
   var release=me.release||{},ready=release.available===true;
+  if(me.candidate)return '<section class="card release-card"><div class="release-head"><h3>Apex 4 demo preview</h3></div><p class="release-caption">Compile the separate test EA in MetaEditor. The stable customer download is unchanged. No official Apex 4 EX5 has been published.</p></section>';
   var html='<section class="card release-card" aria-label="Apex bot download"><div class="release-head">'
     +'<div><div class="release-title">Your Apex trading bot</div><div class="hint">Official compiled release · MT5 Expert Advisor</div></div>'
     +pill(ready?'v'+release.version+' · Ready':'Release pending',ready?'green':'amber')
@@ -540,7 +541,19 @@ function pageDashboard(me){
   return html;
 }
 
+function apex4IntelligencePanel(s){
+  var k=s.knowledge||{},p=s.plan,q=s.quote;
+  function price(x){return typeof x==='number'&&Number.isFinite(x)?x.toFixed(2):'—';}
+  var rows=[['Market',s.fresh?'Recent broker quote':'Awaiting fresh M1 data'],['Historical knowledge',k.loaded?'Loaded · '+(k.pullbackGroups||0)+' selected groups':'Calibration required'],['Outlook hours (WAT)',k.hoursWAT&&k.hoursWAT.length?k.hoursWAT.map(function(h){return String(h).padStart(2,'0')+':00';}).join(', '):'Not established'],['Original Outlook producer',s.canonicalProducerConfigured?'Configured · parity unverified':'Not connected'],['Execution','Demo only · no model calls']];
+  return '<section class="apex-intel" aria-label="Apex 4 intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / M1 · DEMO PREVIEW</span><h2>Outlook &amp; pullbacks</h2></div><a class="intel-link" href="#ai">Open AI chat ↗</a></div>'
+    +'<div class="intel-grid"><div><span>Engine status</span><strong>'+esc(String(s.status||'Awaiting data').replace(/_/g,' '))+'</strong><small>Independent candidate</small></div><div><span>Bid / ask</span><strong>'+esc(q?price(q.bid)+' / '+price(q.ask):'—')+'</strong><small>Fresh executable prices only</small></div></div>'
+    +rows.map(function(x){return '<div class="row"><span class="k">'+esc(x[0])+'</span><span class="v">'+esc(x[1])+'</span></div>';}).join('')
+    +(p?'<div class="intel-thesis"><span class="intel-kicker">CURRENT PLAN · NOT A BROKER FILL</span><strong>'+esc(p.kind+' · '+p.side)+'</strong><small>Entry '+price(p.entry)+' · SL '+price(p.sl)+' · TP1 '+price(p.tp1)+' · TP2 '+price(p.tp2)+'</small><p>'+esc(p.reason||'')+'</p></div>':'<p class="settings-subtle">No qualified executable plan reported.</p>')
+    +'<div class="intel-foot"><span>Broker M1 data · historical replay · chat-only API</span><span>Test build — not a stable release</span></div></section>';
+}
+
 function apexIntelligencePanel(me){
+  if(me.candidate)return apex4IntelligencePanel(me.candidate);
   var a=me.astra||{},d=a.lastDecision||{},s=me.setupStatus||{},camp=me.campaign;
   var state=!a.hasKey?'Not configured':!a.enabled?'Research only':a.status==='ASTRA_ACTIVE'||a.status==='ACTIVE'?'Decision recorded':a.status==='ASTRA_READY'?'Ready':String(a.status||'Checking').replace(/_/g,' ');
   var owner=camp&&camp.strategyOwner?camp.strategyOwner==='ASTRA'?'Apex AI':'Native Apex':'No active campaign';

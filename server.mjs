@@ -1306,6 +1306,25 @@ const server=http.createServer(async(req,res)=>{
         secretsAcceptableForProduction:secretProblems().length===0,
         link:'command-center-style'});
 
+    // Apex v4 candidate is a separate, provider-free backend mode. The stable
+    // deployment stays unchanged unless the staging operator enables it.
+    if(req.method==='POST'&&u.pathname==='/api/apex/v4/market'){
+      const send=(status,txt)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(txt);};
+      if(process.env.APEX4_CANDIDATE!=='1')return send(503,'NONE|CANDIDATE_DISABLED');
+      const b=await body(req,2e6);
+      const v=await validateEa(b.license,b.account,{claim:false});
+      if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
+      if(!throttle('apex4-market:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
+      if(b.environment!=='DEMO')return send(403,'NONE|DEMO_ONLY');
+      const cfg=await getLicenseConfig(v.key);
+      if(cfg.armed!==true)return send(200,'NONE|NOT_ARMED');
+      try {
+        const {analyzeBroker}=await import('./intelligence/apex4-runtime.mjs');
+        const result=await analyzeBroker(v.key,String(b.account),b);
+        return send(200,result.text);
+      }catch{return send(503,'NONE|ENGINE_UNAVAILABLE');}
+    }
+
     // --- EA routes. One binding/expiry policy for all of them (APEX-AUDIT-022). ---
     if(u.pathname.startsWith('/api/apex/astra/')){
       const b=req.method==='POST'?await body(req):{};
@@ -1323,6 +1342,7 @@ const server=http.createServer(async(req,res)=>{
         catch{return json(res,400,{status:'INVALID_MARKET_CONTEXT'});}
       }
       if(u.pathname==='/api/apex/astra/context'){
+        if(process.env.APEX4_CANDIDATE==='1')return json(res,200,{status:'DISABLED',fallbackReason:'APEX4_CHAT_ONLY'});
         if(!throttle('astra-context:'+v.key,ip,40,60_000))return json(res,429,{status:'RATE_LIMITED',fallbackReason:'REQUEST_RATE_LIMIT'});
         try{return json(res,200,await ASTRA.submit(v.key,b.snapshot));}
         catch{return json(res,200,{status:'AI_ERROR',fallbackReason:'INVALID_OR_UNAVAILABLE_CONTEXT'});}

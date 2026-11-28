@@ -167,7 +167,7 @@ button{cursor:pointer}
 .toggle-row .lbl{font-weight:600;font-size:14px}
 .toggle-row .hint{font-size:12px;color:var(--text-faint);margin-top:2px}
 .switch{position:relative;width:46px;height:26px;flex-shrink:0}
-.switch input{opacity:0;width:100%;height:100%;position:absolute;margin:0;cursor:pointer}
+.switch input{opacity:0;width:100%;height:100%;position:absolute;inset:0;margin:0;cursor:pointer;z-index:2}.switch .track,.switch .knob{pointer-events:none}.switch input:focus-visible + .track{outline:2px solid var(--gold);outline-offset:3px}
 .switch .track{position:absolute;inset:0;background:var(--bg-elev-3);border:1px solid var(--border);border-radius:99px;transition:background .15s}
 .switch .knob{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s}
 .switch input:checked + .track{background:var(--gold)}
@@ -218,6 +218,11 @@ button{cursor:pointer}
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Apex">
+
+<style>
+.apx-work{display:grid;gap:12px;max-width:1080px;margin:0 auto}.apx-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.apx-head h1{font-size:26px;letter-spacing:-.045em;margin:0}.apx-head p{font-size:12px;color:var(--text-muted,#9da9b8);margin:4px 0 0}.apx-panel{background:linear-gradient(135deg,#171f29,#121922);border:1px solid #2b3542;border-radius:15px;padding:14px;min-width:0}.apx-panel h2{font-size:15px;letter-spacing:-.02em;margin:0 0 12px}.apx-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.apx-kicker{font-size:11px;color:#aeb9c8;letter-spacing:.02em}.apx-number{font-size:32px;line-height:1.2;font-weight:730;letter-spacing:-.055em;margin-top:5px;font-variant-numeric:tabular-nums}.apx-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:15px;padding-top:12px;border-top:1px solid #303a46}.apx-metric{min-width:0}.apx-metric small{display:block;color:#aeb9c8;font-size:11px;margin-bottom:4px}.apx-metric strong{font-size:15px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.apx-line{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:44px;border-top:1px solid #303a46;padding:9px 0}.apx-line:first-of-type{border-top:0}.apx-line strong{font-size:13px}.apx-line p{font-size:11px;color:#aeb9c8;margin:3px 0 0;line-height:1.35}.apx-line .switch{flex-shrink:0}.apx-muted{color:#aeb9c8;font-size:12px;line-height:1.45;margin:8px 0 0}.apx-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}.apx-action{font-size:12px;font-weight:650;color:#e7c58b;background:#e7c58b10;border:1px solid #e7c58b35;border-radius:8px;padding:8px 10px;text-decoration:none;white-space:nowrap;cursor:pointer}.apx-chip{font-size:11px;color:#b9c4d1;border:1px solid #384451;border-radius:6px;padding:4px 7px;white-space:nowrap}.apx-buy{color:#52d7a2}.apx-sell{color:#f48686}.apx-quote{display:flex;align-items:baseline;gap:8px;margin:4px 0 12px}.apx-quote strong{font-size:23px;letter-spacing:-.04em}.apx-evidence{display:grid;grid-template-columns:1fr 1fr;gap:8px}.apx-evidence>div{border:1px solid #303a46;border-radius:9px;padding:10px}.apx-evidence strong{font-size:19px;display:block;margin-top:4px}.apx-empty{padding:8px 0 4px;color:#b4bfcb;font-size:13px}.apx-license{display:flex;align-items:center;gap:8px;margin:8px 0}.apx-license code{min-width:0;flex:1;overflow-wrap:anywhere;font-size:12px;color:#e7c58b}.apx-panel details summary{cursor:pointer;font-size:13px;font-weight:650;padding:7px 0}.apx-panel ol{padding-left:20px;font-size:13px;line-height:1.65;color:#b4bfcb}.apx-panel .field{margin:12px 0}.apx-panel .field input{width:100%}.apx-work .card{margin:0}.apx-offline{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border:1px solid #3b424b;border-radius:10px;font-size:12px;color:#b7c1ce;background:#171e26}.apx-status{font-size:12px;color:#b5c1ce}.apx-trade-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.apx-work button:disabled{opacity:.5}.apx-work .switch{margin:0}.apx-compact .row{padding:9px 0}.apx-compact .row:last-child{border-bottom:0}
+@media(max-width:640px){.apx-grid{grid-template-columns:1fr}.apx-work{gap:10px}.apx-panel{padding:13px}.apx-head h1{font-size:24px}.apx-number{font-size:29px}.apx-metric strong{font-size:14px}.apx-line strong{font-size:13px}.apx-head{margin-bottom:2px}}
+</style>
 </head>
 <body>
 
@@ -419,7 +424,7 @@ function startPolling(){
       renderStatusPills();
       if (['dashboard','campaigns','history','learning'].indexOf(STATE.page)>=0){
         var main=document.getElementById('main');
-        if(main&&main.querySelector('#arm-toggle:disabled'))return;
+        if(main&&main.querySelector('#arm-toggle:disabled,#apx-outlook-toggle:disabled,#apx-pullback-toggle:disabled'))return;
         var opened=main?Array.from(main.querySelectorAll('.hist-item.open')).map(function(x){return x.id;}):[];
         var details=main?Array.from(main.querySelectorAll('details')).map(function(x){return x.open;}):[];
         renderPage();
@@ -476,6 +481,7 @@ function renderStatusPills(){
   var requested=desired.armed===true;
   var mt5Label=connected?'MT5 connected':mt5==='STALE'?'Connection delayed':'MT5 offline';
   var actionLabel=!connected?'Waiting for MT5':applied.inSync!==true?'Applying changes':requested?'Trading enabled':'Trading paused';
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET'){wrap.innerHTML=pill(mt5Label,connected?'green':'gray');return;}
   wrap.innerHTML=pill(mt5Label,connected?'green':mt5==='STALE'?'amber':'gray')+
     pill(actionLabel,!connected?'gray':applied.inSync!==true?'amber':requested?'green':'gray');
 }
@@ -491,7 +497,7 @@ function renderPage(){
   else if (STATE.page==='learning') main.innerHTML = pageLearning(me);
   else if (STATE.page==='ai'||STATE.page==='lab') {if(window.AstraUI&&typeof window.AstraUI.chatPage==='function'&&typeof window.AstraUI.bindChat==='function'){main.innerHTML=window.AstraUI.chatPage(me,STATE.page==='lab'?'lab':'chat');window.AstraUI.bindChat(me);}else{main.innerHTML='<section class="card"><h1>Apex AI</h1><p>The research interface could not load. Reload to retrieve the current version.</p><button id="reload-ai" class="btn btn-primary">Reload Apex</button></section>';document.getElementById('reload-ai').onclick=function(){location.reload();};}}
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
-  else if (STATE.page==='account') main.innerHTML = pageAccount(me);
+  else if (STATE.page==='account') {main.innerHTML = pageAccount(me);if(me.candidate?.mode==='APEX4_NATIVE_BASKET')wireSettings(me);}
   wireDashboardControls();
   if (STATE.page==='dashboard')wireOverviewControls();
   if(STATE.page==='learning')loadLearningLedger();
@@ -529,8 +535,51 @@ function releaseCard(me){
 function deskMetric(label,value,tone,sub){
   return '<div class="desk-metric"><span>'+esc(label)+'</span><strong class="'+(tone||'')+'">'+esc(value)+'</strong>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>';
 }
+
+function nativeMoney(x){return fmtMoney(x,'USD');}
+function nativePrice(x){return Number.isFinite(x)?x.toFixed(2):'—';}
+function nativeHead(title,sub){return '<header class="apx-head"><div><h1>'+esc(title)+'</h1><p>'+esc(sub)+'</p></div></header>';}
+function nativeSwitch(id,label,checked){return '<label class="switch" title="'+esc(label)+'"><input type="checkbox" id="'+id+'" aria-label="'+esc(label)+'" '+(checked?'checked':'')+'><span class="track"></span><span class="knob"></span></label>';}
+function nativeStrategyControls(me){
+ var c=me.candidate||{},mode=c.strategy||'BOTH',armed=me.control?.desired?.armed===true;
+ var synced=c.fresh&&c.appliedStrategy===mode&&me.control?.applied?.inSync===true;
+ return '<section class="apx-panel"><h2>Trading strategies</h2>'
+ +'<div class="apx-line"><div><strong>Auto trading</strong><p>Pause new orders; existing positions stay managed.</p></div>'+nativeSwitch('arm-toggle','Auto trading',armed)+'</div>'
+ +'<div class="apx-line"><div><strong>Hourly Outlook</strong><p>Strong hourly Gold signals</p></div>'+nativeSwitch('apx-outlook-toggle','Hourly Outlook',mode==='BOTH'||mode==='OUTLOOK')+'</div>'
+ +'<div class="apx-line"><div><strong>Pullbacks</strong><p>Native trend and recovery entries</p></div>'+nativeSwitch('apx-pullback-toggle','Pullbacks',mode==='BOTH'||mode==='PULLBACK')+'</div>'
+ +'<p class="apx-muted">'+esc(synced?'Settings applied':c.fresh?'Waiting for MT5 to apply settings':'Saved preferences · connect MT5 to apply')+'</p></section>';
+}
+function nativeBasketCard(c){
+ var b=c.basket||{},active=c.fresh&&b.active;
+ return '<section class="apx-panel apx-compact"><div class="apx-trade-title"><h2 style="margin:0">Active basket</h2><span class="apx-chip">'+esc(active?b.side:'XAUUSD')+'</span></div>'
+ +(active?'<div class="apx-number '+(b.floatingPL>=0?'apx-buy':'apx-sell')+'">'+esc(nativeMoney(b.floatingPL))+'</div><div class="apx-kicker">Floating P/L</div><div class="apx-metrics"><div class="apx-metric"><small>Entry</small><strong>'+esc(nativePrice(b.anchor))+'</strong></div><div class="apx-metric"><small>Target</small><strong>'+esc(nativePrice(b.target))+'</strong></div><div class="apx-metric"><small>Positions</small><strong>'+esc(b.positions)+'</strong></div></div>':'<p class="apx-empty">'+esc(c.fresh?'No open positions.':'Connect MT5 to see your positions.')+'</p>')
+ +'</section>';
+}
+function nativeMarketCard(c){
+ var b=c.basket||{},q=b.quote,live=c.fresh&&q&&Date.now()-q.atMs<=10000;
+ return '<section class="apx-panel"><div class="apx-trade-title"><h2 style="margin:0">Gold · XAUUSD</h2><a class="apx-action" href="#ai">Ask AI ↗</a></div>'
+ +'<div class="apx-quote"><strong>'+esc(live?nativePrice(q.bid):'—')+'</strong><span class="apx-kicker">'+(live?'Broker bid':'Awaiting quote')+'</span></div>'
+ +'<div class="apx-evidence"><div><small class="apx-kicker">BUY evidence</small><strong class="apx-buy">'+esc(b.buyScore??'—')+'</strong></div><div><small class="apx-kicker">SELL evidence</small><strong class="apx-sell">'+esc(b.sellScore??'—')+'</strong></div></div>'
+ +'<details style="margin-top:9px"><summary>Market analysis</summary><p class="apx-muted">'+esc(b.diagnostic||'Waiting for market data. Evidence scores are not win probabilities.')+'</p></details>'
+ +'<div class="apx-line"><div><strong>Hourly Outlook</strong><p>'+esc((c.hoursWAT||[]).map(h=>String(h).padStart(2,'0')+':00').join(', ')+' WAT')+'</p></div><span class="apx-status">'+esc(c.outlookKnowledge?.status==='CALIBRATED_RULES_AVAILABLE'?'Ready':'Not calibrated')+'</span></div></section>';
+}
+function nativeHome(me){
+ var c=me.candidate,b=c.basket||{},a=me.account||{},live=c.fresh;
+ return '<div class="apx-work">'+nativeHead('Overview','Gold trading · '+(live?'MT5 connected':'MT5 offline'))
+ +(!live?'<div class="apx-offline"><span>Connect your trading account</span><a class="apx-action" href="#settings">Connect MT5 ↗</a></div>':'')
+ +'<section class="apx-panel"><div class="apx-hero"><div><div class="apx-kicker">Account equity</div><div class="apx-number">'+esc(nativeMoney(b.equity))+'</div></div><span class="apx-chip">'+esc(live?(b.broker||'MT5'):'USD')+'</span></div><div class="apx-metrics"><div class="apx-metric"><small>Balance</small><strong>'+esc(nativeMoney(b.balance))+'</strong></div><div class="apx-metric"><small>Free margin</small><strong>'+esc(nativeMoney(b.freeMargin))+'</strong></div><div class="apx-metric"><small>Open P/L</small><strong class="'+(b.floatingPL>0?'apx-buy':b.floatingPL<0?'apx-sell':'')+'">'+esc(nativeMoney(b.floatingPL))+'</strong></div></div></section>'
+ +'<div class="apx-grid">'+nativeStrategyControls(me)+nativeBasketCard(c)+'</div>'+nativeMarketCard(c)+'</div>';
+}
+function nativeSetup(me){
+ var lic=me.license||{},c=me.candidate||{};
+ return '<section class="apx-panel"><div class="apx-trade-title"><h2 style="margin:0">Connect MT5</h2><span class="apx-chip">'+esc(c.fresh?'Connected':'Offline')+'</span></div>'
+ +'<div class="apx-kicker">Your license key</div><div class="apx-license"><code>'+esc(lic.key||'—')+'</code><button class="apx-action" id="apx-copy-license" type="button">Copy</button></div><div class="apx-line"><span class="apx-kicker">MT5 account</span><strong>'+esc(lic.account||'Not connected')+'</strong></div>'
+ +'<details><summary>Installation instructions</summary><ol><li>Install the current Apex EX5 in MT5 → File → Open Data Folder → MQL5 → Experts.</li><li>In Tools → Options → Expert Advisors, allow WebRequest for <code>https://apex.xaucloud.io</code>.</li><li>Attach Apex to your XAUUSD chart. Paste the key above into <code>InpApexNativeLicense</code> in Inputs and enable Algo Trading.</li><li>The current native build supports Strategy Tester and explicitly enabled demo accounts. In demo, enable <code>InpApexNativeDemoExecution</code>. Real accounts are not supported by this build.</li></ol><p class="apx-muted">An official downloadable native EX5 is not published yet. Use the compiled native build supplied to you.</p></details>'
+ +'<details><summary>Switch license</summary><div class="field"><label for="f-change-license">New license key</label><input id="f-change-license" autocomplete="off" spellcheck="false" placeholder="APEX-…"></div><div id="change-license-err" class="err-box" role="alert"></div><button class="apx-action" id="change-license-btn">Switch license</button></details></section>';
+}
+
 function pageDashboard(me){
-  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<div class="desk-page-head"><div><h1 class="overview-title">Command center</h1><p>Independent native Apex · demo candidate</p></div></div>'+apex4IntelligencePanel(me.candidate)+armDisarmCard(me);
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return nativeHome(me);
 
   var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{},ctrl=me.control||{};
   var connected=mt5.status==='CONNECTED',available=!!me.dataAvailable;
@@ -856,11 +905,16 @@ function wireOverviewControls(){
 }
 
 function wireDashboardControls(){
-  var strategy=document.getElementById('apex-native-strategy');
-  if(strategy)strategy.addEventListener('change',function(){
-    strategy.disabled=true;
-    api('/api/session/native-strategy',{method:'POST',body:{strategy:strategy.value}}).then(function(){return api('/api/auth/me');}).then(function(me){STATE.me=me;renderPage();toast('Strategy saved. MT5 will acknowledge it.');}).catch(function(){strategy.disabled=false;toast('Could not save strategy.',true);});
-  });
+  var outlook=document.getElementById('apx-outlook-toggle'),pullback=document.getElementById('apx-pullback-toggle');
+  if(outlook&&pullback){
+    var change=function(){
+      var mode=outlook.checked?(pullback.checked?'BOTH':'OUTLOOK'):(pullback.checked?'PULLBACK':'OFF');
+      outlook.disabled=pullback.disabled=true;
+      api('/api/session/native-strategy',{method:'POST',body:{strategy:mode}}).then(function(){return api('/api/auth/me');}).then(function(me){STATE.me=me;renderPage();toast('Strategy preferences saved');}).catch(function(){renderPage();toast('Could not save strategy.',true);});
+    };
+    outlook.onchange=change;pullback.onchange=change;
+  }
+  var copy=document.getElementById('apx-copy-license');if(copy)copy.onclick=function(){var key=STATE.me?.license?.key;if(key&&navigator.clipboard)navigator.clipboard.writeText(key).then(function(){toast('License copied');}).catch(function(){toast('Select and copy the license key',true);});};
   var t = document.getElementById('arm-toggle');
   if (t) t.addEventListener('change', function(){
     var val = t.checked;
@@ -869,6 +923,7 @@ function wireDashboardControls(){
       var d = (r && r.delivery) || '';
       if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved, but your MT5 connection is not ready. Check connection details in Settings.', true);
       else if (d==='QUEUED_FOR_BRIDGE') toast('Your change is saved. Waiting for MT5 to confirm.');
+      else if(d==='NATIVE_LOCAL_SAVED')toast('Saved · MT5 will apply the trading switch');
       else if (d==='EA_APPLIED' || r.inSync) toast(val?'Apex is now allowed to open new trades':'New trades are paused');
       else toast('Your change is saved. Waiting for MT5 to confirm.');
       return api('/api/auth/me');
@@ -879,7 +934,7 @@ function wireDashboardControls(){
 
 // ---------- Campaigns ----------
 function pageCampaigns(me){
-  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<h1 class="page-title">Native basket</h1>'+apex4IntelligencePanel(me.candidate);
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<div class="apx-work">'+nativeHead('Trades','Open Gold positions')+nativeBasketCard(me.candidate)+'<section class="apx-panel"><h2>Execution details</h2><div class="apx-line"><span>Total volume</span><strong>'+esc(nativePrice(me.candidate.basket?.basketLots))+'</strong></div><div class="apx-line"><span>Last filled lot</span><strong>'+esc(nativePrice(me.candidate.basket?.lastFillVolume))+'</strong></div><div class="apx-line"><span>Accepted orders</span><strong>'+esc(me.candidate.basket?.orders??'—')+'</strong></div><p class="apx-muted">Individual deal history is available in MetaTrader.</p></section></div>';
 
   var html='<div class="desk-page-head"><div><span class="overview-eyebrow">WORKSPACE / EXECUTION</span><h1 class="page-title">Trades</h1><p>Active positions and campaign management.</p></div><a class="btn btn-ghost desk-action" href="#history">Trade history ↗</a></div>';
   if(!me.dataAvailable)return html+dataUnavailableCard(me);
@@ -1008,11 +1063,7 @@ function activateSettingsTab(tab){
 }
 
 function pageSettings(me){
-  if(me.candidate?.mode==='APEX4_NATIVE_BASKET'){
-    return '<div class="settings-top"><h1 class="page-title">Settings</h1><p class="page-sub">Apex · Gold trading</p></div>'
-      +releaseCard(me)+armDisarmCard(me)+apex4IntelligencePanel(me.candidate)+(window.AstraUI?window.AstraUI.card(me,true):'')
-      +'<div class="card"><h3>MT5 setup</h3><p>Compile the native candidate. Strategy Tester requires no API or backend. Demo Outlook uses only https://apex.xaucloud.io; enable native demo execution explicitly in MT5. This is not a customer release.</p></div>';
-  }
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<div class="apx-work">'+nativeHead('Settings','Account, connection and AI')+nativeSetup(me)+(window.AstraUI?window.AstraUI.card(me,true):'')+'<section class="apx-panel"><h2>Execution policy</h2><div class="apx-line"><span>Basket target</span><strong>50 pips</strong></div><div class="apx-line"><span>Position sizing</span><strong>Dynamic margin</strong></div><p class="apx-muted">Trading switches are on Home. Full-margin baskets without individual stops can be liquidated by the broker.</p></section></div>';
 
   var s = me.settings || {};
   var adv = s.advanced || {};
@@ -1189,7 +1240,7 @@ function wireSettings(me){
     }).then(function(newMe){
       STATE.me = newMe;
       renderStatusPills();
-      if (STATE.page==='settings') renderPage();
+      if (STATE.page==='settings'||STATE.page==='account') renderPage();
     }).catch(function(e){
       changeBtn.disabled=false; changeBtn.textContent='Switch license';
       errBox.textContent = licenseErrorMessage(e.message);
@@ -1304,6 +1355,7 @@ function saveConfig(payload, btnId, btnLabel){
 
 // ---------- Account ----------
 function pageAccount(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<div class="apx-work">'+nativeHead('Your account','License and MT5 connection')+nativeSetup(me)+'<section class="apx-panel"><button class="btn btn-danger" id="logout-btn2">Sign out</button></section></div>';
   var lic=me.license||{},mt5=me.mt5||{},status=lic.status||'LICENSE_NOT_FOUND';
   var html='<div class="settings-top"><div class="overview-eyebrow">Your access</div><h1 class="page-title">Your account</h1>'
     +'<p class="page-sub">License details and the MetaTrader account connected to Apex.</p></div>'

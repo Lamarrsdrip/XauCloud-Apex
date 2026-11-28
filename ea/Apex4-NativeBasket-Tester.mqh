@@ -4,20 +4,21 @@
 #include <Trade/Trade.mqh>
 input long InpApexBasketMagic = 90410001;
 input int InpApexOrderGapMilliseconds = 100;
-enum ENUM_APEX_STRATEGY { APEX_PULLBACK_ONLY=0, APEX_OUTLOOK_ONLY=1, APEX_OUTLOOK_AND_PULLBACK=2 };
+enum ENUM_APEX_STRATEGY { APEX_PULLBACK_ONLY=0, APEX_OUTLOOK_ONLY=1, APEX_OUTLOOK_AND_PULLBACK=2, APEX_STRATEGIES_OFF=3 };
 input ENUM_APEX_STRATEGY InpApexStrategy = APEX_PULLBACK_ONLY;
 input bool InpApexNativePullbackEnabled = true;
 ENUM_APEX_STRATEGY apexStrategy=APEX_PULLBACK_ONLY;
 string apexEntryDiagnostic="Waiting for closed market evidence";
 string apexEntrySource="";
 int apexBuyScore=0,apexSellScore=0;
-string ApexStrategyName(){return apexStrategy==APEX_OUTLOOK_ONLY?"OUTLOOK":apexStrategy==APEX_OUTLOOK_AND_PULLBACK?"BOTH":"PULLBACK";}
-bool ApexPullbacksOn(){return apexStrategy!=APEX_OUTLOOK_ONLY&&(!MQLInfoInteger(MQL_TESTER)||InpApexNativePullbackEnabled);}
-bool ApexOutlookOn(){return apexStrategy!=APEX_PULLBACK_ONLY;}
+string ApexStrategyName(){return apexStrategy==APEX_STRATEGIES_OFF?"OFF":apexStrategy==APEX_OUTLOOK_ONLY?"OUTLOOK":apexStrategy==APEX_OUTLOOK_AND_PULLBACK?"BOTH":"PULLBACK";}
+bool ApexPullbacksOn(){return (apexStrategy==APEX_PULLBACK_ONLY||apexStrategy==APEX_OUTLOOK_AND_PULLBACK)&&(!MQLInfoInteger(MQL_TESTER)||InpApexNativePullbackEnabled);}
+bool ApexOutlookOn(){return apexStrategy==APEX_OUTLOOK_ONLY||apexStrategy==APEX_OUTLOOK_AND_PULLBACK;}
 bool ApexApplyStrategy(const string mode){
  if(mode=="PULLBACK")apexStrategy=APEX_PULLBACK_ONLY;
  else if(mode=="OUTLOOK")apexStrategy=APEX_OUTLOOK_ONLY;
  else if(mode=="BOTH")apexStrategy=APEX_OUTLOOK_AND_PULLBACK;
+ else if(mode=="OFF")apexStrategy=APEX_STRATEGIES_OFF;
  else return false;
  return true;
 }
@@ -29,7 +30,7 @@ input bool InpApexNativeLiveOutlook = true;
 bool apexDemoArmed=false,apexDemoLockHeld=false;
 string apexDemoState="",apexDemoLock="";
 long apexLastOutlookAt=0;
-ulong apexLastPoll=0;
+ulong apexLastPoll=0,apexLastControlAck=0;
 input bool InpApexReplayStrongOutlook = false;
 // Tester broker clock minus UTC, explicitly provided for the historical period.
 input int InpApexReplayBrokerUtcOffsetMinutes = 0;
@@ -57,7 +58,7 @@ bool ApexBasketAllowed()
 {
    return ApexBasketTesterOnly()||(InpApexNativeDemoExecution&&AccountInfoInteger(ACCOUNT_TRADE_MODE)==ACCOUNT_TRADE_MODE_DEMO);
 }
-bool ApexBasketCanStart(){return ApexBasketAllowed()&&(ApexBasketTesterOnly()||apexDemoArmed);}
+bool ApexBasketCanStart(){return ApexBasketAllowed()&&(ApexBasketTesterOnly()||(apexDemoArmed&&apexLastControlAck>0&&GetTickCount64()-apexLastControlAck<=8000));}
 bool ApexBasketSave()
 {
    if(ApexBasketTesterOnly())return true;
@@ -278,6 +279,7 @@ void ApexBasketManage()
    if(apexBasketClosing||apexBasketSide*((apexBasketSide>0?q.bid:q.ask)-apexBasketTarget)>=0)
    {ApexBasketClose();return;}
    if(!ApexBasketCanStart()||apexBasketUncertain||ApexBasketHasPending()||ApexBasketOtherExposure())return;
+   if(!ApexBasketTesterOnly()&&((StringFind(apexEntrySource,"NATIVE_XAUCLOUD_PULLBACK")==0&&!ApexPullbacksOn())||(StringFind(apexEntrySource,"CANONICAL_STRONG_OUTLOOK")==0&&!ApexOutlookOn())||apexStrategy==APEX_STRATEGIES_OFF))return;
    ulong wall=GetTickCount64();
    if(ApexBasketTesterOnly())
    {
@@ -321,7 +323,7 @@ bool ApexBasketStart(const int dir,const double anchor,const string source)
       ApexBasketHasPending()||ApexBasketOtherExposure()||(dir!=1&&dir!=-1)||anchor<=5)return false;
    MqlTick q;if(!SymbolInfoTick(_Symbol,q)||q.bid<=0||q.ask<q.bid)return false;
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
-   double vol=ApexBasketClip(AccountInfoDouble(ACCOUNT_EQUITY));
+   double vol=MathMin(ApexBasketClip(AccountInfoDouble(ACCOUNT_EQUITY)),SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX));
    if(step<=0||vol<=0)return false;
    vol=NormalizeDouble(MathFloor((vol+1e-9)/step)*step,8);
    if(vol<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)||vol>SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX))return false;
@@ -364,15 +366,20 @@ void ApexBasketLiveOutlookTick()
    ulong now=GetTickCount64();
    // Synchronous HTTP must not interrupt the rapid fill loop. Once the
    // broker cannot fund another order, normal telemetry/polling resumes.
-   if(apexBasketSide!=0&&apexBasketLastFillWall>0&&now-apexBasketLastFillWall<250)return;
+   // Poll even while fills continue: the remote pause switch must remain reachable.
    ulong interval=apexBasketSide!=0?5000:1000;
    if(apexLastPoll>0&&now-apexLastPoll<interval)return;
    apexLastPoll=now;
    string payload=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"environment\":\"DEMO\",\"terminalArmed\":%s,\"basketActive\":%s,\"side\":%d,\"anchor\":%.8f,\"target\":%.8f,\"positions\":%d,\"orders\":%d,\"preferredVolume\":%.8f,\"lastFillVolume\":%.8f,\"freeMargin\":%.8f,\"equity\":%.8f,\"orderGapMs\":%d}",
-      InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),apexDemoArmed?"true":"false",apexBasketSide!=0?"true":"false",apexBasketSide,
+      InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),ApexBasketCanStart()?"true":"false",apexBasketSide!=0?"true":"false",apexBasketSide,
       apexBasketAnchor,apexBasketTarget,ApexBasketPositions(),apexBasketOrders,apexBasketVolume,apexBasketLastFillVolume,
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),AccountInfoDouble(ACCOUNT_EQUITY),InpApexOrderGapMilliseconds);
    payload=StringSubstr(payload,0,StringLen(payload)-1)+StringFormat(",\"strategy\":\"%s\",\"entrySource\":\"%s\",\"buyScore\":%d,\"sellScore\":%d,\"diagnostic\":\"%s\"}",ApexStrategyName(),BotMonitorJsonSafe(apexEntrySource,100),apexBuyScore,apexSellScore,BotMonitorJsonSafe(apexEntryDiagnostic,200));
+   double basketLots=0,basketPL=0;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+      if(PositionGetTicket(i)>0&&ApexBasketOwned())
+      {basketLots+=PositionGetDouble(POSITION_VOLUME);basketPL+=PositionGetDouble(POSITION_PROFIT)+PositionGetDouble(POSITION_SWAP);}
+   payload=StringSubstr(payload,0,StringLen(payload)-1)+StringFormat(",\"balance\":%.8f,\"floatingPL\":%.8f,\"basketLots\":%.8f,\"broker\":\"%s\"}",AccountInfoDouble(ACCOUNT_BALANCE),basketPL,basketLots,BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),100));
    long utc=(long)TimeGMT();
    MqlTick observed;
    if(SymbolInfoTick(_Symbol,observed)&&observed.bid>0&&observed.ask>=observed.bid)
@@ -395,14 +402,14 @@ void ApexBasketLiveOutlookTick()
    // once armed this session, retains its local recognition and exit logic.
    if(status!=200)return;
    int n=StringSplit(line,'|',parts);
-   if(n==3&&parts[0]=="NONE"&&parts[1]=="ARMED_NO_PLAN"&&ApexApplyStrategy(parts[2])){apexDemoArmed=true;return;}
+   if(n==3&&parts[0]=="NONE"&&parts[1]=="ARMED_NO_PLAN"&&ApexApplyStrategy(parts[2])){apexDemoArmed=true;apexLastControlAck=GetTickCount64();return;}
    if(n==3&&parts[0]=="NONE"&&parts[1]=="NOT_ARMED"){ApexApplyStrategy(parts[2]);apexDemoArmed=false;return;}
    if(n!=8||parts[0]!="NATIVE"||(parts[2]!="BUY"&&parts[2]!="SELL")||!ApexApplyStrategy(parts[7]))return;
    int side=parts[2]=="BUY"?1:-1;
    double anchor=StringToDouble(parts[3]),target=StringToDouble(parts[4]);
    long at=StringToInteger(parts[5]),expires=StringToInteger(parts[6]);
    if(anchor<=5||MathAbs(target-anchor-side*5.0)>0.000001||at>utc||utc>=expires||utc-at>60)return;
-   apexDemoArmed=true;
+   apexDemoArmed=true;apexLastControlAck=GetTickCount64();
    if(!ApexOutlookOn()||at<=apexLastOutlookAt)return;
    apexLastOutlookAt=at;
    if(!ApexBasketSave()){apexDemoArmed=false;return;}
@@ -505,7 +512,22 @@ bool ApexClassroomObserve(const int dir,const bool continuation,const double quo
    for(int i=peak1+2;i<n1;i++)extreme=impulseDir>0?MathMin(extreme,one[i].low):MathMax(extreme,one[i].high);
    depth=impulseDir*(peakPrice-extreme)/impulse;
    if(depth<.12)return false;
-   bool broken=depth>=1.0||(continuation&&((dir>0&&f15.hasLow&&extreme<=f15.low)||(dir<0&&f15.hasHigh&&extreme>=f15.high)));
+   // The correction's own newly confirmed swing is not the pre-impulse
+   // structural invalidation. Use only pivots known before the impulse.
+   double parentPivot=0;
+   if(continuation)
+      for(int i=2;i<ArraySize(m15)-2;i++)
+      {
+         if(m15[i+2].time+900>five[start].time)break;
+         bool pivot=true;
+         for(int j=-2;j<=2;j++)if(j!=0)
+         {
+            if(dir>0&&m15[i+j].low<=m15[i].low)pivot=false;
+            if(dir<0&&m15[i+j].high>=m15[i].high)pivot=false;
+         }
+         if(pivot)parentPivot=dir>0?m15[i].low:m15[i].high;
+      }
+   bool broken=depth>=1.0||(continuation&&parentPivot>0&&dir*(extreme-parentPivot)<-_Point);
    if(broken){stage="STRUCTURE_BROKEN";return false;}
    recovery=continuation?dir*(quote-extreme)/(impulse*depth):dir*(quote-peakPrice)/impulse;
    if(recovery>=.85){stage="LATE";return false;}
@@ -605,10 +627,10 @@ void ApexBasketConsiderNative()
  else if(sell.valid)chosen=sell;
  else return;
  if(chosen.episode<=apexBasketLastSignal)return;
- apexBasketLastSignal=chosen.episode;
  double entry=chosen.side>0?q.ask:q.bid;
  Print("APEX_ENTRY_EVIDENCE ",apexEntryDiagnostic," chosen=",chosen.side," entry=",entry," episode=",chosen.episode);
- ApexBasketStart(chosen.side,entry,"NATIVE_XAUCLOUD_PULLBACK:"+chosen.stage);
+ if(ApexBasketStart(chosen.side,entry,"NATIVE_XAUCLOUD_PULLBACK:"+chosen.stage))
+ {apexBasketLastSignal=chosen.episode;if(!ApexBasketSave())apexBasketUncertain=true;}
 }
 void ApexNativeDisplay()
 {

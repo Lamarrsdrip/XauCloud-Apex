@@ -717,7 +717,7 @@ async function validateEa(licenseKey,account,{claim=true}={}){
       lic.updatedAt=new Date().toISOString();
       licenses[key]=lic;
       await writeLicenses(licenses);
-      await syncBridgeLicense(key,lic,{queueOnFailure:true}).catch(()=>null);
+      if(!APEX4_NATIVE_PREVIEW)await syncBridgeLicense(key,lic,{queueOnFailure:true}).catch(()=>null);
       console.log(`APEX_LICENSE_FIRST_CLAIM license=${maskLicense(key)} account=${accountS}`);
     }
     return {ok:true,status:'ACTIVE',key,lic,licenses,claimed:claim};
@@ -1175,7 +1175,7 @@ async function buildMe(key){
     return {license:base,release,candidate,dataAvailable:nativeFresh,waitingForFirstContact:!native,
       armed:cfg.armed,mt5:{status:nativeFresh?'CONNECTED':native?'STALE':'DISCONNECTED',lastSeen:at},
       control:{desired:{armed:cfg.armed,revision:Number(lic.commandRevision||0)},applied:{inSync:nativeFresh&&native.terminalArmed!==null?native.terminalArmed===cfg.armed:null,asOf:at}},
-      account:{account:lic.account||null,currency:'USD',equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
+      account:{account:lic.account||null,currency:'USD',balance:nativeFresh?native.balance:null,broker:nativeFresh?native.broker:null,equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
         openPositions:nativeFresh?native.positions:null,asOf:at},
       campaign:null,history:[],recentHuman:[],settings:settingsView(cfg),learning:learningShape([]),
       astra:await ASTRA.status(key).catch(()=>({status:'AI_ERROR',hasKey:false})),
@@ -1352,7 +1352,9 @@ const server=http.createServer(async(req,res)=>{
       if(!APEX4_NATIVE_PREVIEW)return send(503,'NONE|CANDIDATE_DISABLED');
       const b=await body(req,2e6);
       if(b.environment!=='DEMO')return send(403,'NONE|DEMO_ONLY');
-      const v=await validateEa(b.license,b.account,{claim:false});
+      if(!NATIVE_STRATEGIES.includes(b.strategy))return send(200,'NONE|NOT_ARMED');
+      if(!nativeBasketStatus(b,Date.now(),false))return send(400,'NONE|INVALID_BASKET_STATUS');
+      const v=await validateEa(b.license,b.account,{claim:true});
       if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
       if(!throttle('apex4-native-outlook:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
       const cfg=await getLicenseConfig(v.key);
@@ -1374,7 +1376,7 @@ const server=http.createServer(async(req,res)=>{
       // Chat reads this sanitized terminal observation even when Outlook is off.
       await apex4Runtime().then(m=>m.observeNativeChat(v.key,snapshot)).catch(()=>{});
       if(cfg.armed!==true)return send(200,nativeStrategyWire({armed:false,strategy}));
-      if(strategy==='PULLBACK')return send(200,nativeStrategyWire({armed:true,strategy}));
+      if(strategy==='PULLBACK'||strategy==='OFF')return send(200,nativeStrategyWire({armed:true,strategy}));
       try{
         const hours=nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9');
         const now=Date.now();

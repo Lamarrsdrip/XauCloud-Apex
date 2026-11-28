@@ -235,3 +235,9 @@ export async function nativeOutlookForBasket(key,account,input,now,hours){
   return result;
  });
 }
+
+export async function nativeOutlookKnowledgeStatus(){
+ const k=await knowledge();
+ const rules=k?.rules?.length??0,strongCases=k?.history?.STRONG?.signals??0;
+ return {status:rules>0&&strongCases>0?'CALIBRATED_RULES_AVAILABLE':'OUTLOOK_GRADE_UNAVAILABLE',rules,strongCases,through:k?new Date(k.dataThrough).toISOString():null};
+}

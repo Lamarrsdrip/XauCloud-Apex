@@ -5,6 +5,15 @@
 input long InpApexBasketMagic = 90410001;
 input int InpApexOrderGapMilliseconds = 250;
 input bool InpApexNativePullbackEnabled = true;
+// Native tester is always offline. The same executor may run on an explicitly
+// opted-in USD hedging demo, never a real account in this candidate.
+input bool InpApexNativeDemoExecution = false;
+input string InpApexNativeLicense = "";
+input bool InpApexNativeLiveOutlook = true;
+bool apexDemoArmed=false,apexDemoLockHeld=false;
+string apexDemoState="",apexDemoLock="";
+long apexLastOutlookAt=0;
+ulong apexLastPoll=0;
 input bool InpApexReplayStrongOutlook = false;
 // Tester broker clock minus UTC, explicitly provided for the historical period.
 input int InpApexReplayBrokerUtcOffsetMinutes = 0;
@@ -25,6 +34,56 @@ bool apexBasketClosing=false,apexBasketFilled=false,apexBasketUncertain=false;
 int apexBasketOrders=0;
 
 bool ApexBasketTesterOnly(){return (bool)MQLInfoInteger(MQL_TESTER);}
+bool ApexBasketAllowed()
+{
+   return ApexBasketTesterOnly()||(InpApexNativeDemoExecution&&AccountInfoInteger(ACCOUNT_TRADE_MODE)==ACCOUNT_TRADE_MODE_DEMO);
+}
+bool ApexBasketCanStart(){return ApexBasketAllowed()&&(ApexBasketTesterOnly()||apexDemoArmed);}
+bool ApexBasketSave()
+{
+   if(ApexBasketTesterOnly())return true;
+   string draft=apexDemoState+".tmp";
+   int h=FileOpen(draft,FILE_WRITE|FILE_CSV|FILE_ANSI,'|');
+   if(h==INVALID_HANDLE)return false;
+   uint bytes=FileWrite(h,apexBasketSide,apexBasketAnchor,apexBasketTarget,apexBasketVolume,
+      (long)apexBasketLastSignal,apexLastOutlookAt,apexBasketOrders,(int)apexBasketClosing);
+   FileFlush(h);FileClose(h);
+   return bytes>0&&FileMove(draft,0,apexDemoState,FILE_REWRITE);
+}
+bool ApexBasketLoad()
+{
+   int h=FileOpen(apexDemoState,FILE_READ|FILE_CSV|FILE_ANSI,'|');
+   if(h==INVALID_HANDLE)return false;
+   int side=(int)FileReadNumber(h);
+   double anchor=FileReadNumber(h),target=FileReadNumber(h),volume=FileReadNumber(h);
+   datetime lastSignal=(datetime)FileReadNumber(h);
+   long lastOutlook=(long)FileReadNumber(h);
+   int orders=(int)FileReadNumber(h);bool closing=FileReadNumber(h)!=0;
+   FileClose(h);
+   if(side!=0&&side!=1&&side!=-1)return false;
+   if(side!=0&&(anchor<=5||volume<=0||MathAbs(target-anchor-side*5.0)>0.000001))return false;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+      if(PositionGetTicket(i)>0&&ApexBasketOwned())
+      {
+         int positionSide=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY?1:-1;
+         if(side!=positionSide||StringFind(PositionGetString(POSITION_COMMENT),"APEX_NATIVE_BASKET")!=0)return false;
+      }
+   apexBasketLastSignal=lastSignal;apexLastOutlookAt=lastOutlook;
+   if(ApexBasketPositions()>0||ApexBasketHasPending())
+   {
+      if(side==0)return false;
+      apexBasketSide=side;apexBasketAnchor=anchor;apexBasketTarget=target;apexBasketVolume=volume;
+      apexBasketOrders=orders;apexBasketClosing=closing;apexBasketFilled=ApexBasketPositions()>0;
+      // Resume managing an identified basket, not sending fresh orders after an ambiguous restart.
+      apexBasketUncertain=true;
+   }
+   return true;
+}
+void ApexBasketShutdown()
+{
+   if(apexReplayFile!=INVALID_HANDLE){FileClose(apexReplayFile);apexReplayFile=INVALID_HANDLE;}
+   if(apexDemoLockHeld){ApexBasketSave();GlobalVariableSet(apexDemoLock,0);GlobalVariablesFlush();apexDemoLockHeld=false;}
+}
 double ApexBasketClip(const double equity)
 {
    if(equity>=1000)return .50;
@@ -62,6 +121,7 @@ void ApexBasketReset()
 {
    apexBasketSide=0;apexBasketAnchor=0;apexBasketTarget=0;apexBasketVolume=0;
    apexBasketLastAttempt=-1;apexBasketClosing=false;apexBasketFilled=false;apexBasketUncertain=false;apexBasketOrders=0;
+   if(apexDemoLockHeld&&!ApexBasketSave())Print("APEX_NATIVE_STATE_SAVE_FAILED");
 }
 bool ApexBasketReadReplay()
 {
@@ -87,11 +147,30 @@ bool ApexBasketReadReplay()
 }
 bool ApexBasketInit()
 {
-   if(!ApexBasketTesterOnly()||InpApexBasketMagic<=0||InpApexOrderGapMilliseconds<1||
+   if(!ApexBasketAllowed()||InpApexBasketMagic<=0||InpApexOrderGapMilliseconds<1||
       AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING||
       AccountInfoString(ACCOUNT_CURRENCY)!="USD")return false;
-   if(ApexBasketPositions()>0||ApexBasketHasPending())return false;
-   if(InpApexReplayStrongOutlook)
+   if(ApexBasketTesterOnly()&&(ApexBasketPositions()>0||ApexBasketHasPending()))return false;
+   if(!ApexBasketTesterOnly())
+   {
+      if(StringFind(InpApexNativeLicense,"APEX-")!=0||StringLen(InpApexNativeLicense)>80)return false;
+      for(int i=0;i<StringLen(InpApexNativeLicense);i++)
+      {
+         ushort ch=StringGetCharacter(InpApexNativeLicense,i);
+         if(!((ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||ch=='-'))return false;
+      }
+      string scope=IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))+"."+IntegerToString(InpApexBasketMagic);
+      apexDemoState="ApexNativeBasket."+scope+".csv";apexDemoLock="AXN.LOCK."+scope;
+      if(!GlobalVariableTemp(apexDemoLock)||!GlobalVariableSetOnCondition(apexDemoLock,1,0))return false;
+      apexDemoLockHeld=true;
+      if(FileIsExist(apexDemoState))
+      {
+         if(!ApexBasketLoad()){GlobalVariableSet(apexDemoLock,0);apexDemoLockHeld=false;return false;}
+      }
+      else if(ApexBasketPositions()>0||ApexBasketHasPending())
+      {GlobalVariableSet(apexDemoLock,0);apexDemoLockHeld=false;return false;}
+   }
+   if(InpApexReplayStrongOutlook&&ApexBasketTesterOnly())
    {
       if(InpApexReplayBrokerUtcOffsetMinutes<-840||InpApexReplayBrokerUtcOffsetMinutes>840||
          InpApexReplayEntryFreshSeconds<1||InpApexReplayEntryFreshSeconds>60)return false;
@@ -103,12 +182,13 @@ bool ApexBasketInit()
    apexNativeTrade.SetAsyncMode(false);
    apexNativeTrade.SetTypeFillingBySymbol(_Symbol);
    apexNativeTrade.SetDeviationInPoints(10);
-   Print("APEX_NATIVE_TESTER | XauCloud v6.29.1 | no SL | fixed $5 basket target | broker margin only");
+   Print("APEX_NATIVE ",ApexBasketTesterOnly()?"TESTER":"DEMO"," | XauCloud v6.29.1 | no SL | fixed $5 basket target | broker margin only");
    return true;
 }
 void ApexBasketClose()
 {
    apexBasketClosing=true;
+   if(apexDemoLockHeld&&!ApexBasketSave())Print("APEX_NATIVE_CLOSE_STATE_SAVE_FAILED");
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
       ulong ticket=PositionGetTicket(i);
@@ -124,7 +204,7 @@ void ApexBasketClose()
 }
 void ApexBasketManage()
 {
-   if(!ApexBasketTesterOnly()||apexBasketSide==0)return;
+   if(!ApexBasketAllowed()||apexBasketSide==0)return;
    MqlTick q;
    if(!SymbolInfoTick(_Symbol,q)||q.bid<=0||q.ask<q.bid)return;
    if(apexBasketFilled&&ApexBasketPositions()==0&&!ApexBasketHasPending())
@@ -134,7 +214,7 @@ void ApexBasketManage()
    }
    if(apexBasketClosing||apexBasketSide*((apexBasketSide>0?q.bid:q.ask)-apexBasketTarget)>=0)
    {ApexBasketClose();return;}
-   if(apexBasketUncertain||ApexBasketHasPending()||ApexBasketOtherExposure())return;
+   if(!ApexBasketCanStart()||apexBasketUncertain||ApexBasketHasPending()||ApexBasketOtherExposure())return;
    if(apexBasketLastAttempt>=0&&q.time_msc-apexBasketLastAttempt<InpApexOrderGapMilliseconds)return;
    apexBasketLastAttempt=q.time_msc;
    double price=apexBasketSide>0?q.ask:q.bid;
@@ -149,6 +229,7 @@ void ApexBasketManage()
    if(sent&&(ret==TRADE_RETCODE_DONE||ret==TRADE_RETCODE_DONE_PARTIAL)&&apexNativeTrade.ResultDeal()>0)
    {
       apexBasketFilled=true;apexBasketOrders++;
+      if(!ApexBasketSave()){apexBasketUncertain=true;Print("APEX_NATIVE_FILL_STATE_SAVE_FAILED");}
       Print("APEX_NATIVE_FILL #",apexBasketOrders," vol=",apexNativeTrade.ResultVolume()," price=",apexNativeTrade.ResultPrice()," target=",apexBasketTarget);
       return;
    }
@@ -160,7 +241,7 @@ void ApexBasketManage()
 }
 bool ApexBasketStart(const int dir,const double anchor,const string source)
 {
-   if(!ApexBasketTesterOnly()||apexBasketSide!=0||ApexBasketPositions()>0||
+   if(!ApexBasketCanStart()||apexBasketSide!=0||ApexBasketPositions()>0||
       ApexBasketHasPending()||ApexBasketOtherExposure()||(dir!=1&&dir!=-1)||anchor<=5)return false;
    MqlTick q;if(!SymbolInfoTick(_Symbol,q)||q.bid<=0||q.ask<q.bid)return false;
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
@@ -170,6 +251,7 @@ bool ApexBasketStart(const int dir,const double anchor,const string source)
    if(vol<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)||vol>SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX))return false;
    if(dir*((dir>0?q.ask:q.bid)-(anchor+dir*5.0))>=0)return false;
    apexBasketSide=dir;apexBasketAnchor=anchor;apexBasketTarget=anchor+dir*5.0;apexBasketVolume=vol;
+   if(!ApexBasketSave()){ApexBasketReset();return false;}
    Print("APEX_NATIVE_PLAN ",source," dir=",dir," anchor=",apexBasketAnchor," target=",apexBasketTarget," clip=",vol);
    ApexBasketManage();
    if(!apexBasketFilled&&!apexBasketUncertain&&!ApexBasketHasPending()&&ApexBasketPositions()==0)
@@ -178,6 +260,34 @@ bool ApexBasketStart(const int dir,const double anchor,const string source)
       ApexBasketReset();return false;
    }
    return true;
+}
+void ApexBasketLiveOutlookTick()
+{
+   if(ApexBasketTesterOnly()||!ApexBasketAllowed())return;
+   ulong now=GetTickCount64();if(apexLastPoll>0&&now-apexLastPoll<1000)return;apexLastPoll=now;
+   string payload=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"environment\":\"DEMO\",\"basketActive\":%s,\"side\":%d,\"anchor\":%.8f,\"target\":%.8f,\"positions\":%d,\"orders\":%d}",
+      InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),apexBasketSide!=0?"true":"false",apexBasketSide,
+      apexBasketAnchor,apexBasketTarget,ApexBasketPositions(),apexBasketOrders);
+   char data[],result[];string headers;
+   StringToCharArray(payload,data,0,WHOLE_ARRAY,CP_UTF8);ArrayResize(data,ArraySize(data)-1);
+   int status=WebRequest("POST","https://apex.xaucloud.io/api/apex/v4/native-outlook","Content-Type: application/json\r\n",1000,data,result,headers);
+   string line=CharArrayToString(result,0,-1,CP_UTF8),parts[];
+   if(status==401||status==403||line=="NONE|NOT_ARMED"||line=="NONE|CANDIDATE_DISABLED"){apexDemoArmed=false;return;}
+   // No new Outlook may originate during an outage. Native demo execution,
+   // once armed this session, retains its local recognition and exit logic.
+   if(status!=200)return;
+   if(line=="NONE|ARMED_NO_PLAN"){apexDemoArmed=true;return;}
+   int n=StringSplit(line,'|',parts);
+   if(n!=7||parts[0]!="NATIVE"||(parts[2]!="BUY"&&parts[2]!="SELL"))return;
+   int side=parts[2]=="BUY"?1:-1;
+   double anchor=StringToDouble(parts[3]),target=StringToDouble(parts[4]);
+   long at=StringToInteger(parts[5]),expires=StringToInteger(parts[6]),utc=(long)TimeGMT();
+   if(anchor<=5||MathAbs(target-anchor-side*5.0)>0.000001||at>utc||utc>=expires||utc-at>60)return;
+   apexDemoArmed=true;
+   if(!InpApexNativeLiveOutlook||at<=apexLastOutlookAt)return;
+   apexLastOutlookAt=at;
+   if(!ApexBasketSave()){apexDemoArmed=false;return;}
+   ApexBasketStart(side,anchor,"CANONICAL_STRONG_OUTLOOK:"+parts[1]);
 }
 void ApexBasketReplayTick()
 {
@@ -237,7 +347,7 @@ bool ApexClassroomObserve(const int dir,const bool continuation,const double quo
 }
 void ApexBasketConsiderNative()
 {
-   if(!ApexBasketTesterOnly()||!InpApexNativePullbackEnabled||apexBasketSide!=0||
+   if(!ApexBasketCanStart()||!InpApexNativePullbackEnabled||apexBasketSide!=0||
       ApexBasketPositions()>0||ApexBasketHasPending()||ApexBasketOtherExposure())return;
    if(!g_m10Snapshot.complete||g_m10Snapshot.freshnessState!="FRESH"||
       g_m10Snapshot.closedBarTime!=iTime(_Symbol,PERIOD_M10,1)||

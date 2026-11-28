@@ -9,7 +9,6 @@ input bool InpApexReplayStrongOutlook = false;
 // Tester broker clock minus UTC, explicitly provided for the historical period.
 input int InpApexReplayBrokerUtcOffsetMinutes = 0;
 input int InpApexReplayEntryFreshSeconds = 25;
-#property tester_file "Apex4StrongOutlook.csv"
 int apexReplayFile=INVALID_HANDLE;
 long apexReplayAt=0,apexReplayExpires=0,apexReplayLastAt=0;
 int apexReplaySide=0;
@@ -75,7 +74,6 @@ bool ApexBasketReadReplay()
    string price=FileReadString(apexReplayFile);
    string grade=FileReadString(apexReplayFile);
    string hour=FileReadString(apexReplayFile);
-   if(!FileIsLineEnding(apexReplayFile)&&!FileIsEnding(apexReplayFile))return false;
    long t=StringToInteger(at),expires=StringToInteger(until);
    int watHour=(int)StringToInteger(hour);
    MqlDateTime utc;

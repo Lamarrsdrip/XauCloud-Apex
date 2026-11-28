@@ -17,7 +17,8 @@ const [original, evidence, core, zone, quality] = await Promise.all([
   load('marketOutlookConfidence'), load('aiOutlookQuality'),
 ]);
 const k = qualityPath ? JSON.parse(await readFile(qualityPath, 'utf8')) : null;
-const stats = { lines: 0, accepted: 0, neutralOrBlocked: 0, executable: 0, classified: 0,
+const stats = { lines: 0, accepted: 0, hourlyWindow: 0, hourlyWindowTrackingPlans: 0,
+  noCommonTrackingPlan: 0, commonTrackingPlans: 0, classified: 0,
   differences: { direction: 0, confidence: 0, eligibility: 0, entry: 0, sl: 0, tp1: 0, tp2: 0, classification: 0 } };
 const r2 = x => Math.round(x*100)/100;
 const safeEqual = (a,b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a-b) < 1e-8;
@@ -30,6 +31,8 @@ for await (const line of createInterface({input: createReadStream(capturePath, '
     environment: row.environment, now, quote: row.quote });
   if (!source) continue;
   stats.accepted++;
+  const inHourlyWindow = now % 3600000 < 25000;
+  if (inHourlyWindow) stats.hourlyWindow++;
   const fields = { m10_signal: row.m10Signal, entry_readiness: row.entryReadiness, market_thesis: row.thesis };
   const actualBias = resolveHourlyBias(source.canonicalM10, source.thesis);
   const referenceM10 = evidence.canonicalM10Signal(fields);
@@ -55,11 +58,12 @@ for await (const line of createInterface({input: createReadStream(capturePath, '
   const actualPlan = outlookFromCanonicalEvidence(source,now);
   if (!!expectedAnchor !== !!actualPlan) stats.differences.eligibility++;
   if (expectedAnchor && actualPlan) {
-    stats.executable++;
+    stats.commonTrackingPlans++;
+    if (inHourlyWindow) stats.hourlyWindowTrackingPlans++;
     for (const [key,expected] of Object.entries({entry:expectedAnchor.tracking_entry_price,sl:levels.suggested_sl,tp1:targets[0],tp2:targets[1]})) {
       if (!safeEqual(actualPlan[key],expected)) stats.differences[key]++;
     }
-  } else stats.neutralOrBlocked++;
+  } else stats.noCommonTrackingPlan++;
   // Classification needs independently aligned closed M1 features and the
   // identical already-trained rule artifact for the two engines.
   if (k && row.caseFeatures) {

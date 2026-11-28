@@ -67,3 +67,25 @@ reported separately. The original production scheduler also applies database
 selection, current quote continuity, owner-account state and Global Brain
 logic. A same-packet comparison cannot establish parity for those conditions,
 actual trading results, or profitability.
+
+## Verified replay
+
+MetaEditor compiled the generated observer with zero errors and zero warnings.
+The generated MQ5 SHA-256 is
+`7bae39ab159f7627417b962f83ef2661e76af4c6beb5c51905eed1ec6c5b8652`.
+The resulting EX5 SHA-256 is
+`7c3eef76069d07f02257758f2abdd6be32ae58c1baed52dbd25e72f4808d1b32`.
+
+On November 28, 2026, isolated MT5 build 6230 completed a no-order replay of
+Exness `XAUUSDm` for November 23 using the broker's M1 OHLC history. MT5
+reported 5,512 modeled ticks and 138 M10 bars. The observer emitted 137
+closed-bar packets with complete higher-timeframe data. The two engines
+matched direction, confidence, and tracking eligibility on all 137 packets.
+There were 74 comparable tracking plans and zero differences in entry, SL,
+TP1, or TP2. Within Apex's 25-second hourly window, 13 of 22 snapshots
+produced comparable tracking plans. The remaining 63 of the full 137
+packets had no valid tracking levels in either engine. The capture SHA-256 is
+`06c05c1cb9551adb2c914096ff942c15d1206d82ab567914328a8027abbe34a3`.
+This run had zero simulated trades. The verdict covers the same-packet
+logic only. Quality grade agreement, production scheduler behavior, and
+live demo fills remain unverified by this replay.

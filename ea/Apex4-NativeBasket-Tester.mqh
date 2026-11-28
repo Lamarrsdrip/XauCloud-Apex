@@ -33,7 +33,8 @@ datetime apexBasketLastSignal=0;
 bool apexBasketClosing=false,apexBasketFilled=false,apexBasketUncertain=false;
 int apexBasketOrders=0;
 double apexBasketLastFillVolume=0;
-ulong apexBasketLastWallAttempt=0;
+ulong apexBasketLastWallAttempt=0,apexBasketLastFillWall=0;
+double apexBasketRetryCeiling=0;
 
 bool ApexBasketTesterOnly(){return (bool)MQLInfoInteger(MQL_TESTER);}
 bool ApexBasketAllowed()
@@ -122,7 +123,7 @@ bool ApexBasketOtherExposure()
 void ApexBasketReset()
 {
    apexBasketSide=0;apexBasketAnchor=0;apexBasketTarget=0;apexBasketVolume=0;
-   apexBasketLastAttempt=-1;apexBasketLastWallAttempt=0;apexBasketClosing=false;apexBasketFilled=false;apexBasketUncertain=false;apexBasketOrders=0;apexBasketLastFillVolume=0;
+   apexBasketLastAttempt=-1;apexBasketLastWallAttempt=0;apexBasketClosing=false;apexBasketFilled=false;apexBasketUncertain=false;apexBasketOrders=0;apexBasketLastFillVolume=0;apexBasketLastFillWall=0;apexBasketRetryCeiling=0;
    if(apexDemoLockHeld&&!ApexBasketSave())Print("APEX_NATIVE_STATE_SAVE_FAILED");
 }
 bool ApexBasketReadReplay()
@@ -184,7 +185,7 @@ bool ApexBasketInit()
    apexNativeTrade.SetAsyncMode(false);
    apexNativeTrade.SetTypeFillingBySymbol(_Symbol);
    apexNativeTrade.SetDeviationInPoints(10);
-   Print("APEX_NATIVE ",ApexBasketTesterOnly()?"TESTER":"DEMO"," | XauCloud v6.29.1 | no SL | fixed $5 basket target | broker margin only");
+   Print("APEX_NATIVE ",ApexBasketTesterOnly()?"TESTER":"DEMO"," | XauCloud v6.29.1 | no SL | fixed $5 basket target | dynamic broker margin | pacing=",InpApexOrderGapMilliseconds,"ms");
    return true;
 }
 void ApexBasketClose()
@@ -212,6 +213,7 @@ ENUM_ORDER_TYPE_FILLING ApexBasketFilling()
    long flags=SymbolInfoInteger(_Symbol,SYMBOL_FILLING_MODE);
    if((flags&SYMBOL_FILLING_FOK)!=0)return ORDER_FILLING_FOK;
    if((flags&SYMBOL_FILLING_IOC)!=0)return ORDER_FILLING_IOC;
+   if(SymbolInfoInteger(_Symbol,SYMBOL_TRADE_EXEMODE)==SYMBOL_TRADE_EXECUTION_MARKET)return ORDER_FILLING_FOK;
    return ORDER_FILLING_RETURN;
 }
 double ApexBasketAffordableVolume(const ENUM_ORDER_TYPE type,const double price,const double ceiling)
@@ -230,7 +232,12 @@ double ApexBasketAffordableVolume(const ENUM_ORDER_TYPE type,const double price,
       req.type=type;req.volume=vol;req.price=price;req.deviation=10;req.type_filling=ApexBasketFilling();
       req.sl=0;req.tp=0;req.comment="APEX_NATIVE_BASKET";
       ResetLastError();
-      if(OrderCheck(req,check)&&check.retcode==TRADE_RETCODE_DONE&&check.margin_free>=-1e-8)return vol;
+      bool checked=OrderCheck(req,check);
+      if(checked&&(check.retcode==0||check.retcode==TRADE_RETCODE_DONE))
+      {
+         if(check.margin_free>=-1e-8)return vol;
+         continue;
+      }
       // Invalid volume/limit can be satisfied by a smaller order. All
       // unknown errors fail closed, rather than spinning on broker errors.
       if(check.retcode!=TRADE_RETCODE_NO_MONEY&&check.retcode!=TRADE_RETCODE_INVALID_VOLUME&&check.retcode!=TRADE_RETCODE_LIMIT_VOLUME)
@@ -263,8 +270,9 @@ void ApexBasketManage()
    double price=apexBasketSide>0?q.ask:q.bid;
    if(apexBasketSide*(apexBasketTarget-price)<=0)return;
    ENUM_ORDER_TYPE type=apexBasketSide>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
-   double volume=ApexBasketAffordableVolume(type,price,apexBasketVolume);
-   if(volume<=0)return;
+   double ceiling=apexBasketRetryCeiling>0?MathMin(apexBasketVolume,apexBasketRetryCeiling):apexBasketVolume;
+   double volume=ApexBasketAffordableVolume(type,price,ceiling);
+   if(volume<=0){apexBasketRetryCeiling=0;return;}
    apexNativeTrade.SetTypeFilling(ApexBasketFilling());
    // No SL, broker TP, arbitrary holding deadline, or software layer/risk cap.
    // The basket owns its fixed exit. Broker restrictions and stop-out still apply.
@@ -272,12 +280,18 @@ void ApexBasketManage()
    uint ret=apexNativeTrade.ResultRetcode();
    if(sent&&(ret==TRADE_RETCODE_DONE||ret==TRADE_RETCODE_DONE_PARTIAL)&&apexNativeTrade.ResultDeal()>0)
    {
-      apexBasketFilled=true;apexBasketOrders++;apexBasketLastFillVolume=apexNativeTrade.ResultVolume();
+      apexBasketFilled=true;apexBasketOrders++;apexBasketLastFillVolume=apexNativeTrade.ResultVolume();apexBasketLastFillWall=GetTickCount64();apexBasketRetryCeiling=0;
       if(!ApexBasketSave()){apexBasketUncertain=true;Print("APEX_NATIVE_FILL_STATE_SAVE_FAILED");}
       Print("APEX_NATIVE_FILL #",apexBasketOrders," vol=",apexNativeTrade.ResultVolume()," price=",apexNativeTrade.ResultPrice()," target=",apexBasketTarget);
       return;
    }
-   if(ret==TRADE_RETCODE_NO_MONEY||ret==TRADE_RETCODE_INVALID_VOLUME||ret==TRADE_RETCODE_LIMIT_VOLUME||ret==TRADE_RETCODE_REQUOTE||ret==TRADE_RETCODE_PRICE_CHANGED||
+   if(ret==TRADE_RETCODE_NO_MONEY||ret==TRADE_RETCODE_INVALID_VOLUME||ret==TRADE_RETCODE_LIMIT_VOLUME)
+   {
+      double next=NormalizeDouble(volume-SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP),8);
+      apexBasketRetryCeiling=next>=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)?next:0;
+      return;
+   }
+   if(ret==TRADE_RETCODE_REQUOTE||ret==TRADE_RETCODE_PRICE_CHANGED||
       ret==TRADE_RETCODE_PRICE_OFF||ret==TRADE_RETCODE_MARKET_CLOSED||ret==TRADE_RETCODE_TOO_MANY_REQUESTS)return;
    Print("APEX_NATIVE_ORDER_REJECT_OR_UNCERTAIN ret=",ret);
    // Avoid duplicate exposure after an ambiguous broker result.
@@ -305,13 +319,48 @@ bool ApexBasketStart(const int dir,const double anchor,const string source)
    }
    return true;
 }
+string ApexBasketBarsJson()
+{
+   static datetime last=0;
+   static string cache="";
+   datetime closed=iTime(_Symbol,PERIOD_M1,1);
+   if(closed<=0)return "[]";
+   if(last==closed&&cache!="")return cache;
+   MqlRates bars[];
+   ArraySetAsSeries(bars,false);
+   int n=CopyRates(_Symbol,PERIOD_M1,1,7500,bars);
+   if(n<450)return "[]";
+   long offset=(long)MathRound((double)(TimeTradeServer()-TimeGMT())/60.0)*60;
+   string json="[";
+   for(int i=0;i<n;i++)
+   {
+      if(i>0)json+=",";
+      json+=StringFormat("{\"t\":%I64d,\"o\":%.8f,\"h\":%.8f,\"l\":%.8f,\"c\":%.8f}",
+         ((long)bars[i].time-offset)*1000,bars[i].open,bars[i].high,bars[i].low,bars[i].close);
+   }
+   cache=json+"]";last=closed;return cache;
+}
 void ApexBasketLiveOutlookTick()
 {
    if(ApexBasketTesterOnly()||!ApexBasketAllowed())return;
-   ulong now=GetTickCount64();if(apexLastPoll>0&&now-apexLastPoll<1000)return;apexLastPoll=now;
-   string payload=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"environment\":\"DEMO\",\"basketActive\":%s,\"side\":%d,\"anchor\":%.8f,\"target\":%.8f,\"positions\":%d,\"orders\":%d}",
+   ulong now=GetTickCount64();
+   // Synchronous HTTP must not interrupt the rapid fill loop. Once the
+   // broker cannot fund another order, normal telemetry/polling resumes.
+   if(apexBasketSide!=0&&apexBasketLastFillWall>0&&now-apexBasketLastFillWall<250)return;
+   ulong interval=apexBasketSide!=0?5000:1000;
+   if(apexLastPoll>0&&now-apexLastPoll<interval)return;
+   apexLastPoll=now;
+   string payload=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"environment\":\"DEMO\",\"basketActive\":%s,\"side\":%d,\"anchor\":%.8f,\"target\":%.8f,\"positions\":%d,\"orders\":%d,\"preferredVolume\":%.8f,\"lastFillVolume\":%.8f,\"freeMargin\":%.8f,\"equity\":%.8f,\"orderGapMs\":%d}",
       InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),apexBasketSide!=0?"true":"false",apexBasketSide,
-      apexBasketAnchor,apexBasketTarget,ApexBasketPositions(),apexBasketOrders);
+      apexBasketAnchor,apexBasketTarget,ApexBasketPositions(),apexBasketOrders,apexBasketVolume,apexBasketLastFillVolume,
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE),AccountInfoDouble(ACCOUNT_EQUITY),InpApexOrderGapMilliseconds);
+   long utc=(long)TimeGMT();
+   if(InpApexNativeLiveOutlook&&apexBasketSide==0&&utc%3600<60&&apexNativeEvidencePacket!="")
+   {
+      payload=StringSubstr(payload,0,StringLen(payload)-1)+",\"brokerServer\":\""+
+        BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),80)+"\",\"nativeEvidence\":"+apexNativeEvidencePacket+
+        ",\"bars\":"+ApexBasketBarsJson()+"}";
+   }
    char data[],result[];string headers;
    StringToCharArray(payload,data,0,WHOLE_ARRAY,CP_UTF8);ArrayResize(data,ArraySize(data)-1);
    int status=WebRequest("POST","https://apex.xaucloud.io/api/apex/v4/native-outlook","Content-Type: application/json\r\n",1000,data,result,headers);
@@ -325,7 +374,7 @@ void ApexBasketLiveOutlookTick()
    if(n!=7||parts[0]!="NATIVE"||(parts[2]!="BUY"&&parts[2]!="SELL"))return;
    int side=parts[2]=="BUY"?1:-1;
    double anchor=StringToDouble(parts[3]),target=StringToDouble(parts[4]);
-   long at=StringToInteger(parts[5]),expires=StringToInteger(parts[6]),utc=(long)TimeGMT();
+   long at=StringToInteger(parts[5]),expires=StringToInteger(parts[6]);
    if(anchor<=5||MathAbs(target-anchor-side*5.0)>0.000001||at>utc||utc>=expires||utc-at>60)return;
    apexDemoArmed=true;
    if(!InpApexNativeLiveOutlook||at<=apexLastOutlookAt)return;

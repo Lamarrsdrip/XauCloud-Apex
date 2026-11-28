@@ -459,7 +459,7 @@ function renderNav(){
   bottomnav.style.gridTemplateColumns=showLab?'':'repeat(4,minmax(0,1fr))';
   var groups=[{name:'WORKSPACE',ids:['dashboard','campaigns','history']},{name:'INTELLIGENCE',ids:['ai','lab','learning']},{name:'MANAGEMENT',ids:['settings','account']}];
   sidebar.innerHTML=groups.map(function(g){return '<div class="nav-group"><div class="nav-caption">'+g.name+'</div>'+g.ids.filter(visibleItem).map(function(id){return item(NAV.find(function(n){return n.id===id;}),false);}).join('')+'</div>';}).join('')+'<div class="sidebar-footer"><span>PRIVATE WORKSPACE</span><button class="navitem" id="logout-btn"><span class="ic">&#10162;</span><span>Sign out</span></button></div>';
-  bottomnav.innerHTML=['dashboard','campaigns','ai','lab','settings'].filter(visibleItem).map(function(id){return item(NAV.find(function(n){return n.id===id;}),true);}).join('');
+  bottomnav.innerHTML=['dashboard','campaigns','ai','lab','settings'].map(function(id){return visibleItem(id)?item(NAV.find(function(n){return n.id===id;}),true):'';}).join('');
   var accountButton=document.getElementById('shell-account');if(accountButton)accountButton.onclick=function(){location.hash='#account';};
   Array.prototype.forEach.call(document.querySelectorAll('[data-nav]'), function(el){
     el.addEventListener('click', function(){ location.hash = '#'+el.getAttribute('data-nav'); });

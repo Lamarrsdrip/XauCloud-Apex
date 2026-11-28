@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createAstraService } from './astra/service.mjs';
 import { createReleaseStore } from './release-store.mjs';
 import { strategyFixtures } from './astra/fixtures.mjs';
+import { canonicalStrongBasket, nativeOutlookHours } from './intelligence/apex4-native-basket-contract.mjs';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'),'utf8'));
@@ -1319,6 +1320,31 @@ const server=http.createServer(async(req,res)=>{
         bridge:{configured:bridgeConfigured(),sync:bridgeSyncState},
         secretsAcceptableForProduction:secretProblems().length===0,
         link:'command-center-style'});
+
+    // Native basket contract: read canonical Outlook, never synthesize a
+    // direction or re-grade a private signal. Separate from the old v4 wire.
+    if(req.method==='POST'&&u.pathname==='/api/apex/v4/native-outlook'){
+      const send=(status,txt)=>{
+        res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
+        res.end(txt);
+      };
+      if(process.env.APEX4_NATIVE_BASKET!=='1')return send(503,'NONE|CANDIDATE_DISABLED');
+      const b=await body(req,8192);
+      if(b.environment!=='DEMO')return send(403,'NONE|DEMO_ONLY');
+      const v=await validateEa(b.license,b.account,{claim:false});
+      if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
+      if(!throttle('apex4-native-outlook:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
+      const cfg=await getLicenseConfig(v.key);
+      if(cfg.armed!==true)return send(200,'NONE|NOT_ARMED');
+      try{
+        const hours=nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9');
+        const response=await bridgeRequest('/api/cloud/apex/bridge/strong-outlook',{timeoutMs:800});
+        const signal=response.signal,now=Date.now();
+        const plan=canonicalStrongBasket(signal,hours,now);
+        if(!plan||!/^[A-Za-z0-9_-]{1,100}$/.test(plan.id))return send(200,'NONE|ARMED_NO_PLAN');
+        return send(200,['NATIVE',plan.id,plan.side,plan.anchor,plan.target,Math.floor(signal.publishedAt/1000),Math.floor(signal.expiresAt/1000)].join('|'));
+      }catch{return send(503,'NONE|CANONICAL_OUTLOOK_UNAVAILABLE');}
+    }
 
     // Apex v4 candidate is a separate, provider-free backend mode. The stable
     // deployment stays unchanged unless the staging operator enables it.

@@ -1370,6 +1370,8 @@ const server=http.createServer(async(req,res)=>{
           current.lastAccount=String(b.account);await writeLicenses(all);
         }
       });
+      // Chat reads this sanitized terminal observation even when Outlook is off.
+      await apex4Runtime().then(m=>m.observeNativeChat(v.key,snapshot)).catch(()=>{});
       if(cfg.armed!==true)return send(200,nativeStrategyWire({armed:false,strategy}));
       if(strategy==='PULLBACK')return send(200,nativeStrategyWire({armed:true,strategy}));
       try{

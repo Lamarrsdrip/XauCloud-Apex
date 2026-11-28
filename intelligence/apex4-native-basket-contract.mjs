@@ -67,6 +67,7 @@ export function nativeBasketStatus(input,now,armed){
   preferredVolume:preferred,lastFillVolume:last,freeMargin:optionalFinite(input.freeMargin),equity:optionalFinite(input.equity),
   orderGapMs:Number.isSafeInteger(input.orderGapMs)&&input.orderGapMs>0?input.orderGapMs:null,
   strategy:NATIVE_STRATEGIES.includes(input.strategy)?input.strategy:null,
+  quote:input.quote&&Number.isFinite(input.quote.bid)&&Number.isFinite(input.quote.ask)&&input.quote.bid>0&&input.quote.ask>=input.quote.bid&&Number.isSafeInteger(input.quote.atMs)&&input.quote.atMs<=now+2000&&now-input.quote.atMs<=3000?{bid:input.quote.bid,ask:input.quote.ask,atMs:input.quote.atMs}:null,
   entrySource:typeof input.entrySource==='string'?input.entrySource.slice(0,100):null,
   diagnostic:typeof input.diagnostic==='string'?input.diagnostic.slice(0,200):null,
   buyScore:Number.isSafeInteger(input.buyScore)&&input.buyScore>=0&&input.buyScore<=30?input.buyScore:null,

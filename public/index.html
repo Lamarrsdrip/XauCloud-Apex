@@ -1010,7 +1010,7 @@ function activateSettingsTab(tab){
 function pageSettings(me){
   if(me.candidate?.mode==='APEX4_NATIVE_BASKET'){
     return '<div class="settings-top"><h1 class="page-title">Settings</h1><p class="page-sub">Apex · Gold trading</p></div>'
-      +releaseCard(me)+armDisarmCard(me)+apex4IntelligencePanel(me.candidate)
+      +releaseCard(me)+armDisarmCard(me)+apex4IntelligencePanel(me.candidate)+(window.AstraUI?window.AstraUI.card(me,true):'')
       +'<div class="card"><h3>MT5 setup</h3><p>Compile the native candidate. Strategy Tester requires no API or backend. Demo Outlook uses only https://apex.xaucloud.io; enable native demo execution explicitly in MT5. This is not a customer release.</p></div>';
   }
 

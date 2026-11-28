@@ -9,14 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { createAstraService } from './astra/service.mjs';
 import { createReleaseStore } from './release-store.mjs';
 import { strategyFixtures } from './astra/fixtures.mjs';
-import { canonicalStrongBasket, nativeOutlookHours, nativeBasketStatus } from './intelligence/apex4-native-basket-contract.mjs';
+import { canonicalStrongBasket, nativeOutlookHours, nativeBasketStatus, nativeStrategy, nativeStrategyWire, NATIVE_STRATEGIES } from './intelligence/apex4-native-basket-contract.mjs';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'),'utf8'));
 const CONFIG_SCHEMA=Number(MANIFEST.configSchema||2);
 const PORT=Number(process.env.PORT||8787);
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
-const APEX4_NATIVE_PREVIEW=process.env.APEX4_NATIVE_BASKET==='1';
+const APEX4_NATIVE_PREVIEW=process.env.APEX4_NATIVE_BASKET==='1'||(IS_PRODUCTION&&process.env.APEX4_NATIVE_BASKET!=='0');
 const APEX4_PREVIEW=!APEX4_NATIVE_PREVIEW&&process.env.APEX4_CANDIDATE==='1';
 let apex4RuntimePromise;
 function apex4Runtime(){
@@ -1156,6 +1156,7 @@ async function buildMe(key){
   const native=lic?.nativeBasket;
   const nativeFresh=!!native&&Date.now()-native.observedAt<=8000&&Date.now()>=native.observedAt;
   const candidate=nativePreview?{mode:'APEX4_NATIVE_BASKET',status:nativeFresh?(native.terminalArmed===true?'ARMED':native.terminalArmed===false?'DISARMED':'AWAITING_ARM_ACK'):'AWAITING_NATIVE_TERMINAL',
+    strategy:nativeStrategy(lic?.nativeStrategy),appliedStrategy:nativeFresh?native.strategy:null,
     fresh:nativeFresh,basket:nativeFresh?native:null,hoursWAT:nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9'),
     outlookKnowledge:await apex4Runtime().then(m=>m.nativeOutlookKnowledgeStatus()).catch(()=>({status:'OUTLOOK_GRADE_UNAVAILABLE',rules:0,strongCases:0})),
     execution:'DEMO_ONLY',modelExecution:false}
@@ -1177,6 +1178,7 @@ async function buildMe(key){
       account:{account:lic.account||null,currency:'USD',equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
         openPositions:nativeFresh?native.positions:null,asOf:at},
       campaign:null,history:[],recentHuman:[],settings:settingsView(cfg),learning:learningShape([]),
+      astra:await ASTRA.status(key).catch(()=>({status:'AI_ERROR',hasKey:false})),
       bridge:{configured:false,ok:false,reason:'INDEPENDENT_NATIVE_MODE'}};
   }
   const bridge=await readBridgeStatusSafe(key);
@@ -1354,18 +1356,25 @@ const server=http.createServer(async(req,res)=>{
       if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
       if(!throttle('apex4-native-outlook:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
       const cfg=await getLicenseConfig(v.key);
+      const strategy=nativeStrategy(v.lic?.nativeStrategy);
+      // Previous protocol terminals cannot acknowledge strategy switching.
+      // Leave their open positions managed locally but pause new entries.
+      if(!NATIVE_STRATEGIES.includes(b.strategy))return send(200,'NONE|NOT_ARMED');
       const snapshot=nativeBasketStatus(b,Date.now(),cfg.armed===true);
       if(!snapshot)return send(400,'NONE|INVALID_BASKET_STATUS');
       await withLock('lic:'+v.key,async()=>{
         const all=await readLicenses(),current=all[v.key];
         if(licenseStatusFor(current)!=='ACTIVE'||String(current.account||'')!==String(b.account||''))return;
         const prev=current.nativeBasket;
-        if(!prev||snapshot.observedAt-prev.observedAt>=5000||prev.active!==snapshot.active||prev.positions!==snapshot.positions||prev.armed!==snapshot.armed||prev.terminalArmed!==snapshot.terminalArmed){
+        if(!prev||snapshot.observedAt-prev.observedAt>=5000||prev.active!==snapshot.active||prev.positions!==snapshot.positions||prev.armed!==snapshot.armed||prev.terminalArmed!==snapshot.terminalArmed||prev.strategy!==snapshot.strategy||prev.diagnostic!==snapshot.diagnostic){
           current.nativeBasket=snapshot;current.lastSeen=new Date(snapshot.observedAt).toISOString();
           current.lastAccount=String(b.account);await writeLicenses(all);
         }
       });
-      if(cfg.armed!==true)return send(200,'NONE|NOT_ARMED');
+      // Chat reads this sanitized terminal observation even when Outlook is off.
+      await apex4Runtime().then(m=>m.observeNativeChat(v.key,snapshot)).catch(()=>{});
+      if(cfg.armed!==true)return send(200,nativeStrategyWire({armed:false,strategy}));
+      if(strategy==='PULLBACK')return send(200,nativeStrategyWire({armed:true,strategy}));
       try{
         const hours=nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9');
         const now=Date.now();
@@ -1373,12 +1382,11 @@ const server=http.createServer(async(req,res)=>{
         res.setHeader('X-Apex-Outlook-Status',result.status);
         const signal=result.signal;
         const plan=canonicalStrongBasket(signal,hours,now);
-        if(!plan||!/^[A-Za-z0-9_-]{1,100}$/.test(plan.id))return send(200,'NONE|ARMED_NO_PLAN');
-        return send(200,['NATIVE',plan.id,plan.side,plan.anchor,plan.target,Math.floor(signal.publishedAt/1000),Math.floor(signal.expiresAt/1000)].join('|'));
+        return send(200,nativeStrategyWire({armed:true,strategy,plan:plan&&/^[A-Za-z0-9_-]{1,100}$/.test(plan.id)?plan:null,signal}));
       }catch{
         // A failed Outlook source must not disable already authorized native demo recognition.
         res.setHeader('X-Apex-Outlook-Status','CANONICAL_OUTLOOK_UNAVAILABLE');
-        return send(200,'NONE|ARMED_NO_PLAN');
+        return send(200,nativeStrategyWire({armed:true,strategy}));
       }
     }
 
@@ -1449,7 +1457,7 @@ const server=http.createServer(async(req,res)=>{
         catch{return json(res,400,{status:'INVALID_MARKET_CONTEXT'});}
       }
       if(u.pathname==='/api/apex/astra/context'){
-        if(process.env.APEX4_CANDIDATE==='1')return json(res,200,{status:'DISABLED',fallbackReason:'APEX4_CHAT_ONLY'});
+        if(APEX4_NATIVE_PREVIEW||APEX4_PREVIEW)return json(res,200,{status:'DISABLED',fallbackReason:'APEX4_CHAT_ONLY'});
         if(!throttle('astra-context:'+v.key,ip,40,60_000))return json(res,429,{status:'RATE_LIMITED',fallbackReason:'REQUEST_RATE_LIMIT'});
         try{return json(res,200,await ASTRA.submit(v.key,b.snapshot));}
         catch{return json(res,200,{status:'AI_ERROR',fallbackReason:'INVALID_OR_UNAVAILABLE_CONTEXT'});}
@@ -1547,6 +1555,19 @@ const server=http.createServer(async(req,res)=>{
       return res.end(data);
     }
 
+    if(req.method==='POST'&&u.pathname==='/api/session/native-strategy'){
+      if(!APEX4_NATIVE_PREVIEW)return json(res,404,{error:'not_found'});
+      const session=await notificationSession(req,res);if(!session)return;
+      if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
+      const b=await body(req,8192);
+      if(!NATIVE_STRATEGIES.includes(b.strategy))return json(res,400,{error:'invalid_strategy'});
+      const saved=await withLock('lic:'+session.lic,async()=>{
+        const all=await readLicenses(),lic=all[session.lic];
+        if(licenseStatusFor(lic)!=='ACTIVE')return false;
+        lic.nativeStrategy=b.strategy;await writeLicenses(all);return true;
+      });
+      return saved?json(res,200,{ok:true,strategy:b.strategy}):json(res,403,{error:'license_not_active'});
+    }
     if(req.method==='POST'&&u.pathname==='/api/session/config'){
       const s=verifySession(cookies(req).apex_session);if(!s)return json(res,401,{error:'no_session'});
       const licenses=await readLicenses();

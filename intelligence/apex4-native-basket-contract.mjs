@@ -66,5 +66,20 @@ export function nativeBasketStatus(input,now,armed){
  return {observedAt:now,armed:armed===true,terminalArmed:typeof input.terminalArmed==='boolean'?input.terminalArmed:null,active:input.basketActive,side:input.side===1?'BUY':input.side===-1?'SELL':null,
   preferredVolume:preferred,lastFillVolume:last,freeMargin:optionalFinite(input.freeMargin),equity:optionalFinite(input.equity),
   orderGapMs:Number.isSafeInteger(input.orderGapMs)&&input.orderGapMs>0?input.orderGapMs:null,
+  strategy:NATIVE_STRATEGIES.includes(input.strategy)?input.strategy:null,
+  quote:input.quote&&Number.isFinite(input.quote.bid)&&Number.isFinite(input.quote.ask)&&input.quote.bid>0&&input.quote.ask>=input.quote.bid&&Number.isSafeInteger(input.quote.atMs)&&input.quote.atMs<=now+2000&&now-input.quote.atMs<=3000?{bid:input.quote.bid,ask:input.quote.ask,atMs:input.quote.atMs}:null,
+  entrySource:typeof input.entrySource==='string'?input.entrySource.slice(0,100):null,
+  diagnostic:typeof input.diagnostic==='string'?input.diagnostic.slice(0,200):null,
+  buyScore:Number.isSafeInteger(input.buyScore)&&input.buyScore>=0&&input.buyScore<=30?input.buyScore:null,
+  sellScore:Number.isSafeInteger(input.sellScore)&&input.sellScore>=0&&input.sellScore<=30?input.sellScore:null,
   anchor:input.basketActive?input.anchor:null,target:input.basketActive?input.target:null,positions:input.positions,orders:input.orders,stopLoss:null};
+}
+
+export const NATIVE_STRATEGIES=Object.freeze(['OUTLOOK','BOTH','PULLBACK']);
+export function nativeStrategy(value,fallback='BOTH'){return NATIVE_STRATEGIES.includes(value)?value:fallback;}
+export function nativeStrategyWire({armed,strategy,plan,signal}){
+ if(!NATIVE_STRATEGIES.includes(strategy))throw Error('INVALID_NATIVE_STRATEGY');
+ if(!armed)return 'NONE|NOT_ARMED|'+strategy;
+ if(strategy==='PULLBACK'||!plan||!signal)return 'NONE|ARMED_NO_PLAN|'+strategy;
+ return ['NATIVE',plan.id,plan.side,plan.anchor,plan.target,Math.floor(signal.publishedAt/1000),Math.floor(signal.expiresAt/1000),strategy].join('|');
 }

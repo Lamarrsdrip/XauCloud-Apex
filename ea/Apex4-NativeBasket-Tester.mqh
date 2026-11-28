@@ -4,7 +4,23 @@
 #include <Trade/Trade.mqh>
 input long InpApexBasketMagic = 90410001;
 input int InpApexOrderGapMilliseconds = 100;
+enum ENUM_APEX_STRATEGY { APEX_PULLBACK_ONLY=0, APEX_OUTLOOK_ONLY=1, APEX_OUTLOOK_AND_PULLBACK=2 };
+input ENUM_APEX_STRATEGY InpApexStrategy = APEX_PULLBACK_ONLY;
 input bool InpApexNativePullbackEnabled = true;
+ENUM_APEX_STRATEGY apexStrategy=APEX_PULLBACK_ONLY;
+string apexEntryDiagnostic="Waiting for closed market evidence";
+string apexEntrySource="";
+int apexBuyScore=0,apexSellScore=0;
+string ApexStrategyName(){return apexStrategy==APEX_OUTLOOK_ONLY?"OUTLOOK":apexStrategy==APEX_OUTLOOK_AND_PULLBACK?"BOTH":"PULLBACK";}
+bool ApexPullbacksOn(){return apexStrategy!=APEX_OUTLOOK_ONLY&&(!MQLInfoInteger(MQL_TESTER)||InpApexNativePullbackEnabled);}
+bool ApexOutlookOn(){return apexStrategy!=APEX_PULLBACK_ONLY;}
+bool ApexApplyStrategy(const string mode){
+ if(mode=="PULLBACK")apexStrategy=APEX_PULLBACK_ONLY;
+ else if(mode=="OUTLOOK")apexStrategy=APEX_OUTLOOK_ONLY;
+ else if(mode=="BOTH")apexStrategy=APEX_OUTLOOK_AND_PULLBACK;
+ else return false;
+ return true;
+}
 // Native tester is always offline. The same executor may run on an explicitly
 // opted-in USD hedging demo, never a real account in this candidate.
 input bool InpApexNativeDemoExecution = false;
@@ -122,7 +138,7 @@ bool ApexBasketOtherExposure()
 }
 void ApexBasketReset()
 {
-   apexBasketSide=0;apexBasketAnchor=0;apexBasketTarget=0;apexBasketVolume=0;
+   apexBasketSide=0;apexBasketAnchor=0;apexBasketTarget=0;apexBasketVolume=0;apexEntrySource="";
    apexBasketLastAttempt=-1;apexBasketLastWallAttempt=0;apexBasketClosing=false;apexBasketFilled=false;apexBasketUncertain=false;apexBasketOrders=0;apexBasketLastFillVolume=0;apexBasketLastFillWall=0;apexBasketRetryCeiling=0;
    if(apexDemoLockHeld&&!ApexBasketSave())Print("APEX_NATIVE_STATE_SAVE_FAILED");
 }
@@ -150,6 +166,7 @@ bool ApexBasketReadReplay()
 }
 bool ApexBasketInit()
 {
+   apexStrategy=InpApexStrategy;
    if(!ApexBasketAllowed()||InpApexBasketMagic<=0||InpApexOrderGapMilliseconds<1||
       AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING||
       AccountInfoString(ACCOUNT_CURRENCY)!="USD")return false;
@@ -173,7 +190,8 @@ bool ApexBasketInit()
       else if(ApexBasketPositions()>0||ApexBasketHasPending())
       {GlobalVariableSet(apexDemoLock,0);apexDemoLockHeld=false;return false;}
    }
-   if(InpApexReplayStrongOutlook&&ApexBasketTesterOnly())
+   if(ApexBasketTesterOnly()&&ApexOutlookOn()&&!InpApexReplayStrongOutlook){Print("APEX_OUTLOOK_REPLAY_REQUIRED");return false;}
+   if(InpApexReplayStrongOutlook&&ApexBasketTesterOnly()&&ApexOutlookOn())
    {
       if(InpApexReplayBrokerUtcOffsetMinutes<-840||InpApexReplayBrokerUtcOffsetMinutes>840||
          InpApexReplayEntryFreshSeconds<1||InpApexReplayEntryFreshSeconds>60)return false;
@@ -308,7 +326,7 @@ bool ApexBasketStart(const int dir,const double anchor,const string source)
    vol=NormalizeDouble(MathFloor((vol+1e-9)/step)*step,8);
    if(vol<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)||vol>SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX))return false;
    if(dir*((dir>0?q.ask:q.bid)-(anchor+dir*5.0))>=0)return false;
-   apexBasketSide=dir;apexBasketAnchor=anchor;apexBasketTarget=anchor+dir*5.0;apexBasketVolume=vol;
+   apexBasketSide=dir;apexBasketAnchor=anchor;apexBasketTarget=anchor+dir*5.0;apexBasketVolume=vol;apexEntrySource=source;
    if(!ApexBasketSave()){ApexBasketReset();return false;}
    Print("APEX_NATIVE_PLAN ",source," dir=",dir," anchor=",apexBasketAnchor," target=",apexBasketTarget," preferred clip=",vol);
    ApexBasketManage();
@@ -354,8 +372,15 @@ void ApexBasketLiveOutlookTick()
       InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),apexDemoArmed?"true":"false",apexBasketSide!=0?"true":"false",apexBasketSide,
       apexBasketAnchor,apexBasketTarget,ApexBasketPositions(),apexBasketOrders,apexBasketVolume,apexBasketLastFillVolume,
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),AccountInfoDouble(ACCOUNT_EQUITY),InpApexOrderGapMilliseconds);
+   payload=StringSubstr(payload,0,StringLen(payload)-1)+StringFormat(",\"strategy\":\"%s\",\"entrySource\":\"%s\",\"buyScore\":%d,\"sellScore\":%d,\"diagnostic\":\"%s\"}",ApexStrategyName(),BotMonitorJsonSafe(apexEntrySource,100),apexBuyScore,apexSellScore,BotMonitorJsonSafe(apexEntryDiagnostic,200));
    long utc=(long)TimeGMT();
-   if(InpApexNativeLiveOutlook&&apexBasketSide==0&&utc%3600<60&&apexNativeEvidencePacket!="")
+   MqlTick observed;
+   if(SymbolInfoTick(_Symbol,observed)&&observed.bid>0&&observed.ask>=observed.bid)
+   {
+      long offset=(long)MathRound((double)(TimeTradeServer()-TimeGMT())/60.0)*60;
+      payload=StringSubstr(payload,0,StringLen(payload)-1)+StringFormat(",\"quote\":{\"bid\":%.8f,\"ask\":%.8f,\"atMs\":%I64d}}",observed.bid,observed.ask,observed.time_msc-offset*1000);
+   }
+   if(apexBasketSide==0&&utc%3600<60&&apexNativeEvidencePacket!="")
    {
       payload=StringSubstr(payload,0,StringLen(payload)-1)+",\"brokerServer\":\""+
         BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),80)+"\",\"nativeEvidence\":"+apexNativeEvidencePacket+
@@ -369,22 +394,23 @@ void ApexBasketLiveOutlookTick()
    // No new Outlook may originate during an outage. Native demo execution,
    // once armed this session, retains its local recognition and exit logic.
    if(status!=200)return;
-   if(line=="NONE|ARMED_NO_PLAN"){apexDemoArmed=true;return;}
    int n=StringSplit(line,'|',parts);
-   if(n!=7||parts[0]!="NATIVE"||(parts[2]!="BUY"&&parts[2]!="SELL"))return;
+   if(n==3&&parts[0]=="NONE"&&parts[1]=="ARMED_NO_PLAN"&&ApexApplyStrategy(parts[2])){apexDemoArmed=true;return;}
+   if(n==3&&parts[0]=="NONE"&&parts[1]=="NOT_ARMED"){ApexApplyStrategy(parts[2]);apexDemoArmed=false;return;}
+   if(n!=8||parts[0]!="NATIVE"||(parts[2]!="BUY"&&parts[2]!="SELL")||!ApexApplyStrategy(parts[7]))return;
    int side=parts[2]=="BUY"?1:-1;
    double anchor=StringToDouble(parts[3]),target=StringToDouble(parts[4]);
    long at=StringToInteger(parts[5]),expires=StringToInteger(parts[6]);
    if(anchor<=5||MathAbs(target-anchor-side*5.0)>0.000001||at>utc||utc>=expires||utc-at>60)return;
    apexDemoArmed=true;
-   if(!InpApexNativeLiveOutlook||at<=apexLastOutlookAt)return;
+   if(!ApexOutlookOn()||at<=apexLastOutlookAt)return;
    apexLastOutlookAt=at;
    if(!ApexBasketSave()){apexDemoArmed=false;return;}
    ApexBasketStart(side,anchor,"CANONICAL_STRONG_OUTLOOK:"+parts[1]);
 }
 void ApexBasketReplayTick()
 {
-   if(!ApexBasketTesterOnly()||!InpApexReplayStrongOutlook)return;
+   if(!ApexBasketTesterOnly()||!InpApexReplayStrongOutlook||!ApexOutlookOn())return;
    MqlTick q;if(!SymbolInfoTick(_Symbol,q)||q.time<=0)return;
    long utc=(long)q.time-InpApexReplayBrokerUtcOffsetMinutes*60;
    while(apexReplayReady&&apexReplayAt<=utc)
@@ -398,9 +424,9 @@ void ApexBasketReplayTick()
 // Codex's recognizePullback classroom. No outcome/forward prices enter here.
 struct ApexClassroomFrame
 {
-   double atr,pressure,acceleration,high,low;
+   double atr,pressure,acceleration,high,low,momentum,extension,rsi,emaFast,emaSlow,close;
    int trend;
-   bool hasHigh,hasLow,sweptHigh,sweptLow,upperRejection,lowerRejection,brokeUp,brokeDown;
+   bool hasHigh,hasLow,sweptHigh,sweptLow,upperRejection,lowerRejection,brokeUp,brokeDown,bearishDivergence,bullishDivergence;
 };
 bool ApexClassroomFeatures(MqlRates &bars[],ApexClassroomFrame &f)
 {
@@ -430,6 +456,12 @@ bool ApexClassroomFeatures(MqlRates &bars[],ApexClassroomFrame &f)
       if(range>0)pressure+=((2*bars[i].close-bars[i].low-bars[i].high)/range+(bars[i].close-bars[i].open)/range)/2.0;
    }
    f.pressure=NormalizeDouble(pressure/6.0,2);
+   f.close=bars[n-1].close;f.emaFast=ef;f.emaSlow=es;f.momentum=(f.close-bars[n-4].close)/atr;f.extension=(f.close-es)/atr;
+   double gain=0,loss=0;double rsi[];ArrayResize(rsi,n);rsi[0]=50;
+   for(int i=1;i<n;i++){double d=bars[i].close-bars[i-1].close;if(i<=14){gain+=MathMax(d,0)/14.0;loss+=MathMax(-d,0)/14.0;}else{gain=(gain*13+MathMax(d,0))/14.0;loss=(loss*13+MathMax(-d,0))/14.0;}rsi[i]=loss==0?100:100-100/(1+gain/loss);}
+   f.rsi=rsi[n-1];
+   f.bearishDivergence=priorHi>=0&&lastHi>=0&&f.high>prevHigh&&rsi[lastHi]<rsi[priorHi]-2;
+   f.bullishDivergence=priorLo>=0&&lastLo>=0&&f.low<prevLow&&rsi[lastLo]>rsi[priorLo]+2;
    f.acceleration=NormalizeDouble(((bars[n-1].close-bars[n-4].close)-(bars[n-4].close-bars[n-7].close))/atr,2);
    double body=MathAbs(bars[n-1].close-bars[n-1].open);
    f.upperRejection=bars[n-1].high-MathMax(bars[n-1].open,bars[n-1].close)>=MathMax(2*body,.5*atr);
@@ -487,32 +519,133 @@ bool ApexClassroomObserve(const int dir,const bool continuation,const double quo
    // Native M10 direction and classifier are required independently.
    return stage!="DEVELOPING"&&recovery>=0;
 }
+// Evaluate both directions on exactly the same closed history. Native
+// classification is evidence, not an unconditional permission to enter.
+// Scores are evidence weights, not win probabilities. This is a challenger
+// to be tested with actual basket outcomes, not a fitted profitable model.
+struct ApexPullbackCandidate
+{
+ int side,score;datetime episode;string stage,reason;
+ double depth,recovery,room;
+ bool valid;
+};
+void ApexScorePullback(const int dir,const MqlTick &q,ApexClassroomFrame &m1,ApexClassroomFrame &m5,ApexClassroomFrame &m15,ApexClassroomFrame &h1,
+                       const double atr,ApexPullbackCandidate &p)
+{
+ p.side=dir;p.score=0;p.valid=false;p.episode=0;p.depth=0;p.recovery=0;p.room=0;p.stage="";p.reason="";
+ XAU_SetupClassification c;
+ XAU_ClassifySetup(dir,atr,"",c);
+ bool continuation=c.type==XAU_TIMING_TREND_CONTINUATION;
+ bool correction=c.type==XAU_TIMING_PULLBACK_SCALP||c.type==XAU_TIMING_REVERSAL_RECLAIM;
+ if(!continuation&&!correction){p.reason="native exhaustion/late chase";return;}
+ double px=dir>0?q.ask:q.bid;
+ if(!ApexClassroomObserve(dir,continuation,px,p.stage,p.depth,p.recovery,p.episode)){p.reason="classroom: "+p.stage;return;}
+ bool sweep=dir>0?m1.sweptLow:m1.sweptHigh;
+ bool rejection=dir>0?m1.lowerRejection:m1.upperRejection;
+ bool reclaim=dir>0?m1.brokeUp:m1.brokeDown;
+ bool divergence=dir>0?m1.bullishDivergence:m1.bearishDivergence;
+ bool pressure=dir*m1.pressure>.1,acceleration=dir*m1.acceleration>0;
+ bool momentum=dir*m1.momentum>.15;
+ bool higher=h1.trend==dir,mid=m15.trend==dir,local=m5.trend==dir;
+ bool nativeAgrees=g_m10Decision.preferredDirection==dir;
+ bool oppositeImpulse=dir*m5.momentum<-.3&&dir*m5.pressure<-.15;
+ if(!pressure||(!momentum&&!acceleration)){p.reason="no current directional follow-through";return;}
+ if(dir*m1.extension>2.5||((dir>0?m1.rsi>80:m1.rsi<20)&&!reclaim)){p.reason="late extended entry";return;}
+ if(continuation)
+ {
+   if(!mid&&!higher){p.reason="continuation lacks higher-frame trend";return;}
+   if(oppositeImpulse&&!reclaim&&!sweep){p.reason="correction still accelerating against entry";return;}
+   if(!c.immediateConfirm&&!reclaim&&!(sweep&&acceleration)){p.reason="native continuation not yet reclaimed";return;}
+ }
+ else
+ {
+   // Original classifier allows immediate countertrend only with 5/6
+   // exhaustion evidence and reclaim. A 4/6 pattern is not an immediate call.
+   if(!c.immediateConfirm||c.reversalHits<5||!c.reclaimSeen){p.reason="marginal native countertrend";return;}
+   if(!reclaim&&!(sweep&&(rejection||divergence))){p.reason="countertrend lacks fresh M1 structure";return;}
+ }
+ // Measure actual available room relative to the fixed $5 basket target.
+ // An opposing level already broken on M1 is not treated as remaining resistance.
+ double level=dir>0?m5.high:m5.low;
+ bool has=dir>0?m5.hasHigh:m5.hasLow;
+ p.room=has?dir*(level-px):0;
+ if(has&&p.room>0&&p.room<5.0&&!(dir>0?m5.brokeUp:m5.brokeDown)&&!reclaim){p.reason="near opposing structure before basket target";return;}
+ // Same documented XauCloud evidence weights, plus native/classroom context.
+ p.score=(higher?2:0)+(mid?1:0)+(local?1:0)+(momentum?1:0)+(pressure?1:0)+(acceleration?1:0)
+        +(sweep?2:0)+(rejection?1:0)+(divergence?1:0)+(reclaim?2:0)+(nativeAgrees?1:0)+(c.immediateConfirm?1:0)+(correction?2:0);
+ p.valid=p.score>=6;
+ p.reason=StringFormat("%s %s score=%d native=%d/6 depth=%.3f recovery=%.3f room=%.2f H1=%d M15=%d M5=%d M1pressure=%.2f",
+   continuation?"CONTINUATION":"COUNTERTREND",p.stage,p.score,c.reversalHits,p.depth,p.recovery,p.room,h1.trend,m15.trend,m5.trend,m1.pressure);
+}
 void ApexBasketConsiderNative()
 {
-   if(!ApexBasketCanStart()||!InpApexNativePullbackEnabled||apexBasketSide!=0||
-      ApexBasketPositions()>0||ApexBasketHasPending()||ApexBasketOtherExposure())return;
-   if(!g_m10Snapshot.complete||g_m10Snapshot.freshnessState!="FRESH"||
-      g_m10Snapshot.closedBarTime!=iTime(_Symbol,PERIOD_M10,1)||
-      g_m10Decision.closedBarTime!=g_m10Snapshot.closedBarTime||
-      g_m10Decision.closedBarTime<=0)return;
-   int dir=g_m10Decision.preferredDirection;
-   if(dir!=1&&dir!=-1)return;
-   // A native retrace thesis may enter as soon as the closed-M1 classroom
-   // identifies recovery; no separate M10 confirmation delay is imposed.
-   if((dir==1&&g_m10Decision.decisionType!=M10_DECISION_BUY_CANDIDATE&&g_m10Decision.decisionType!=M10_DECISION_WAIT_FOR_BUY_RETRACE)||
-      (dir==-1&&g_m10Decision.decisionType!=M10_DECISION_SELL_CANDIDATE&&g_m10Decision.decisionType!=M10_DECISION_WAIT_FOR_SELL_RETRACE))return;
-   double atr[1];
-   if(hATR==INVALID_HANDLE||CopyBuffer(hATR,0,1,1,atr)!=1||atr[0]<=0||ArraySize(bufEMAFast)<2||ArraySize(bufEMASlow)<2)return;
-   XAU_SetupClassification c;
-   XAU_ClassifySetup(dir,atr[0],"",c);
-   bool continuation=c.type==XAU_TIMING_TREND_CONTINUATION;
-   bool correction=c.type==XAU_TIMING_PULLBACK_SCALP||c.type==XAU_TIMING_REVERSAL_RECLAIM;
-   if(!continuation&&!correction)return;
-   MqlTick q;if(!SymbolInfoTick(_Symbol,q)||q.bid<=0||q.ask<q.bid)return;
-   double entry=dir>0?q.ask:q.bid,depth=0,recovery=0;
-   string stage="";datetime episode=0;
-   if(!ApexClassroomObserve(dir,continuation,entry,stage,depth,recovery,episode)||episode<=apexBasketLastSignal)return;
-   apexBasketLastSignal=episode;
-   Print("APEX_CLASSROOM_EVIDENCE stage=",stage," depth=",depth," recovery=",recovery," native=",c.why);
-   ApexBasketStart(dir,entry,"NATIVE_XAUCLOUD_PULLBACK:"+stage);
+ if(!ApexBasketCanStart()||!ApexPullbacksOn()||apexBasketSide!=0||ApexBasketPositions()>0||ApexBasketHasPending()||ApexBasketOtherExposure())return;
+ if(!g_m10Snapshot.complete||g_m10Snapshot.freshnessState!="FRESH"||g_m10Snapshot.closedBarTime!=iTime(_Symbol,PERIOD_M10,1)||
+    g_m10Decision.closedBarTime!=g_m10Snapshot.closedBarTime||g_m10Decision.closedBarTime<=0)return;
+ MqlTick q;if(!SymbolInfoTick(_Symbol,q)||q.bid<=0||q.ask<q.bid)return;
+ static long lastAssessment=-1;static datetime lastClosed=0;
+ datetime closed=iTime(_Symbol,PERIOD_M1,1);
+ if(lastAssessment>=0&&q.time_msc-lastAssessment<250&&closed==lastClosed)return;
+ lastAssessment=q.time_msc;lastClosed=closed;
+ double atr[1];
+ if(hATR==INVALID_HANDLE||CopyBuffer(hATR,0,1,1,atr)!=1||atr[0]<=0||ArraySize(bufEMAFast)<2||ArraySize(bufEMASlow)<2)return;
+ MqlRates one[],five[],fifteen[],hour[];
+ ArraySetAsSeries(one,false);ArraySetAsSeries(five,false);ArraySetAsSeries(fifteen,false);ArraySetAsSeries(hour,false);
+ if(CopyRates(_Symbol,PERIOD_M1,1,120,one)<60||CopyRates(_Symbol,PERIOD_M5,1,120,five)<30||
+    CopyRates(_Symbol,PERIOD_M15,1,120,fifteen)<30||CopyRates(_Symbol,PERIOD_H1,1,120,hour)<30)return;
+ ApexClassroomFrame m1,m5,m15,h1;
+ if(!ApexClassroomFeatures(one,m1)||!ApexClassroomFeatures(five,m5)||!ApexClassroomFeatures(fifteen,m15)||!ApexClassroomFeatures(hour,h1))return;
+ ApexPullbackCandidate buy,sell,chosen;
+ ApexScorePullback(1,q,m1,m5,m15,h1,atr[0],buy);
+ ApexScorePullback(-1,q,m1,m5,m15,h1,atr[0],sell);
+ apexBuyScore=buy.score;apexSellScore=sell.score;
+ apexEntryDiagnostic="BUY "+buy.reason+" | SELL "+sell.reason;
+ if(buy.valid&&sell.valid&&MathAbs(buy.score-sell.score)<2){apexEntryDiagnostic="Conflicting pullbacks | "+apexEntryDiagnostic;return;}
+ if(buy.valid&&(!sell.valid||buy.score>sell.score))chosen=buy;
+ else if(sell.valid)chosen=sell;
+ else return;
+ if(chosen.episode<=apexBasketLastSignal)return;
+ apexBasketLastSignal=chosen.episode;
+ double entry=chosen.side>0?q.ask:q.bid;
+ Print("APEX_ENTRY_EVIDENCE ",apexEntryDiagnostic," chosen=",chosen.side," entry=",entry," episode=",chosen.episode);
+ ApexBasketStart(chosen.side,entry,"NATIVE_XAUCLOUD_PULLBACK:"+chosen.stage);
+}
+void ApexNativeDisplay()
+{
+ static ulong last=0;ulong now=GetTickCount64();if(last>0&&now-last<500)return;last=now;
+ Comment("APEX 4 | ",ApexStrategyName(),"\n",apexBasketSide==0?"Scanning Gold":apexBasketSide>0?"BUY basket":"SELL basket",
+   "\nPositions: ",ApexBasketPositions()," | target: ",DoubleToString(apexBasketTarget,_Digits),
+   "\nBuy evidence: ",apexBuyScore," | Sell evidence: ",apexSellScore,"\n",apexEntryDiagnostic);
+}
+
+// Broker stop-out frees margin by liquidating positions, not by profitable
+// movement. Do not recycle forced-liquidation margin into the failed basket.
+bool ApexNativeTradeEvent(const MqlTradeTransaction &trans)
+{
+ if(trans.type!=TRADE_TRANSACTION_DEAL_ADD||trans.deal==0||!HistoryDealSelect(trans.deal))return false;
+ ulong deal=trans.deal;
+ if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)return false;
+ long magic=HistoryDealGetInteger(deal,DEAL_MAGIC);
+ long reason=HistoryDealGetInteger(deal,DEAL_REASON);
+ long entry=HistoryDealGetInteger(deal,DEAL_ENTRY);
+ ulong pos=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+ double price=HistoryDealGetDouble(deal,DEAL_PRICE),vol=HistoryDealGetDouble(deal,DEAL_VOLUME),profit=HistoryDealGetDouble(deal,DEAL_PROFIT);
+ bool owned=magic==InpApexBasketMagic;
+ if(!owned&&reason==DEAL_REASON_SO&&pos>0&&HistorySelectByPosition(pos))
+ {
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+     ulong t=HistoryDealGetTicket(i);
+     if(t>0&&HistoryDealGetInteger(t,DEAL_ENTRY)==DEAL_ENTRY_IN&&HistoryDealGetInteger(t,DEAL_MAGIC)==InpApexBasketMagic){owned=true;break;}
+   }
+ }
+ if(!owned)return false;
+ Print("APEX_NATIVE_DEAL ticket=",deal," position=",pos," entry=",entry," reason=",reason," price=",price," volume=",vol," profit=",profit);
+ if(reason==DEAL_REASON_SO&&apexBasketSide!=0)
+ {
+   apexBasketUncertain=true;
+   apexEntryDiagnostic="Broker stop-out: additional entries paused; remaining basket managed";
+   ApexBasketSave();
+ }
+ return true;
 }

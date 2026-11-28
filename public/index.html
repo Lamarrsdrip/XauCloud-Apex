@@ -455,7 +455,7 @@ function renderNav(){
   }
   var sidebar=document.getElementById('sidebar'),bottomnav=document.getElementById('bottomnav');
   var showLab=!STATE.me?.candidate;
-  var visibleItem=function(id){return showLab||id!=='lab';};
+  var visibleItem=function(id){if(STATE.me?.candidate?.mode==='APEX4_NATIVE_BASKET')return !['lab','history','learning'].includes(id);return showLab||id!=='lab';};
   bottomnav.style.gridTemplateColumns=showLab?'':'repeat(4,minmax(0,1fr))';
   var groups=[{name:'WORKSPACE',ids:['dashboard','campaigns','history']},{name:'INTELLIGENCE',ids:['ai','lab','learning']},{name:'MANAGEMENT',ids:['settings','account']}];
   sidebar.innerHTML=groups.map(function(g){return '<div class="nav-group"><div class="nav-caption">'+g.name+'</div>'+g.ids.filter(visibleItem).map(function(id){return item(NAV.find(function(n){return n.id===id;}),false);}).join('')+'</div>';}).join('')+'<div class="sidebar-footer"><span>PRIVATE WORKSPACE</span><button class="navitem" id="logout-btn"><span class="ic">&#10162;</span><span>Sign out</span></button></div>';
@@ -549,23 +549,19 @@ function pageDashboard(me){
 
 function apex4IntelligencePanel(s){
   if(s.mode==='APEX4_NATIVE_BASKET'){
-    var b=s.basket||{},price=function(x){return Number.isFinite(x)?x.toFixed(2):'—';};
-    var rows=[['Native engine','XauCloud v6.29.1 · local pullback intelligence'],
-      ['Outlook',(s.hoursWAT||[]).map(function(h){return String(h).padStart(2,'0')+':00 WAT';}).join(', ')+' · canonical STRONG only'],
-      ['Basket exit','Original entry ± $5.00 · 50 pips'],['Stop loss','None · broker stop-out possible'],
-      ['Holding deadline','None'],['Execution','Explicit demo candidate'],
-      ['Basket',b.active?(b.side+' · '+b.positions+' open positions'):'No active basket'],
-      ['Original entry',price(b.anchor)],['Basket target',price(b.target)],
-      ['Preferred lot',price(b.preferredVolume)],['Latest accepted lot',price(b.lastFillVolume)],
-      ['Available margin',price(b.freeMargin)],['Order pacing',b.orderGapMs?b.orderGapMs+' ms target':'100 ms default'],
-      ['Lot allocation','Largest affordable legal lot; reduce to broker minimum'],
-      ['Outlook source','Independent Apex engine · vendored XauCloud logic'],
-      ['STRONG grading',s.outlookKnowledge?.status==='CALIBRATED_RULES_AVAILABLE'?s.outlookKnowledge.rules+' historical rules available':'Awaiting calibrated grade history'],
-      ['Accepted order count',Number.isSafeInteger(b.orders)?String(b.orders):'—']];
-    return '<section class="apex-intel" aria-label="Native Apex basket"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD · NATIVE DEMO CANDIDATE</span><h2>Outlook &amp; pullbacks</h2></div></div>'
-      +'<div class="intel-grid"><div><span>Terminal status</span><strong>'+esc(s.status.replace(/_/g,' '))+'</strong><small>'+esc(s.fresh?'Recent terminal snapshot':'Waiting for native terminal')+'</small></div><div><span>Basket target</span><strong>'+esc(price(b.target))+'</strong><small>Fixed to original signal</small></div></div>'
+    var b=s.basket||{},price=function(x){return Number.isFinite(x)?x.toFixed(2):'—';},names={OUTLOOK:'Outlook only',BOTH:'Outlook + pullbacks',PULLBACK:'Pullbacks only'};
+    var desired=s.strategy||'BOTH',applied=s.appliedStrategy;
+    var status=s.fresh?(s.status==='ARMED'?'Scanning & executing':'Paused'):'MT5 not connected';
+    var rows=[['Strategy applied',applied?names[applied]:'Awaiting terminal'],
+      ['Equity',price(b.equity)],['Free margin',price(b.freeMargin)],
+      ['Entry',price(b.anchor)],['Basket target',price(b.target)],['Open positions',Number.isFinite(b.positions)?b.positions:'—'],
+      ['Preferred / last lot',price(b.preferredVolume)+' / '+price(b.lastFillVolume)]];
+    return '<section class="apex-intel" aria-label="Apex native execution"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD · STRATEGY DESK</span><h2>'+esc(status)+'</h2></div></div>'
+      +'<div class="field"><label for="apex-native-strategy">Trading strategy</label><select id="apex-native-strategy">'+Object.keys(names).map(function(k){return '<option value="'+k+'" '+(k===desired?'selected':'')+'>'+names[k]+'</option>';}).join('')+'</select><div class="hint">'+esc(applied===desired?'Applied by MT5': 'Saved preference; awaiting terminal acknowledgment')+'</div></div>'
+      +'<div class="intel-grid"><div><span>Basket</span><strong>'+esc(b.active?b.side:'No open basket')+'</strong><small>'+esc(b.entrySource||'Native entry selection')+'</small></div><div><span>Basket target</span><strong>'+esc(price(b.target))+'</strong><small>50 pips from original entry</small></div></div>'
       +rows.map(function(x){return '<div class="row"><span class="k">'+esc(x[0])+'</span><span class="v">'+esc(x[1])+'</span></div>';}).join('')
-      +'<p class="settings-subtle">Native basket execution is not the previous fixed-SL classroom replay. Profitability and actual broker fills require separate tests.</p></section>';
+      +'<div class="card" style="margin-top:10px"><h3>Market intelligence</h3><p>'+esc(b.diagnostic||'Waiting for fresh pullback evidence')+'</p><div class="row"><span>BUY evidence</span><strong>'+esc(b.buyScore??'—')+'</strong></div><div class="row"><span>SELL evidence</span><strong>'+esc(b.sellScore??'—')+'</strong></div><p class="settings-subtle">Evidence scores, not win probabilities.</p></div>'
+      +'<div class="row"><span>Hourly Outlook</span><strong>'+esc(s.outlookKnowledge?.status==='CALIBRATED_RULES_AVAILABLE'?'STRONG grading ready':'Awaiting historical calibration')+'</strong></div><p class="settings-subtle">08:00–10:00 WAT default · independent Outlook engine · dynamic margin allocation · 100ms target pacing · no individual SL. Demo/tester release only.</p></section>';
   }
 
   var k=s.knowledge||{},learn=s.learning||{},edu=s.education||{},p=s.plan,q=s.quote,exec=s.latestExecution,m10=s.m10||{},assessment=s.latestAssessment;
@@ -860,6 +856,11 @@ function wireOverviewControls(){
 }
 
 function wireDashboardControls(){
+  var strategy=document.getElementById('apex-native-strategy');
+  if(strategy)strategy.addEventListener('change',function(){
+    strategy.disabled=true;
+    api('/api/session/native-strategy',{method:'POST',body:{strategy:strategy.value}}).then(function(){return api('/api/auth/me');}).then(function(me){STATE.me=me;renderPage();toast('Strategy saved. MT5 will acknowledge it.');}).catch(function(){strategy.disabled=false;toast('Could not save strategy.',true);});
+  });
   var t = document.getElementById('arm-toggle');
   if (t) t.addEventListener('change', function(){
     var val = t.checked;
@@ -1008,8 +1009,8 @@ function activateSettingsTab(tab){
 
 function pageSettings(me){
   if(me.candidate?.mode==='APEX4_NATIVE_BASKET'){
-    return '<div class="settings-top"><h1 class="page-title">Native Apex settings</h1><p class="page-sub">Fixed basket execution · demo candidate</p></div>'
-      +releaseCard(me)+armDisarmCard(me)+apex4IntelligencePanel(me.candidate)
+    return '<div class="settings-top"><h1 class="page-title">Settings</h1><p class="page-sub">Apex · Gold trading</p></div>'
+      +releaseCard(me)+armDisarmCard(me)+apex4IntelligencePanel(me.candidate)+(window.AstraUI?window.AstraUI.card(me,true):'')
       +'<div class="card"><h3>MT5 setup</h3><p>Compile the native candidate. Strategy Tester requires no API or backend. Demo Outlook uses only https://apex.xaucloud.io; enable native demo execution explicitly in MT5. This is not a customer release.</p></div>';
   }
 

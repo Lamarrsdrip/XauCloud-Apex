@@ -5,10 +5,17 @@ import {generateObserver,OBSERVER} from './build-apex4-m10-observer.mjs';
 export const NATIVE='XauCloud-Apex-v4-NativeBasket-TESTER.mq5';
 export function nativeBasketSource(observer,{outlookReplay=false}={}) {
   const replace=(a,b)=>{if(observer.split(a).length!==2)throw Error('Native basket anchor changed: '+a);observer=observer.replace(a,b);};
-  replace('#property version   "6.291"','#property version   "4.100"');
+  replace('#property version   "6.291"','#property version   "4.110"');
+  // Keep inherited settings at their pinned defaults; expose only Apex inputs.
+  observer=observer.replace(/^input group "[^"\n]*"\s*$/gm,'').replace(/^input (?=[^\n;]+=[^\n;]+;)/gm,'const ');
+  // The inherited observer evidence knobs are still useful to researchers.
+  observer=observer.replace('const string InpApexEvidenceId','input string InpApexEvidenceId').replace('const bool InpApexReplayEvidence','input bool InpApexReplayEvidence');
+  observer=observer.replace(/^#property description .*$/gm,'');
+  replace('   Comment(d);','   ApexNativeDisplay();');
+  replace('void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)\n{','void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)\n{\n   if(ApexNativeTradeEvent(trans)) return;');
   replace('   if(!Apex4ObserverAllowed() || (!isTester && !Apex4EvidenceIdValid())) return INIT_FAILED;',
           '   if(!ApexBasketInit()) return INIT_FAILED;');
-  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   if(apexBasketSide!=0) return;\n   ApexBasketReplayTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketConsiderNative();\n   if(apexBasketSide!=0) return;');
+  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   ApexNativeDisplay();\n   if(apexBasketSide!=0) return;\n   ApexBasketReplayTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketConsiderNative();\n   if(apexBasketSide!=0) return;');
   replace('void OnTimer()\n{','void OnTimer()\n{\n   ApexBasketManage();\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;\n   if(!MQLInfoInteger(MQL_TESTER)) { static ulong apexNativeLastTimerScan=0; ulong now=GetTickCount64(); if(apexNativeLastTimerScan>0&&now-apexNativeLastTimerScan<1000) return; apexNativeLastTimerScan=now; }');
   replace('   if(InpTimerScanSec > 0)\n   {\n      EventSetTimer(InpTimerScanSec);','   if(InpTimerScanSec > 0 || !MQLInfoInteger(MQL_TESTER))\n   {\n      if(MQLInfoInteger(MQL_TESTER)) EventSetTimer(InpTimerScanSec); else if(!EventSetMillisecondTimer(InpApexOrderGapMilliseconds)) return INIT_FAILED;');
   replace('void OnDeinit(const int reason)\n{','void OnDeinit(const int reason)\n{\n   ApexBasketShutdown();');

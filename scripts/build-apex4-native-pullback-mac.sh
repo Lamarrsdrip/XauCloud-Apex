@@ -21,6 +21,13 @@ for name in XauCloud.mq5 lease/XauCloudLeaseClient.mqh lease/XauCloudLeaseCrypto
   git -C "$source_repo" show "$pin:backend/ea_code/$name" > "$work/pinned/$name"
 done
 node "$root/scripts/build-apex4-native-basket.mjs" "$work/pinned" "$work/generated"
+# Preserve the editable source and its includes before the temporary build is removed.
+dest="${APEX_COMPILE_OUTPUT_DIR:-$HOME/Downloads}"
+mkdir -p "$dest"
+bundle="$(mktemp -d "$dest/Apex4-native-source.XXXXXX")"
+cp "$work/generated/XauCloud-Apex-v4-NativeBasket-TESTER.mq5" "$work/generated/Apex4-NativeBasket-Tester.mqh" "$work/generated/Apex4-M10-Observer-Safety.mqh" "$bundle/"
+cp -R "$work/generated/lease" "$bundle/lease"
+printf 'MQ5 source and includes: %s\n' "$bundle"
 APEX_COMPILE_OUTPUT_DIR="${APEX_COMPILE_OUTPUT_DIR:-$HOME/Downloads}" \
 APEX_COMPILE_SOURCE="$work/generated/XauCloud-Apex-v4-NativeBasket-TESTER.mq5" \
 bash "$root/scripts/compile-apex4-mac.sh"

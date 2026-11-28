@@ -530,6 +530,8 @@ function deskMetric(label,value,tone,sub){
   return '<div class="desk-metric"><span>'+esc(label)+'</span><strong class="'+(tone||'')+'">'+esc(value)+'</strong>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>';
 }
 function pageDashboard(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<div class="desk-page-head"><div><h1 class="overview-title">Command center</h1><p>Independent native Apex · demo candidate</p></div></div>'+apex4IntelligencePanel(me.candidate)+armDisarmCard(me);
+
   var acc=me.account||{},camp=me.campaign||null,mt5=me.mt5||{},lic=me.license||{},ctrl=me.control||{};
   var connected=mt5.status==='CONNECTED',available=!!me.dataAvailable;
   var html='<div class="desk-page-head"><div><div class="overview-eyebrow">WORKSPACE / OVERVIEW</div><h1 class="overview-title">Command center</h1><p>Gold market intelligence and account execution.</p></div><div class="desk-head-meta"><span>'+esc(acc.broker||'MT5 terminal')+'</span><small>'+esc(available?'Account '+(acc.account||lic.account||'—')+' · '+fmtAgo(acc.asOf||mt5.lastSeen):'Awaiting account data')+'</small></div></div>';
@@ -554,6 +556,10 @@ function apex4IntelligencePanel(s){
       ['Holding deadline','None'],['Execution','Explicit demo candidate'],
       ['Basket',b.active?(b.side+' · '+b.positions+' open positions'):'No active basket'],
       ['Original entry',price(b.anchor)],['Basket target',price(b.target)],
+      ['Preferred lot',price(b.preferredVolume)],['Latest accepted lot',price(b.lastFillVolume)],
+      ['Available margin',price(b.freeMargin)],['Order pacing',b.orderGapMs?b.orderGapMs+' ms target':'100 ms default'],
+      ['Lot allocation','Largest affordable legal lot; reduce to broker minimum'],
+      ['Outlook source','Independent Apex engine · vendored XauCloud logic'],
       ['Accepted order count',Number.isSafeInteger(b.orders)?String(b.orders):'—']];
     return '<section class="apex-intel" aria-label="Native Apex basket"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD · NATIVE DEMO CANDIDATE</span><h2>Outlook &amp; pullbacks</h2></div></div>'
       +'<div class="intel-grid"><div><span>Terminal status</span><strong>'+esc(s.status.replace(/_/g,' '))+'</strong><small>'+esc(s.fresh?'Recent terminal snapshot':'Waiting for native terminal')+'</small></div><div><span>Basket target</span><strong>'+esc(price(b.target))+'</strong><small>Fixed to original signal</small></div></div>'
@@ -871,6 +877,8 @@ function wireDashboardControls(){
 
 // ---------- Campaigns ----------
 function pageCampaigns(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<h1 class="page-title">Native basket</h1>'+apex4IntelligencePanel(me.candidate);
+
   var html='<div class="desk-page-head"><div><span class="overview-eyebrow">WORKSPACE / EXECUTION</span><h1 class="page-title">Trades</h1><p>Active positions and campaign management.</p></div><a class="btn btn-ghost desk-action" href="#history">Trade history ↗</a></div>';
   if(!me.dataAvailable)return html+dataUnavailableCard(me);
   var cur=(me.account||{}).currency;
@@ -881,6 +889,8 @@ function pageCampaigns(me){
 
 // ---------- History ----------
 function pageHistory(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<h1 class="page-title">Native basket history</h1><div class="card"><p>Native deal-level history is not yet connected. Review actual deal history in MT5; the legacy campaign ledger is a different strategy.</p></div>';
+
   var html = '<h1 class="page-title">Trade history</h1><p class="page-sub">Review previous Apex campaigns and their outcomes.</p>'
     +'<div style="display:flex;justify-content:flex-end;margin-bottom:16px"><button class="text-link" type="button" id="history-insights-link">View trade insights →</button></div>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
@@ -912,6 +922,8 @@ function pageHistory(me){
 
 // ---------- Learning ----------
 function pageLearning(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<h1 class="page-title">Native basket research</h1><div class="card"><p>Uses the XauCloud classifier and closed-candle classroom features. Earlier fixed-SL outcomes are not performance results for this basket policy. Native deal-level learning requires a separate verified replay.</p></div>';
+
   var html = '<div class="desk-page-head"><div><span class="overview-eyebrow">INTELLIGENCE / PERFORMANCE</span><h1 class="page-title">Trade insights</h1><p>Completed campaigns and recorded AI research outcomes.</p></div><a class="btn btn-ghost desk-action" href="#lab">Research Lab ↗</a></div><section class="desk-panel" id="ai-ledger"><div class="desk-section-head"><h2>AI learning ledger</h2></div><p class="settings-subtle" id="ai-ledger-body">Loading recorded predictions…</p></section>';
   if (!me.dataAvailable) return html + dataUnavailableCard(me);
   var L = me.learning || {};
@@ -994,6 +1006,12 @@ function activateSettingsTab(tab){
 }
 
 function pageSettings(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET'){
+    return '<div class="settings-top"><h1 class="page-title">Native Apex settings</h1><p class="page-sub">Fixed basket execution · demo candidate</p></div>'
+      +releaseCard(me)+armDisarmCard(me)+apex4IntelligencePanel(me.candidate)
+      +'<div class="card"><h3>MT5 setup</h3><p>Compile the native candidate. Strategy Tester requires no API or backend. Demo Outlook uses only https://apex.xaucloud.io; enable native demo execution explicitly in MT5. This is not a customer release.</p></div>';
+  }
+
   var s = me.settings || {};
   var adv = s.advanced || {};
   var disabled = !me.settings;

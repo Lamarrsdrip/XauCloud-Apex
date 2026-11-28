@@ -394,49 +394,98 @@ void ApexBasketReplayTick()
       if(!ApexBasketReadReplay())break;
    }
 }
-// A closed-bar classroom observation, not a fitted profit probability.
-// Uses Codex's published impulse/depth/recovery lesson definitions and the
-// native XauCloud directional classifier. No research stop/TP2 rule is imported.
-bool ApexClassroomObserve(const int dir,const bool continuation,const double quote,string &stage,double &depth,double &recovery)
+// Closed-candle feature definitions from vendored XauCloud analyzeFrame and
+// Codex's recognizePullback classroom. No outcome/forward prices enter here.
+struct ApexClassroomFrame
 {
-   MqlRates five[],one[];
-   ArraySetAsSeries(five,false);ArraySetAsSeries(one,false);
-   int n5=CopyRates(_Symbol,PERIOD_M5,1,16,five),n1=CopyRates(_Symbol,PERIOD_M1,1,90,one);
-   if(n5<15||n1<60||quote<=0)return false;
-   double atr=0;
-   for(int i=n5-14;i<n5;i++)
-      atr+=MathMax(five[i].high-five[i].low,MathMax(MathAbs(five[i].high-five[i-1].close),MathAbs(five[i].low-five[i-1].close)));
-   atr/=14.0;
-   if(atr<=0||n5<15)return false;
-   // Continuation studies the native direction's preceding impulse.
-   // Countertrend studies the opposite impulse and the recovery away from it.
-   int impulseDir=continuation?dir:-dir,peak=3,start=0;
-   for(int i=4;i<n5;i++)
+   double atr,pressure,acceleration,high,low;
+   int trend;
+   bool hasHigh,hasLow,sweptHigh,sweptLow,upperRejection,lowerRejection,brokeUp,brokeDown;
+};
+bool ApexClassroomFeatures(MqlRates &bars[],ApexClassroomFrame &f)
+{
+   ZeroMemory(f);
+   int n=ArraySize(bars);
+   if(n<30)return false;
+   double atr=0,ef=bars[0].close,es=ef,prevHigh=0,prevLow=0;
+   int lastHi=-1,lastLo=-1,priorHi=-1,priorLo=-1;
+   for(int i=n-14;i<n;i++)
+      atr+=MathMax(bars[i].high-bars[i].low,MathMax(MathAbs(bars[i].high-bars[i-1].close),MathAbs(bars[i].low-bars[i-1].close)));
+   atr/=14.0;if(atr<=0)return false;
+   f.atr=NormalizeDouble(atr,2);if(f.atr<=0)return false;
+   for(int i=1;i<n;i++){ef=bars[i].close*.2+ef*.8;es=bars[i].close*(2.0/22.0)+es*(20.0/22.0);}
+   for(int i=2;i<n-2;i++)
+   {
+      bool hi=true,lo=true;
+      for(int j=-2;j<=2;j++)if(j!=0){if(bars[i+j].high>=bars[i].high)hi=false;if(bars[i+j].low<=bars[i].low)lo=false;}
+      if(hi){priorHi=lastHi;prevHigh=f.high;lastHi=i;f.high=bars[i].high;f.hasHigh=true;}
+      if(lo){priorLo=lastLo;prevLow=f.low;lastLo=i;f.low=bars[i].low;f.hasLow=true;}
+   }
+   if(ef>es&&(priorHi<0||f.high>=prevHigh)&&(priorLo<0||f.low>=prevLow))f.trend=1;
+   else if(ef<es&&(priorHi<0||f.high<=prevHigh)&&(priorLo<0||f.low<=prevLow))f.trend=-1;
+   double pressure=0;
+   for(int i=n-6;i<n;i++)
+   {
+      double range=bars[i].high-bars[i].low;
+      if(range>0)pressure+=((2*bars[i].close-bars[i].low-bars[i].high)/range+(bars[i].close-bars[i].open)/range)/2.0;
+   }
+   f.pressure=NormalizeDouble(pressure/6.0,2);
+   f.acceleration=NormalizeDouble(((bars[n-1].close-bars[n-4].close)-(bars[n-4].close-bars[n-7].close))/atr,2);
+   double body=MathAbs(bars[n-1].close-bars[n-1].open);
+   f.upperRejection=bars[n-1].high-MathMax(bars[n-1].open,bars[n-1].close)>=MathMax(2*body,.5*atr);
+   f.lowerRejection=MathMin(bars[n-1].open,bars[n-1].close)-bars[n-1].low>=MathMax(2*body,.5*atr);
+   for(int i=n-3;i<n;i++)
+   {
+      if(lastHi>=0&&lastHi<n-3&&bars[i].high>f.high&&bars[n-1].close<f.high)f.sweptHigh=true;
+      if(lastLo>=0&&lastLo<n-3&&bars[i].low<f.low&&bars[n-1].close>f.low)f.sweptLow=true;
+   }
+   f.brokeUp=f.hasHigh&&bars[n-1].close>f.high;f.brokeDown=f.hasLow&&bars[n-1].close<f.low;
+   return true;
+}
+bool ApexClassroomObserve(const int dir,const bool continuation,const double quote,string &stage,double &depth,double &recovery,datetime &episode)
+{
+   MqlRates five[],one[],m15[];
+   ArraySetAsSeries(five,false);ArraySetAsSeries(one,false);ArraySetAsSeries(m15,false);
+   int n5=CopyRates(_Symbol,PERIOD_M5,1,120,five),n1=CopyRates(_Symbol,PERIOD_M1,1,120,one);
+   if(n5<30||n1<60||quote<=0||CopyRates(_Symbol,PERIOD_M15,1,120,m15)<30)return false;
+   ApexClassroomFrame f1,f5,f15;
+   if(!ApexClassroomFeatures(one,f1)||!ApexClassroomFeatures(five,f5)||!ApexClassroomFeatures(m15,f15))return false;
+   int parent=f15.trend!=0?f15.trend:f5.trend;
+   if(continuation&&parent!=0&&parent!=dir)return false;
+   int impulseDir=continuation?dir:-dir;
+   // Match the classroom's last 16 completed M5 bars and last 90 M1 bars.
+   int base=n5-16,peak=base+3,start=base;
+   for(int i=base+4;i<n5;i++)
       if(impulseDir*(impulseDir>0?five[i].high-five[peak].high:five[i].low-five[peak].low)>=0)peak=i;
-   for(int i=1;i<peak;i++)
+   for(int i=base+1;i<peak;i++)
       if(impulseDir*(impulseDir>0?five[i].low-five[start].low:five[i].high-five[start].high)<=0)start=i;
    double peakPrice=impulseDir>0?five[peak].high:five[peak].low;
    double startPrice=impulseDir>0?five[start].low:five[start].high;
    double impulse=impulseDir*(peakPrice-startPrice);
-   if(impulse<1.25*atr||TimeCurrent()-five[start].time>90*60)return false;
+   if(impulse<1.25*f5.atr||TimeCurrent()-five[start].time>90*60)return false;
    int peak1=-1;
-   for(int i=0;i<n1;i++)
+   for(int i=(int)MathMax(0,n1-90);i<n1;i++)
       if(one[i].time>=five[peak].time&&one[i].time<five[peak].time+300&&
          MathAbs((impulseDir>0?one[i].high:one[i].low)-peakPrice)<=_Point*.5)peak1=i;
    if(peak1<0||peak1>=n1-1)return false;
+   episode=one[peak1].time;
    double extreme=impulseDir>0?one[peak1+1].low:one[peak1+1].high;
    for(int i=peak1+2;i<n1;i++)extreme=impulseDir>0?MathMin(extreme,one[i].low):MathMax(extreme,one[i].high);
    depth=impulseDir*(peakPrice-extreme)/impulse;
-   if(depth<.12||depth>=1.0)return false;
-   recovery=impulseDir*(quote-extreme)/(impulse*depth);
-   bool reclaim=dir>0?g_m10Snapshot.bullishReclaim:g_m10Snapshot.bearishReclaim;
-   bool displacement=dir>0?g_m10Snapshot.bullishDisplacement:g_m10Snapshot.bearishDisplacement;
-   bool pressure=dir>0?g_m10Snapshot.buyPressure>g_m10Snapshot.sellPressure:g_m10Snapshot.sellPressure>g_m10Snapshot.buyPressure;
-   stage=reclaim?"STRUCTURE_RECLAIM":(displacement&&pressure?"MOMENTUM_RECOVERY":"NATIVE_CANDIDATE");
-   // The classroom found that late continuation often had insufficient room.
-   // Never use future candles or its former variable TP/SL to authorize entry.
-   if(continuation&&recovery>=.85){stage="LATE";return false;}
-   return true;
+   if(depth<.12)return false;
+   bool broken=depth>=1.0||(continuation&&((dir>0&&f15.hasLow&&extreme<=f15.low)||(dir<0&&f15.hasHigh&&extreme>=f15.high)));
+   if(broken){stage="STRUCTURE_BROKEN";return false;}
+   recovery=continuation?dir*(quote-extreme)/(impulse*depth):dir*(quote-peakPrice)/impulse;
+   if(recovery>=.85){stage="LATE";return false;}
+   bool sweep=dir>0?f1.sweptLow:f1.sweptHigh;
+   bool rejection=dir>0?f1.lowerRejection:f1.upperRejection;
+   bool reclaim=dir>0?f1.brokeUp:f1.brokeDown;
+   bool recoveryPressure=dir*f1.pressure>.1&&dir*f1.acceleration>0;
+   stage=sweep&&recoveryPressure?"SWEEP_RECOVERY":reclaim?"STRUCTURE_RECLAIM":
+      rejection?"REJECTION":recoveryPressure?"MOMENTUM_RECOVERY":"DEVELOPING";
+   // Use the actionable classroom stages, never its old variable exit plan.
+   // Native M10 direction and classifier are required independently.
+   return stage!="DEVELOPING"&&recovery>=0;
 }
 void ApexBasketConsiderNative()
 {
@@ -445,11 +494,13 @@ void ApexBasketConsiderNative()
    if(!g_m10Snapshot.complete||g_m10Snapshot.freshnessState!="FRESH"||
       g_m10Snapshot.closedBarTime!=iTime(_Symbol,PERIOD_M10,1)||
       g_m10Decision.closedBarTime!=g_m10Snapshot.closedBarTime||
-      g_m10Decision.closedBarTime<=apexBasketLastSignal)return;
+      g_m10Decision.closedBarTime<=0)return;
    int dir=g_m10Decision.preferredDirection;
-   if((dir!=1&&dir!=-1)||g_m10Decision.retracementRequired)return;
-   if((dir==1&&g_m10Decision.decisionType!=M10_DECISION_BUY_CANDIDATE)||
-      (dir==-1&&g_m10Decision.decisionType!=M10_DECISION_SELL_CANDIDATE))return;
+   if(dir!=1&&dir!=-1)return;
+   // A native retrace thesis may enter as soon as the closed-M1 classroom
+   // identifies recovery; no separate M10 confirmation delay is imposed.
+   if((dir==1&&g_m10Decision.decisionType!=M10_DECISION_BUY_CANDIDATE&&g_m10Decision.decisionType!=M10_DECISION_WAIT_FOR_BUY_RETRACE)||
+      (dir==-1&&g_m10Decision.decisionType!=M10_DECISION_SELL_CANDIDATE&&g_m10Decision.decisionType!=M10_DECISION_WAIT_FOR_SELL_RETRACE))return;
    double atr[1];
    if(hATR==INVALID_HANDLE||CopyBuffer(hATR,0,1,1,atr)!=1||atr[0]<=0||ArraySize(bufEMAFast)<2||ArraySize(bufEMASlow)<2)return;
    XAU_SetupClassification c;
@@ -459,9 +510,9 @@ void ApexBasketConsiderNative()
    if(!continuation&&!correction)return;
    MqlTick q;if(!SymbolInfoTick(_Symbol,q)||q.bid<=0||q.ask<q.bid)return;
    double entry=dir>0?q.ask:q.bid,depth=0,recovery=0;
-   string stage="";
-   if(!ApexClassroomObserve(dir,continuation,entry,stage,depth,recovery))return;
-   apexBasketLastSignal=g_m10Decision.closedBarTime;
+   string stage="";datetime episode=0;
+   if(!ApexClassroomObserve(dir,continuation,entry,stage,depth,recovery,episode)||episode<=apexBasketLastSignal)return;
+   apexBasketLastSignal=episode;
    Print("APEX_CLASSROOM_EVIDENCE stage=",stage," depth=",depth," recovery=",recovery," native=",c.why);
    ApexBasketStart(dir,entry,"NATIVE_XAUCLOUD_PULLBACK:"+stage);
 }

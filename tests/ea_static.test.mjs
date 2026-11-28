@@ -332,12 +332,17 @@ test('v3.8.6: CLOSING persists until broker shows zero owned positions', () => {
   assert.match(rec, /stays CLOSING until zero positions/);
 });
 
-test('v3.8.6: customer-facing WebRequest origin is xaucloud.io everywhere in this repo', async () => {
+test('WebRequest instructions use the correct origin for legacy and native EAs', async () => {
   const ui = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const validation = await fs.readFile(new URL('../VALIDATION.txt', import.meta.url), 'utf8');
-  assert.match(ui, /allow WebRequest for <code>https:\/\/xaucloud\.io<\/code>/);
-  assert.doesNotMatch(ui, /allow WebRequest for <code>https:\/\/apex\.xaucloud\.io<\/code>/);
+  const legacy = ui.slice(ui.indexOf('function pageSettings('), ui.indexOf('function pageAccount('));
+  const native = ui.slice(ui.indexOf('function nativeSetup('), ui.indexOf('function pageDashboard('));
+  const nativeEA = await fs.readFile(new URL('../ea/Apex4-NativeBasket-Tester.mqh', import.meta.url), 'utf8');
+  assert.match(legacy, /allow WebRequest for <code>https:\/\/xaucloud\.io<\/code>/);
+  assert.doesNotMatch(legacy, /allow WebRequest for <code>https:\/\/apex\.xaucloud\.io<\/code>/);
+  assert.match(native, /allow WebRequest for <code>https:\/\/apex\.xaucloud\.io<\/code>/);
+  assert.match(nativeEA, /WebRequest\("POST","https:\/\/apex\.xaucloud\.io\/api\/apex\/v4\/native-outlook"/);
   assert.match(readme, /https:\/\/xaucloud\.io/);
   assert.match(validation, /https:\/\/xaucloud\.io/);
   assert.match(s, /InpCloudURL="https:\/\/xaucloud\.io"/);

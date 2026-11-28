@@ -63,7 +63,7 @@ export function nativeBasketStatus(input,now,armed){
  const optionalFinite=(n)=>typeof n==='number'&&Number.isFinite(n)?n:null;
  const preferred=optionalFinite(input.preferredVolume),last=optionalFinite(input.lastFillVolume);
  if((preferred!==null&&preferred<0)||(last!==null&&(last<0||preferred!==null&&last>preferred+1e-8)))return null;
- return {observedAt:now,armed:armed===true,active:input.basketActive,side:input.side===1?'BUY':input.side===-1?'SELL':null,
+ return {observedAt:now,armed:armed===true,terminalArmed:typeof input.terminalArmed==='boolean'?input.terminalArmed:null,active:input.basketActive,side:input.side===1?'BUY':input.side===-1?'SELL':null,
   preferredVolume:preferred,lastFillVolume:last,freeMargin:optionalFinite(input.freeMargin),equity:optionalFinite(input.equity),
   orderGapMs:Number.isSafeInteger(input.orderGapMs)&&input.orderGapMs>0?input.orderGapMs:null,
   anchor:input.basketActive?input.anchor:null,target:input.basketActive?input.target:null,positions:input.positions,orders:input.orders,stopLoss:null};

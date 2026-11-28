@@ -16,7 +16,8 @@ const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'
 const CONFIG_SCHEMA=Number(MANIFEST.configSchema||2);
 const PORT=Number(process.env.PORT||8787);
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
-const APEX4_PREVIEW=process.env.APEX4_CANDIDATE==='1';
+const APEX4_NATIVE_PREVIEW=process.env.APEX4_NATIVE_BASKET==='1';
+const APEX4_PREVIEW=!APEX4_NATIVE_PREVIEW&&process.env.APEX4_CANDIDATE==='1';
 let apex4RuntimePromise;
 function apex4Runtime(){
   if(!apex4RuntimePromise)apex4RuntimePromise=import('./intelligence/apex4-runtime.mjs').then(runtime=>{
@@ -1150,11 +1151,13 @@ async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const desiredHash=configHash(cfg);
   const release=await RELEASE_STORE.status();
-  const nativePreview=process.env.APEX4_NATIVE_BASKET==='1';
+  const nativePreview=APEX4_NATIVE_PREVIEW;
   const native=lic?.nativeBasket;
   const nativeFresh=!!native&&Date.now()-native.observedAt<=8000&&Date.now()>=native.observedAt;
   const candidate=nativePreview?{mode:'APEX4_NATIVE_BASKET',status:nativeFresh?(native.armed?'ARMED':'DISARMED'):'AWAITING_NATIVE_TERMINAL',
-    fresh:nativeFresh,basket:nativeFresh?native:null,hoursWAT:nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9'),execution:'DEMO_ONLY',modelExecution:false}
+    fresh:nativeFresh,basket:nativeFresh?native:null,hoursWAT:nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9'),
+    outlookKnowledge:await apex4Runtime().then(m=>m.nativeOutlookKnowledgeStatus()).catch(()=>({status:'OUTLOOK_GRADE_UNAVAILABLE',rules:0,strongCases:0})),
+    execution:'DEMO_ONLY',modelExecution:false}
     :APEX4_PREVIEW?await apex4Runtime().then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
@@ -1165,6 +1168,16 @@ async function buildMe(key){
       settings:settingsView(cfg),learning:learningShape([]),
       bridge:{configured:bridgeConfigured(),ok:false,reason:'LICENSE_'+status,sync:bridgeSyncState}};
 
+  if(nativePreview){
+    const at=nativeFresh?new Date(native.observedAt).toISOString():null;
+    return {license:base,release,candidate,dataAvailable:nativeFresh,waitingForFirstContact:!native,
+      armed:cfg.armed,mt5:{status:nativeFresh?'CONNECTED':native?'STALE':'DISCONNECTED',lastSeen:at},
+      control:{desired:{armed:cfg.armed,revision:Number(lic.commandRevision||0)},applied:{inSync:null,asOf:at}},
+      account:{account:lic.account||null,currency:'USD',equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
+        openPositions:nativeFresh?native.positions:null,asOf:at},
+      campaign:null,history:[],recentHuman:[],settings:settingsView(cfg),learning:learningShape([]),
+      bridge:{configured:false,ok:false,reason:'INDEPENDENT_NATIVE_MODE'}};
+  }
   const bridge=await readBridgeStatusSafe(key);
   const remote=bridge.data;
   const remoteLastSeen=remote?.mt5?.lastSeen||null;
@@ -1320,7 +1333,7 @@ const server=http.createServer(async(req,res)=>{
 
     if(req.method==='GET'&&u.pathname==='/health')
       return json(res,200,{ok:true,service:'xaucloud-apex',
-        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,candidateMode:APEX4_PREVIEW?'APEX4_DEMO':null,
+        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,candidateMode:APEX4_NATIVE_PREVIEW?'APEX4_NATIVE_BASKET':APEX4_PREVIEW?'APEX4_DEMO':null,
         configSchema:CONFIG_SCHEMA,webRequestOrigin:MANIFEST.webRequestOrigin,
         bridge:{configured:bridgeConfigured(),sync:bridgeSyncState},
         secretsAcceptableForProduction:secretProblems().length===0,
@@ -1333,7 +1346,7 @@ const server=http.createServer(async(req,res)=>{
         res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
         res.end(txt);
       };
-      if(process.env.APEX4_NATIVE_BASKET!=='1')return send(503,'NONE|CANDIDATE_DISABLED');
+      if(!APEX4_NATIVE_PREVIEW)return send(503,'NONE|CANDIDATE_DISABLED');
       const b=await body(req,2e6);
       if(b.environment!=='DEMO')return send(403,'NONE|DEMO_ONLY');
       const v=await validateEa(b.license,b.account,{claim:false});
@@ -1558,7 +1571,7 @@ const server=http.createServer(async(req,res)=>{
     // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
     if(u.pathname.startsWith('/api/session/lab/')){
       const s=await notificationSession(req,res);if(!s)return;
-      if(APEX4_PREVIEW)return json(res,409,{error:'legacy_lab_disabled_in_apex4'});
+      if(APEX4_PREVIEW||APEX4_NATIVE_PREVIEW)return json(res,409,{error:'legacy_lab_disabled_in_apex4'});
       if(!throttle('astra-lab:'+s.lic,ip,20,60_000))return json(res,429,{error:'too_many_lab_requests'});
       if(req.method!=='GET'){
         if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
@@ -1664,7 +1677,7 @@ const server=http.createServer(async(req,res)=>{
       if(!String(req.headers['content-type']||'').startsWith('application/json'))
         return json(res,415,{error:'json_required'});
       if(u.pathname==='/api/admin/release'){
-        if(APEX4_PREVIEW)return json(res,409,{error:'candidate_mode_cannot_publish_stable_release'});
+        if(APEX4_PREVIEW||APEX4_NATIVE_PREVIEW)return json(res,409,{error:'candidate_mode_cannot_publish_stable_release'});
         if(!throttle('release-publish',ip,5,60*60*1000))return json(res,429,{error:'too_many_release_uploads'});
         const b=await body(req,8_000_000);
         const published=await RELEASE_STORE.publish(b);

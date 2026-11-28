@@ -1,37 +1,105 @@
-# Apex 4 independent Outlook and pullback — DEMO candidate
+# Apex 4 independent intelligence candidate
 
-This supersedes the earlier direct XauCloud published-signal transport. Do NOT merge XauAI-Sniper PR #128 as a dependency. The candidate runs on the Apex backend, using the attached MT5 account's M1 bars and executable bid/ask. The old EA, stable release manifest and dashboard layout are unchanged. This is a source candidate, not a verified production release.
+Apex reads its own attached MT5 broker's bid, ask, and closed bars. Its
+deterministic engine runs without paid model requests. Trading remains
+disabled by default. The Apex 4 routes and dashboard activate only when
+the staging operator sets `APEX4_CANDIDATE=1`. The stable delivery manifest
+and EA are separate.
 
-## What was copied
-Pinned XauCloud commit 9e5f137753a9687670ed2105311f72b30891e29e. See intelligence/xaucloud/provenance.json for the exact source blobs and extraction boundaries. The deterministic opportunity engine, feature extraction, current quote checks, Outlook core/owner policy/confidence/zone and hourly bias resolver, case education, opinion replay and grading are local. No model or remote published signal needed for these functions.
+## Native M10 and Hourly Outlook
 
-**Parity blocker:** original XauCloud EA M10/market-thesis producer source was not available through the accessible repository. The exact backend bias resolver can run from real canonical evidence; the local OHLC pressure-derived outlook is explicitly research-only, never labeled the original generator. The copied subset also does not reproduce all DB-dependent production filters and lifecycle. Do not claim 100% parity. Obtain the original MQL source and its build provenance from the existing Mac/VPS, port its evidence producer, then verify identical input/output fixtures and outcomes. The local adapter below is not a substitute for that source.
+The [native observer](APEX4_NATIVE_EVIDENCE.md) is generated from the exact
+source behind XauCloud v6.29.1. It reproduces the original M10 evidence
+producer and emits its broker-local market thesis. The isolated observer
+has its broker sends and HTTP requests disabled. Apex checks the observer
+source, broker, account, timestamp, quote, and higher-timeframe availability
+before running the copied deterministic Outlook resolver. No published
+XauCloud signal is required.
 
-**Historical-data blocker:** Atlas MCP access was disabled. No actual production case export or pullback training result was obtained here. The source includes historical negative results for basic exhaustion reversals and countertrend corrections; preserve these lessons. The candidate must not invent successful pullback groups or hours.
+An executable Outlook needs both a valid native thesis and a historically
+qualified grade and WAT hour. The evidence comparison tool reports field
+differences for a matched packet. Production XauCloud additionally uses
+database-dependent policies and lifecycle data, so a same-packet comparison
+covers only the reported fields.
 
-## Run the local historical pipeline (Node 22)
-From this Apex worktree:
-```sh
-node scripts/export-xaucloud-v4-knowledge.mjs /absolute/path/to/XauAI-Sniper/backend_node "$HOME/apex4-history-private" 2021-11-01 2026-11-27
-node --experimental-strip-types scripts/train-apex4-knowledge.mjs "$HOME/apex4-history-private" "$HOME/apex4-knowledge.json" 0.30 0.10
-node --experimental-strip-types --test intelligence/tests/*.test.ts
-npm ci && npm test
+## Pullback and historical experiments
+
+Apex examines M15 structure and uses H1 for conflicting trend context.
+The continuation candidate measures retracement depth within an intact
+parent swing, a sweep or rejection, and M1 pressure recovery or a live
+reclaim. The correction candidate is studied separately. Its entries and
+targets require actual price room and consistent geometry. A detected
+setup can enter research without authorizing an order.
+
+See [historical validation](APEX_V4_HISTORICAL_VALIDATION.md) for the
+verified archive coverage, chronology, experimental costs, and separate
+November price exam. The trainer retains sample counts and rejected or
+missed entries as well as TP1, TP2, favorable and adverse excursion and
+drawdown. Use an isolated historical directory and keep private raw data
+and generated knowledge files outside Git. Verified WAT hour qualification
+requires the original signal issue time, conditions and outcome, rather
+than the public aggregate performance response.
+
+## Trade Brain and chat
+
+Candidate operation requires Node 22. The SQLite ledger under
+`DATA_DIR/apex4-trade-brain/` archives observations before the decision,
+persists the decision and plan as observed, and resolves research cases
+from subsequent broker quotes. Gaps censor uncertain paths. Reports keep
+quote-based simulations and terminal-reported broker deals separate.
+Apex deduplicates by account and event or deal identity. The EA batches
+broker events with the next market poll, retains them across restarts, and
+clears them only after the server confirms a durable write.
+
+The daily learning cycle records performance by setup and WAT hour. It
+freezes a future evaluation window when it creates a candidate. Admin
+promotion requires a forward-validated candidate and rollback restores the
+previous research version. The research registry adds evidence to chat.
+Executable decisions use the independently calibrated knowledge artifact.
+The account can continue collecting observations while disarmed.
+
+Apex AI chat uses the supplied market, replay, and broker evidence with the
+configured supported chat model. The customer's model key is needed only
+for interactive provider features such as chat and connection tests.
+
+## Compile for Mac and stage
+
+From this checkout, run the following command. It builds in a new isolated
+MetaEditor directory and saves the checksum-stamped candidate EX5 and UTF-8
+compile report into the Mac Downloads folder after a clean compile.
+
+```bash
+bash scripts/compile-apex4-mac.sh
 ```
-First command requires the existing XauCloud compiled backend, existing authorized DB environment and archive files. Read-only; no secrets or raw keys are exported. Use a NEW private export directory, never commit it. Verify actual date coverage; the end date is exclusive. The second command uses XauCloud's saved education cases and Exness MID M1 archive converted to synthetic BID under explicit fixed spread and slippage; no actual commission or sub-second path. Distinct chronological splits for Outlook and pullbacks; outcome windows purged at train and validation boundaries, final holdout not used to pick groups. Report real sample counts, TP2, adverse movement and expectancy, including zero qualifying groups. No proven profitable setup inferred from a successful compile.
 
-## Independent staging server
-Use a separate test instance with an existing authorized demo license bound to its account, existing secure test configuration, isolated persistent data directory and Node 22. Do not set this flag on production or use a real-money account.
-```sh
-APEX4_CANDIDATE=1 APEX4_KNOWLEDGE_FILE="$HOME/apex4-knowledge.json" NODE_OPTIONS=--experimental-strip-types node server.mjs
-```
-The new POST /api/apex/v4/market route validates local license binding and armed state, accepts broker data, and returns the compact APEX4 wire (id, side, entry, SL, TP1, TP2, published/expiry epoch, kind). Existing stable mode unchanged when flag absent. Candidate-mode legacy paid order decisions and model lab predictions are disabled; manual chat uses local evidence and knowledge and is read-only. Connection tests may still consume tokens when explicitly requested. No automatic LLM costs from the new engine.
+Use an authorized USD hedging demo account and a bound test license. Point
+`ApexBackendURL` to the isolated staging endpoint and configure MT5's
+WebRequest allowlist. The candidate uses HTTPS by default. The explicit
+`AllowLoopbackStaging` input permits only a literal loopback HTTP endpoint
+for disposable local verification. Leave `EnableDemoExecution=false` to
+collect market evidence. Orders additionally require explicit terminal
+enablement, an armed demo license, and an approved fresh plan.
 
-For canonical Outlook parity, integrate original local M10 producer and set APEX4_LOCAL_EVIDENCE_DIR and APEX4_CANONICAL_SOURCE_COMMIT. This operator-owned directory must be private and writable only by the trusted local producer. File name is SHA256(license + "|" + account) + ".json"; never log license keys. Schema XAUCLOUD_CANONICAL_M10_EVIDENCE_V1, account, symbol XAUUSD, exact sourceCommit, canonicalM10, thesis, htfComplete, observedAt (epoch ms), quote {bid,ask,atMs}, optional brainRecommendation. Freshness and same-broker quote checks required. Use the actual original producer; never manufacture this object or use published Outlook as a proxy. No canonical file means no executable Outlook; local research output remains available in chat. A qualified Outlook uses actual STRONG grade and empirically selected hour. 08/09/10 WAT are owner candidate hours, not asserted measured winners.
+Active baskets keep broker SL and TP2. Narrow recovery restores management
+of a verified matching basket without placing new layers after restart.
+An ambiguous order reply prevents further entries until ownership and
+broker state can be reconciled. The normal and margin-stress modes keep
+their existing account equity tiers, broker margin checks, and pace.
+Broker fills, slippage, commissions, stop-outs, and partial fills need
+real demo evidence. Simulated risk units do not measure liquidation risk.
 
-## EA
-Compile ea/XauCloud-Apex-v4.0.0-DEMO-Candidate.mq5 in MetaEditor. Do not replace installed stable EA. Attach to XAUUSD M1 on authorized USD hedging DEMO only. EnableDemoExecution requires explicit opt-in. Set ApexBackendURL to the verified HTTPS staging endpoint and allow that host in MT5 WebRequest. Never send a license to an unknown endpoint. Source is not compiled here.
+No Apex 4 binary is promoted through this candidate workflow. Validate
+normal and unlimited-leverage execution, margin recovery, partial fills,
+restart, and TP2 on approved demo setups before updating the stable release.
 
-Equity clip frozen at basket start: $20=.01, $50=.02, $100=.05, $200=.10, proposed $500=.20, $1000+=.50. Below $20 no entry. Normal and unlimited demo accounts use broker-reported margin, volume step/min/max and actual acknowledgements. Default 250ms local pacing, no request per order, synchronous broker confirmation may take longer. Optional DemoMarginStress mode allows adding before profit and resuming when free margin recovers, including after TP1 but not past TP2. MaximumDemoLayers=0 removes the software layer count cap in demo; risk-bounded default mode remains. Equity/spread cushion, valid broker geometry, current authorization and ownership checks remain. Common broker SL/TP2 for all positions, no additions after invalidation, expiry or TP2, time exit 60 min Outlook/20 min pullback. Full-margin accumulation can liquidate even a directionally correct basket. Do not enable it on live accounts. Restart preserves broker SL/TP; full automatic campaign reconstruction and cross-terminal claims not implemented. No sub-second latency guarantee.
+## Verified artifacts
 
-## Release gates
-Full CI + MetaEditor compile 0/0 + actual broker demo with normal/unlimited leverage, rejected and delayed/partial fills, margin recovery, restart, market close, TP2 basket and disarm. Compare actual original Outlook outputs on identical broker evidence and validate best WAT windows. Train and test on real historical data, compare with existing Apex including costs, adverse excursion, drawdown and liquidation risk. Extend durable per-account market/decision/outcome telemetry and continuous retraining before production. Runtime currently caches live bars in memory and reads offline knowledge snapshots; no continuous persisted training cycle yet. No production deployment, release binary or profit claim.
+The Mac candidate compiled with MetaEditor at **0 errors and 0 warnings**.
+Candidate source SHA-256 is
+`8235c48fe6f3c3c105add9c0625927a52a854d4b85380d192757922610bb2b8b`.
+Candidate EX5 SHA-256 is
+`aaf9d33fdd134330461beb17a2f82face66d66b32b98b69a1e06eadeb47aee9c`.
+The separately generated native observer also compiled at 0 errors and
+0 warnings. The validated offline snapshot grants zero pullback groups and
+zero Outlook hours. Raw prices and local knowledge files are private
+workspace artifacts.

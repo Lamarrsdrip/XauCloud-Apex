@@ -16,6 +16,18 @@ const CONFIG_SCHEMA=Number(MANIFEST.configSchema||2);
 const PORT=Number(process.env.PORT||8787);
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const APEX4_PREVIEW=process.env.APEX4_CANDIDATE==='1';
+let apex4RuntimePromise;
+function apex4Runtime(){
+  if(!apex4RuntimePromise)apex4RuntimePromise=import('./intelligence/apex4-runtime.mjs').then(runtime=>{
+    runtime.initializeTradeBrain(DATA);
+    return runtime;
+  }).catch(error=>{apex4RuntimePromise=null;throw error;});
+  return apex4RuntimePromise;
+}
+const runApex4Learning=()=>apex4Runtime().then(runtime=>runtime.runLearningCycle()).catch(()=>{
+  console.error('APEX4_LEARNING_DEFERRED');
+});
+
 
 // APEX-AUDIT-024: the public fallback strings are accepted ONLY outside production.
 // A production process refuses to start without real, sufficiently long secrets.
@@ -1137,7 +1149,7 @@ async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const desiredHash=configHash(cfg);
   const release=await RELEASE_STORE.status();
-  const candidate=APEX4_PREVIEW?await import('./intelligence/apex4-runtime.mjs').then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
+  const candidate=APEX4_PREVIEW?await apex4Runtime().then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
     unlimitedEntitled:licenseAllowsUnlimited(lic),
@@ -1310,21 +1322,52 @@ const server=http.createServer(async(req,res)=>{
 
     // Apex v4 candidate is a separate, provider-free backend mode. The stable
     // deployment stays unchanged unless the staging operator enables it.
-    if(req.method==='POST'&&u.pathname==='/api/apex/v4/market'){
-      const send=(status,txt)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(txt);};
-      if(process.env.APEX4_CANDIDATE!=='1')return send(503,'NONE|CANDIDATE_DISABLED');
+    if(req.method==='POST'&&['/api/apex/v4/market','/api/apex/v4/events'].includes(u.pathname)){
+      const market=u.pathname.endsWith('/market');
+      const send=(status,txt)=>{
+        if(!market)return json(res,status,{error:txt});
+        res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
+        res.end('NONE|'+txt);
+      };
+      if(!APEX4_PREVIEW)return send(503,'CANDIDATE_DISABLED');
       const b=await body(req,2e6);
       const v=await validateEa(b.license,b.account,{claim:false});
-      if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
-      if(!throttle('apex4-market:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
-      if(b.environment!=='DEMO')return send(403,'NONE|DEMO_ONLY');
-      const cfg=await getLicenseConfig(v.key);
-      if(cfg.armed!==true)return send(200,'NONE|NOT_ARMED');
-      try {
-        const {analyzeBroker}=await import('./intelligence/apex4-runtime.mjs');
-        const result=await analyzeBroker(v.key,String(b.account),b);
-        return send(200,result.text);
-      }catch{return send(503,'NONE|ENGINE_UNAVAILABLE');}
+      if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NOT_BOUND');
+      if(!throttle('apex4-'+(market?'market':'events')+':'+v.key,ip,90,60_000))return send(429,'RATE_LIMITED');
+      if(b.environment!=='DEMO')return send(403,'DEMO_ONLY');
+      try{
+        const runtime=await apex4Runtime();
+        if(!market||b.events!==undefined){
+          let persisted;
+          try{persisted=runtime.recordBrokerEvents(v.key,String(b.account),b.events);}
+          catch(error){
+            if(/^INVALID_(EVENT|DEAL|ORDER)/.test(String(error?.message??'')))return send(400,'INVALID_BROKER_EVENTS');
+            throw error;
+          }
+          res.setHeader('X-Apex-Events','committed');
+          if(!market)return json(res,200,persisted);
+        }
+        const cfg=await getLicenseConfig(v.key);
+        const result=await runtime.analyzeBroker(v.key,String(b.account),b,Date.now(),{armed:cfg.armed===true});
+        res.writeHead(200,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
+        return res.end(cfg.armed===true?result.text:'NONE|NOT_ARMED');
+      }catch{return send(503,'ENGINE_UNAVAILABLE');}
+    }
+    if(req.method==='POST'&&u.pathname==='/api/admin/apex4/knowledge'){
+      if(!APEX4_PREVIEW)return json(res,404,{error:'not_found'});
+      if(!adminOk(req))return json(res,401,{error:'unauthorized'});
+      const b=await body(req,8192);
+      if(!['PROMOTE','ROLLBACK'].includes(b.action)||b.action==='PROMOTE'&&!/^[a-f0-9]{24}$/.test(String(b.versionId??'')))
+        return json(res,400,{error:'invalid_knowledge_action'});
+      const v=await validateEa(b.license,b.account,{claim:false});
+      if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return json(res,403,{error:'not_bound'});
+      try{
+        const runtime=await apex4Runtime();
+        return json(res,200,runtime.changeLearningKnowledge(v.key,String(b.account),b.action,b.versionId));
+      }catch(error){
+        if(['VERSION_NOT_VALIDATED','NO_ACTIVE_VERSION'].includes(error?.message))return json(res,409,{error:error.message});
+        return json(res,503,{error:'learning_unavailable'});
+      }
     }
 
     // --- EA routes. One binding/expiry policy for all of them (APEX-AUDIT-022). ---
@@ -1746,6 +1789,10 @@ if(process.env.NODE_ENV!=='test'){
   server.listen(PORT,'0.0.0.0',()=>console.log(`XauCloud Apex v${MANIFEST.version} listening on ${PORT}`));
   syncAllLicensesAtStartup().catch(e=>console.error('APEX_BRIDGE_STARTUP_DEFERRED',String(e?.message||e)));
   NOTIFICATIONS.start({intervalMs:5000});
+  if(APEX4_PREVIEW){
+    void runApex4Learning();
+    setInterval(runApex4Learning,60*60_000).unref?.();
+  }
   setTimeout(()=>{reconcileNotificationBridgeEvents().catch(e=>console.error('APEX_PUSH_BRIDGE_RECONCILE_FAILED',String(e?.message||e)))},1500).unref?.();
   setInterval(()=>{reconcileNotificationBridgeEvents().catch(e=>console.error('APEX_PUSH_BRIDGE_RECONCILE_FAILED',String(e?.message||e)))},8000).unref?.();
   setInterval(()=>{drainOutbox().catch(e=>console.error('APEX_OUTBOX_DRAIN_FAILED',String(e?.message||e)))},15_000).unref?.();

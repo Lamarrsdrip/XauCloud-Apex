@@ -10,6 +10,16 @@ try{
   await page.route('https://apex.test/**',async route=>{
     const u=new URL(route.request().url());
     if(u.pathname==='/api/auth/me')return route.fulfill({json:dashboard});
+    if(u.pathname==='/api/session/native-strategy'){
+      const {strategy}=route.request().postDataJSON();
+      dashboard={...dashboard,candidate:{...dashboard.candidate,strategy,appliedStrategy:strategy}};
+      return route.fulfill({json:{ok:true,strategy}});
+    }
+    if(u.pathname==='/api/session/config'){
+      const {armed}=route.request().postDataJSON();
+      dashboard={...dashboard,control:{desired:{armed},applied:{inSync:true}}};
+      return route.fulfill({json:{ok:true,inSync:true}});
+    }
     if(u.pathname==='/api/session/astra/chat')return route.fulfill({contentType:'text/event-stream',body:'event: delta\ndata: {"delta":"Reference setup research response"}\n\nevent: done\ndata: {"answer":"Reference setup research response","marketStatus":"UNAVAILABLE"}\n\n'});
     const episode={id:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',prefix:Array.from({length:180},(_,i)=>({o:1000+i*.1,h:1000+i*.1+.2,l:1000+i*.1-.2,c:1000+i*.1+.1})),quote:{bid:1017.9,ask:1018.1},atr:1,predictions:[]};
     if(u.pathname==='/api/session/lab/new')return route.fulfill({json:episode});
@@ -84,6 +94,35 @@ try{
   await page.getByRole('heading',{name:'Apex AI',exact:true}).waitFor();
   await page.getByText('Awaiting fresh Apex M1 broker data',{exact:false}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Research Lab'}).count(),0);
+  dashboard={...sample,candidate:{mode:'APEX4_NATIVE_BASKET',status:'AWAITING_NATIVE_TERMINAL',strategy:'BOTH',fresh:false,basket:null,appliedStrategy:null,hoursWAT:[8,9],outlookKnowledge:{status:'OUTLOOK_GRADE_UNAVAILABLE'}},mt5:{status:'DISCONNECTED'}};
+  await page.goto('https://apex.test/');
+  await page.getByRole('heading',{name:'Overview',exact:true}).waitFor();
+  assert.equal(await page.locator('#apx-outlook-toggle').isChecked(),true);
+  assert.equal(await page.locator('#apx-pullback-toggle').isChecked(),true);
+  await page.locator('#apx-outlook-toggle').uncheck();
+  await page.waitForFunction(()=>!document.getElementById('apx-outlook-toggle').disabled);
+  assert.equal(dashboard.candidate.strategy,'PULLBACK');
+  await page.locator('#apx-pullback-toggle').uncheck();
+  await page.waitForFunction(()=>!document.getElementById('apx-pullback-toggle').disabled);
+  assert.equal(dashboard.candidate.strategy,'OFF');
+  await page.locator('#apx-outlook-toggle').check();
+  await page.waitForFunction(()=>!document.getElementById('apx-outlook-toggle').disabled);
+  assert.equal(dashboard.candidate.strategy,'OUTLOOK');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.screenshot({path:'apex-native-overview-'+size.width+'.png'});
+  await page.locator('[data-nav="settings"]:visible').click();
+  await page.getByRole('heading',{name:'Connect MT5',exact:true}).waitFor();
+  assert.equal(await page.locator('#apx-copy-license').count(),1);
+  assert.equal(await page.locator('#apx-outlook-toggle').count(),0);
+  assert.equal(await page.locator('#astra4-key').count(),1);
+  assert.equal(await page.getByText('Apex 4 demo preview',{exact:true}).count(),0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.screenshot({path:'apex-native-settings-'+size.width+'.png'});
+  await page.locator('[data-nav="campaigns"]:visible').click();
+  await page.getByRole('heading',{name:'Trades',exact:true}).waitFor();
+  assert.equal(await page.locator('#apx-outlook-toggle').count(),0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.screenshot({path:'apex-native-trades-'+size.width+'.png'});
   assert.deepEqual(errors,[]);
   await page.close();
  }

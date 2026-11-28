@@ -31,7 +31,7 @@ export function nativeOutlookHours(raw='8,9'){
 export function nativeOutlookReplayCsv(signals,hours){
  if(!Array.isArray(signals)||!Array.isArray(hours))throw Error('INVALID_REPLAY_INPUT');
  const seen=new Set(),slots=new Set(),rows=[];
- for(const s of [...signals].sort((a,b)=>a.publishedAt-b.publishedAt)){
+ for(const s of signals.filter(s=>s&&Number.isSafeInteger(s.publishedAt)).sort((a,b)=>a.publishedAt-b.publishedAt)){
   if(!s||s.engine!=='OUTLOOK'||s.canonical!==true||typeof s.id!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(s.id))continue;
   if(!Number.isSafeInteger(s.publishedAt)||!Number.isSafeInteger(s.expiresAt))continue;
   if(!canonicalStrongBasket(s,hours,s.publishedAt))continue;
@@ -39,7 +39,7 @@ export function nativeOutlookReplayCsv(signals,hours){
   if(seen.has(s.id)||slots.has(slot))throw Error('DUPLICATE_CANONICAL_OUTLOOK');
   seen.add(s.id);slots.add(slot);
   const published=Math.ceil(s.publishedAt/1000),expires=Math.floor(s.expiresAt/1000);
-  if(expires<=published)continue;
+  if(expires<=published||Math.floor(published/3600)!==slot)continue;
   rows.push([published,expires,s.id,s.side,s.entry,'STRONG',new Date(s.publishedAt+3600000).getUTCHours()].join(','));
  }
  return rows.length?rows.join('\n')+'\n':'';

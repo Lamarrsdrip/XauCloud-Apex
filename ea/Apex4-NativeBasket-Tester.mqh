@@ -152,4 +152,11 @@ void ApexBasketConsiderNative()
    apexBasketTarget=apexBasketAnchor+dir*5.0;apexBasketVolume=vol;
    Print("APEX_NATIVE_PLAN ",stage," dir=",dir," anchor=",apexBasketAnchor," target=",apexBasketTarget," clip=",vol," native=",c.why);
    ApexBasketManage();
+   // A rejected initial order is not an open basket. Do not chase an old
+   // signal hours later just because free margin or price changes.
+   if(!apexBasketFilled&&!apexBasketUncertain&&!ApexBasketHasPending()&&ApexBasketPositions()==0)
+   {
+      Print("APEX_NATIVE_INITIAL_ENTRY_NOT_FILLED");
+      ApexBasketReset();
+   }
 }

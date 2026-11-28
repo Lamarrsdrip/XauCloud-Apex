@@ -12,6 +12,7 @@ export function nativeBasketSource(observer,{outlookReplay=false}={}) {
   observer=observer.replace('const string InpApexEvidenceId','input string InpApexEvidenceId').replace('const bool InpApexReplayEvidence','input bool InpApexReplayEvidence');
   observer=observer.replace(/^#property description .*$/gm,'');
   replace('   Comment(d);','   ApexNativeDisplay();');
+  replace('void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)\n{','void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)\n{\n   if(ApexNativeTradeEvent(trans)) return;');
   replace('   if(!Apex4ObserverAllowed() || (!isTester && !Apex4EvidenceIdValid())) return INIT_FAILED;',
           '   if(!ApexBasketInit()) return INIT_FAILED;');
   replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   ApexNativeDisplay();\n   if(apexBasketSide!=0) return;\n   ApexBasketReplayTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketConsiderNative();\n   if(apexBasketSide!=0) return;');

@@ -1,0 +1,24 @@
+{
+  "replay-20261123-m1-ohlc.jsonl": {
+    "rows": 137,
+    "sourceSha256": "06c05c1cb9551adb2c914096ff942c15d1206d82ab567914328a8027abbe34a3",
+    "publishedSha256": "67cc814496b0d96739c751f2d7e69a943f9061b9e4c59311eb9ed0487db3ff07",
+    "substitutions": [
+      "account",
+      "brokerServer",
+      "m10Signal.account",
+      "thesis.campaign_id"
+    ]
+  },
+  "replay-20261123-real-ticks-partial.jsonl": {
+    "rows": 78,
+    "sourceSha256": "33b643e19afdcf2c62af9e89f8cbd85164b50d40cb7bd9e194c798741f1a2919",
+    "publishedSha256": "9fbac85776b091242f9cc4bafd77c9f6425ecf06961169cd9d58ec2e90e92be7",
+    "substitutions": [
+      "account",
+      "brokerServer",
+      "m10Signal.account",
+      "thesis.campaign_id"
+    ]
+  }
+}

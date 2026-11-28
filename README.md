@@ -1,5 +1,7 @@
 # XauCloud Apex v3.8.8 — UnlimitedFromL3 + Rejection Quality
 
+**Apex 4 research:** [Open the pullback lessons, trade ledger and test evidence](research/evidence/apex4-pullback-education).
+
 **Main bot:** `ea/XauCloud-Apex.mq5`  
 **Identity:** `XauCloud-Apex_v3.8.8-UnlimitedFromL3`  
 **MT5 property:** `#property version "3.880"`

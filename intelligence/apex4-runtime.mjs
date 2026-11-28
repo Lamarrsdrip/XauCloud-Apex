@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
-import {normalizeBars,selectIndependentPlan,wire} from './apex4-engine.ts';
+import {normalizeBars,selectIndependentPlan,wire,independentNativeOutlook} from './apex4-engine.ts';
 import {buildEvidencePack} from './xaucloud/aiTraderBrain.ts';
 import { brainScope, createApexTradeBrain } from './apex4-trade-brain.mjs';
 import { checkEducation } from './apex4-pullback-education.mjs';
-import { canonicalSourceCommit, readNativeEvidence } from './apex4-canonical-evidence.mjs';
+import { canonicalSourceCommit, readNativeEvidence, normalizeNativeEvidence } from './apex4-canonical-evidence.mjs';
 const states=new Map();
 const accountLocks=new Map();
 let brain=null;
@@ -206,4 +206,32 @@ export async function dashboardStatus(key,account,now=Date.now()){
   latestExecution:account?brain?.latestExecution(scope)??null:null,
   canonicalProducerConfigured:observerConfigured(),
   execution:'DEMO_ONLY',modelExecution:false};
+}
+
+const nativeHourlyPublications=new Map();
+export async function nativeOutlookForBasket(key,account,input,now,hours){
+ const scope=idOf(key,account),hour=Math.floor(now/3600000);
+ if(!hours.includes(new Date(now+3600000).getUTCHours())||now%3600000>=60000)return {status:'OUTSIDE_OUTLOOK_WINDOW',signal:null};
+ return withAccountLock('native:'+scope,async()=>{
+  const old=nativeHourlyPublications.get(scope);
+  if(old?.hour===hour)return old.signal.expiresAt>now?{status:'STRONG',signal:old.signal}:{status:'OUTLOOK_EXPIRED',signal:null};
+  const k=await knowledge();
+  if(!k||!k.rules.length||!k.history?.STRONG?.signals)return {status:'OUTLOOK_GRADE_UNAVAILABLE',signal:null};
+  const brokerServer=typeof input.brokerServer==='string'?input.brokerServer:'';
+  // Optional operator-controlled local file is preferred. Authenticated demo
+  // terminal packets are untrusted observations, never proof of live fills or
+  // historical training labels. Source/schema/freshness/account are checked.
+  const q=sanitizeQuote(input.nativeEvidence?.quote,now);
+  if(!q||!brokerServer)return {status:'AWAITING_NATIVE_EVIDENCE',signal:null};
+  const canonical=await readNativeEvidence(scope,{account,brokerServer,quote:q,now})
+    ??normalizeNativeEvidence(input.nativeEvidence,{account,brokerServer,quote:q,now});
+  let bars;
+  try{bars=normalizeBars(input.bars);}catch{return {status:'INVALID_NATIVE_BARS',signal:null};}
+  const result=independentNativeOutlook(bars,q,now,k,canonical,hours);
+  if(result.signal){
+   nativeHourlyPublications.set(scope,{hour,signal:result.signal});
+   while(nativeHourlyPublications.size>128)nativeHourlyPublications.delete(nativeHourlyPublications.keys().next().value);
+  }
+  return result;
+ });
 }

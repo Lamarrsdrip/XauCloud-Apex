@@ -103,3 +103,12 @@ The separately generated native observer also compiled at 0 errors and
 0 warnings. The validated offline snapshot grants zero pullback groups and
 zero Outlook hours. Raw prices and local knowledge files are private
 workspace artifacts.
+
+## Pullback classroom
+
+The [education results](APEX4_PULLBACK_EDUCATION_RESULTS.md) describe the
+separate training, practice, validation and sealed forward intervals, and
+link the execution timing and basket comparisons. Set
+`APEX4_EDUCATION_FILE` on the candidate server to load the examined
+classroom artifact. The current artifact supplies research classifications
+and zero qualified pullback groups.

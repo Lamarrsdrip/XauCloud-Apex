@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import {normalizeBars,selectIndependentPlan,wire} from './apex4-engine.ts';
 import {buildEvidencePack} from './xaucloud/aiTraderBrain.ts';
 import { brainScope, createApexTradeBrain } from './apex4-trade-brain.mjs';
+import { checkEducation } from './apex4-pullback-education.mjs';
 import { canonicalSourceCommit, readNativeEvidence } from './apex4-canonical-evidence.mjs';
 const states=new Map();
 const accountLocks=new Map();
@@ -14,6 +15,7 @@ export function initializeTradeBrain(dataDir) {
   const policyVersion=crypto.createHash('sha256')
    .update(readFileSync(new URL('./apex4-engine.ts',import.meta.url)))
    .update(readFileSync(new URL('./apex4-canonical-evidence.mjs',import.meta.url)))
+   .update(readFileSync(new URL('./apex4-pullback-education.mjs',import.meta.url)))
    .digest('hex');
   brain=createApexTradeBrain(dataDir,{policyVersion});
  }
@@ -50,6 +52,39 @@ async function knowledge(){
   return knowledgeCache;
  }catch{return null;}})();
  try{return await loading;}finally{loading=null;}
+}
+let educationCache = null;
+async function educationKnowledge() {
+ const file = process.env.APEX4_EDUCATION_FILE;
+ if (!file) return undefined;
+ try {
+  const info = await fs.stat(file);
+  const key = JSON.stringify([file, info.ino, info.mtimeMs, info.ctimeMs, info.size]);
+  if (educationCache?.key === key) return educationCache.knowledge;
+  if (info.size > 5_000_000) return null;
+  const manifest = JSON.parse(await fs.readFile(file, 'utf8'));
+  const supported = checkEducation(manifest) ? manifest : null;
+  educationCache = {key, knowledge: supported};
+  return supported;
+ } catch {
+  return null;
+ }
+}
+function educationStatus(education) {
+ if (!education) return {
+  status: education === undefined ? 'AWAITING_CLASSROOM' : 'CLASSROOM_FILE_UNAVAILABLE',
+ };
+ return {
+  status: education.exam?.qualifies ? 'FORWARD_QUALIFIED' :
+   education.exam ? 'FORWARD_NOT_QUALIFIED' : 'AWAITING_INDEPENDENT_EXAM',
+  version: education.id, through: new Date(education.trainingThrough).toISOString(),
+  samples: education.samples ?? null,
+  candidateGroups: education.ruleSet.length,
+  executionGroups: education.exam?.qualifies ? education.ruleSet.length : 0,
+  exam: education.exam?.portfolio ?? null,
+  referenceCases: education.exam?.reference?.count ?? education.exam?.reference?.n ?? null,
+  examVerdict: education.exam?.verdict ?? null,
+ };
 }
 function sanitizeQuote(raw,now){
  if(!raw||!Number.isFinite(raw.bid)||!Number.isFinite(raw.ask)||!Number.isFinite(raw.atMs)||raw.bid<=0||raw.ask<raw.bid||raw.atMs>now+2000||now-raw.atMs>3000)return null;
@@ -92,18 +127,19 @@ export async function analyzeBroker(key,account,input,now=Date.now(),{armed=true
    if(bars.length<450){
     decision=brain.recordDecision(observation,{status:'NEED_HISTORY',local:null,plan:null,m10},{now});
    } else {
-    const k=await knowledge();
+    const [k, education]=await Promise.all([knowledge(),educationKnowledge()]);
     // Only the first 25 seconds of an hourly interval use the native fields for a decision.
     const canonical=now%3600000<25000?native:undefined;
-    const selected={...selectIndependentPlan(bars,q,now,k,canonical),m10};
+    const selected={...selectIndependentPlan(bars,q,now,k,canonical,education),m10};
     decision=brain.recordDecision(observation,armed?selected:{...selected,status:'NOT_ARMED',
-     researchPlan:selected.researchPlan??selected.plan,baselineSelected:!!selected.plan,plan:null},{now,canonical,knowledgeDigest:k?.digest});
+     researchPlan:selected.researchPlan??selected.plan,baselineSelected:!!selected.plan,plan:null},{now,canonical,
+      knowledgeDigest:selected.researchPlan?.source==="APEX4_PULLBACK_CLASSROOM_V1"?education?.id:k?.digest});
    }
   }
   const plan=armed&&decision.plan?.expires>now?decision.plan:null;
   const status=decision.status==='NEED_HISTORY'?'NEED_HISTORY':armed?decision.status:'NOT_ARMED';
   const state={key,account,bars,quote:q,at:decision.at??now,status,local:decision.local,plan,
-   detected:decision.researchPlan,m10:decision.m10,observationId:observation.id};
+   detected:decision.researchPlan,pullbackEvidence:decision.pullbackEvidence,m10:decision.m10,observationId:observation.id};
   if(!old||old.observationId<=observation.id){
    states.delete(id);states.set(id,state);
    while(states.size>64)states.delete(states.keys().next().value);
@@ -118,7 +154,7 @@ function persistedState(key,account=null){
  if(!saved)return null;
  return {bars:saved.bars,quote:saved.quote,at:saved.at,status:saved.decision?.status??'AWAITING_EVALUATION',
   local:saved.decision?.local??null,plan:saved.decision?.plan??null,detected:saved.decision?.researchPlan??null,
-  m10:saved.decision?.m10??null,scope:saved.scope};
+  m10:saved.decision?.m10??null,pullbackEvidence:saved.decision?.pullbackEvidence??null,scope:saved.scope};
 }
 function chatExecution(scope){
  const execution=scope?brain?.latestExecution(scope):null;
@@ -129,12 +165,17 @@ function chatExecution(scope){
 export async function chatContext(key,now=Date.now()){
  const latest=[...states.values()].filter(s=>s.key===key).sort((a,b)=>b.at-a.at)[0]??persistedState(key);
  const scope=latest?.scope??(latest?idOf(key,latest.account):null);
- const k=await knowledge();
+ const [k,education]=await Promise.all([knowledge(),educationKnowledge()]);
  return {
   mode:'APEX4_PROVIDER_FREE_EXECUTION_RESEARCH',
   market:latest&&now-latest.at<600000?buildEvidencePack(latest.bars,now,latest.quote):null,
   marketAgeMs:latest?now-latest.at:null,localOutlook:latest?.local??null,lastDecision:latest?.plan??null,
-  lastDetectedSetup:latest?.detected??null,m10:currentM10(latest,now),
+  lastDetectedSetup:latest?.detected??null,pullbackEvidence:latest?.pullbackEvidence??null,
+  pullbackEducation:education?{
+   ...educationStatus(education), referenceExam:education.exam?.reference??null,
+   developmentPerformance:education.measurements?.portfolio??null,
+   patternPerformance:education.measurements?.featureGroups?.stage??null,
+  }:educationStatus(education),m10:currentM10(latest,now),
   status:latest?.status??'NO_LOCAL_MARKET',
   historical:k?{through:new Date(k.dataThrough).toISOString(),hoursWAT:k.hours,validatedPullbackGroups:k.pullbacks,
    outlookQuality:k.history,pullbackHoldout:k.diagnostics?.pullbackHoldout,strategyEvidence:k.diagnostics?.strategyEvidence,
@@ -150,16 +191,17 @@ export async function chatContext(key,now=Date.now()){
 export async function dashboardStatus(key,account,now=Date.now()){
  const scope=idOf(key,String(account||''));
  const s=states.get(scope)??(account?persistedState(key,String(account)):null);
- const k=await knowledge();
+ const [k,education]=await Promise.all([knowledge(),educationKnowledge()]);
  const fresh=!!s&&now>=s.at&&now-s.at<=8000&&now-Date.parse(s.quote.at)<=8000;
  return {mode:'APEX4_DEMO',fresh,observedAt:s?new Date(s.at).toISOString():null,
   status:s?(fresh?s.status:'MARKET_STALE'):'AWAITING_CANDIDATE',
   quote:fresh?s.quote:null,plan:fresh&&s.plan&&s.plan.expires>now?s.plan:null,
-  latestAssessment:s?.local??null,latestDecision:s?{status:s.status,at:new Date(s.at).toISOString(),plan:s.plan,detected:s.detected}:null,
+  latestAssessment:s?.local??null,latestDecision:s?{status:s.status,at:new Date(s.at).toISOString(),plan:s.plan,detected:s.detected,pullbackEvidence:s.pullbackEvidence}:null,
   m10:currentM10(s,now),
   candles:s?s.bars.slice(-60):[],
   knowledge:{loaded:!!k,through:k?new Date(k.dataThrough).toISOString():null,hoursWAT:k?.hours??[],pullbackGroups:k?.pullbacks?.length??0,
    caseCount:k?.diagnostics?.caseCount??null,pullbackCaseCount:k?.diagnostics?.pullbackCaseCount??null},
+  education:educationStatus(education),
   learning:account?brain?.summary(scope)??null:null,
   latestExecution:account?brain?.latestExecution(scope)??null:null,
   canonicalProducerConfigured:observerConfigured(),

@@ -81,6 +81,66 @@ test('a long quote gap is recorded as missing coverage even when the first later
   assert.equal(f.brain.recentLessons(scope)[0].r, null);
 });
 
+test('decision evidence enrolls extra pullback lessons once and ignores quotes dated before the decision', (t) => {
+  const f = fixture(t);
+  const observation = f.brain.capture(key, account, { quote: quote(epoch - 1500), bars: [], now: epoch });
+  const selected = { ...plan(epoch, 1, 'reclaim'), holdMinutes: 60, source: 'APEX4_PULLBACK_CLASSROOM_V1' };
+  const skipped = { ...plan(epoch, 2, 'early rejection'), observationMinutes: 45,
+    lessonEvidence: { depth: .42, sweep: true }, lessonDisposition: 'RECOVERING' };
+  const decision = { status: 'QUALIFIED', plan: selected, researchPlan: selected,
+    pullbackEvidence: { state: 'RECOVERING', depth: .42 }, researchPlans: [skipped, skipped] };
+  f.brain.recordDecision(observation, decision, { now: epoch, knowledgeDigest: 'qualified-study' });
+  assert.equal(f.brain.summary(scope).pendingCases, 2);
+  f.restart();
+  f.brain.recordDecision(observation, { status: 'CHANGED', pullbackEvidence: { state: 'REVERSED' } }, { now: epoch + 1000 });
+  const evidence = f.brain.decisionEvidence(observation);
+  assert.deepEqual(evidence.pullback, decision.pullbackEvidence);
+  assert.equal(evidence.quote.at, quote(epoch - 1500).at);
+  assert.equal(evidence.bars.throughObservation, observation.id);
+  assert.equal(evidence.knowledgeDigest, 'qualified-study');
+  assert.equal(f.brain.summary(scope).snapshots, 1);
+  f.brain.capture(key, account, { quote: quote(epoch - 500, 100), bars: [], now: epoch + 1000 });
+  f.brain.capture(key, account, { quote: quote(epoch + 2000, 103), bars: [], now: epoch + 2000 });
+  const lessons = f.brain.recentLessons(scope);
+  assert.equal(lessons.length, 2);
+  assert.ok(lessons.every(lesson => lesson.result === 'INVALIDATED_BEFORE_ENTRY' && lesson.r === null));
+  const extra = lessons.find(lesson => lesson.setup === 'early rejection');
+  assert.equal(extra.disposition, 'SKIPPED');
+  assert.equal(extra.observationId, observation.id);
+  assert.equal(extra.costs.observationMinutes, 45);
+  assert.deepEqual(extra.evidence.recognition, skipped.lessonEvidence);
+  const first = lessons.find(lesson => lesson.setup === 'reclaim');
+  assert.equal(first.disposition, 'SELECTED');
+  assert.equal(first.costs.observationMinutes, 60);
+  assert.equal(first.evidence.experimental, true);
+});
+
+test('a disconnected unfilled approach is censored rather than counted as a missed fill', (t) => {
+  const f = fixture(t);
+  const initial = f.brain.capture(key, account, { quote: quote(epoch), bars: [] });
+  f.brain.recordDecision(initial, { status: 'PULLBACK_UNCALIBRATED', researchPlan: plan(epoch) });
+  f.brain.capture(key, account, { quote: quote(epoch + 17_000, 103), bars: [], now: epoch + 17_000 });
+  assert.equal(f.brain.recentLessons(scope)[0].result, 'INSUFFICIENT_OBSERVATION');
+  assert.equal(f.brain.recentLessons(scope)[0].observed.entry, null);
+});
+
+test('spread and entry-price barriers explain unfilled research without inventing a fill', (t) => {
+  const f = fixture(t);
+  const observe = (delay: number, bid: number, ask: number) =>
+    f.brain.capture(key, account, { quote: quote(epoch + delay, bid, ask), bars: [], now: epoch + delay });
+  f.brain.recordDecision(observe(0, 100, 100.1), { status: 'DEVELOPING', researchPlan: plan(epoch) });
+  observe(1000, 99.87, 100.27);
+  f.restart();
+  observe(1000, 99.87, 100.27);
+  observe(2000, 100.4, 100.5);
+  observe(13_000, 100.4, 100.5);
+  const [lesson] = f.brain.recentLessons(scope);
+  assert.equal(lesson.result, 'NOT_ENTERED');
+  assert.equal(lesson.reason, 'VALIDITY_ELAPSED');
+  assert.deepEqual(lesson.entryScreen, { spreadRejections: 1, priceRejections: 1 });
+  assert.equal(lesson.r, null);
+});
+
 test('real reported deals recover from out-of-order delivery and deduplicate without counting research', (t) => {
   const f = fixture(t, () => epoch + 12_000);
   const first = f.brain.capture(key, account, { quote: quote(epoch), bars: [], now: epoch });
@@ -106,6 +166,44 @@ test('real reported deals recover from out-of-order delivery and deduplicate wit
   assert.throws(() => f.brain.recordBrokerEvents(key, account, [opening, { ...closing, price: 'forged' }]), /INVALID_DEAL/);
 });
 
+test('a late order acknowledgement links previously unassigned deals and keeps actual costs distinct', (t) => {
+  const f = fixture(t, () => epoch + 20_000);
+  const approved = plan(epoch);
+  const initial = f.brain.capture(key, account, { quote: quote(epoch), bars: [], now: epoch });
+  f.brain.recordDecision(initial, { status: 'QUALIFIED', plan: approved }, { now: epoch });
+  const opening = { kind: 'DEAL', dealId: '12345', positionId: '45678', entry: 'IN', direction: 'BUY', price: 100.15,
+    volume: .01, atMs: epoch + 1000, reason: 'EXPERT', profit: 0, commission: -.1, fee: -.01, swap: 0 };
+  const closing = { ...opening, dealId: '12346', entry: 'OUT', direction: 'SELL', price: 102, profit: 8,
+    swap: -.03, reason: 'TP', atMs: epoch + 19_000 };
+  f.brain.capture(key, account, { quote: quote(epoch + 16_000, 99.8), bars: [], now: epoch + 16_000 });
+  f.brain.capture(key, account, { quote: quote(epoch + 18_000, 102), bars: [], now: epoch + 18_000 });
+  f.brain.recordBrokerEvents(key, account, [opening, closing]);
+  assert.equal(f.brain.latestExecution(scope), null);
+  const ack = { kind: 'ORDER_RESULT', eventId: 'test-ack-12345', planId: approved.id, dealId: opening.dealId,
+    requestedPrice: 100.1, requestedVolume: .01, filledPrice: 100.15, filledVolume: .01,
+    retcode: 10009, spread: .1, atMs: epoch + 900 };
+  f.restart();
+  f.brain.recordBrokerEvents('alternate-key', account, [ack]);
+  assert.equal(f.brain.latestExecution(scope), null);
+  f.brain.recordBrokerEvents(key, account, [ack]);
+  const actual = f.brain.latestExecution(scope);
+  assert.equal(actual.planId, approved.id);
+  assert.equal(actual.closed, true);
+  assert.equal(actual.observedTp2, true);
+  assert.equal(actual.positionGross, 8);
+  assert.deepEqual(actual.positionCosts, { commission: -.2, fee: -.02, swap: -.03 });
+  assert.equal(actual.entryExecutionCosts.quotedSpread.average, .1);
+  assert.ok(Math.abs(actual.entryExecutionCosts.priceSlippage.average - .05) < 1e-9);
+  assert.equal(actual.positionNet, 7.75);
+  assert.equal(f.brain.summary(scope).brokerDeals, 2);
+  f.brain.cycle(epoch + 24 * 60 * minute);
+  const report = f.brain.summary(scope).brokerEducation;
+  assert.equal(report.source, 'EA_REPORTED_DEMO_BROKER');
+  assert.equal(report.settled, 1);
+  assert.equal(report.settledNet, 7.75);
+  assert.equal(f.brain.summary(scope).research.pullback.totalR, 0);
+});
+
 function learningRow(at: number, group: string, id: string, r: number, accepted: boolean) {
   return { id, at, until: at + minute, group, r, accepted, maeR: .5, mfeR: 1.2, tp1At: at, tp2At: r > 0 ? at : null };
 }
@@ -126,6 +224,10 @@ test('learning fixes its unseen time window and compares policies including draw
   assert.equal(evaluateLearningCandidate(candidate, forward.slice(0, 8)).verdict, 'FORWARD_INSUFFICIENT');
   const worsening = forward.map(row => ({ ...row, r: row.accepted ? 1 : -1.5 }));
   assert.equal(evaluateLearningCandidate(candidate, worsening).verdict, 'FORWARD_REJECTED');
+  const sameAsActive = { ...candidate, comparedVersion: 'incumbent', comparisonGroups: ['learned'] };
+  const incumbentCheck = evaluateLearningCandidate(sameAsActive, forward);
+  assert.equal(incumbentCheck.verdict, 'FORWARD_REJECTED');
+  assert.equal(incumbentCheck.comparator?.version, 'incumbent');
 });
 
 test('the scheduled cycle and promotion survive restart, rollback restores the previous knowledge pointer', (t) => {

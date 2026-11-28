@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'intelligence/**'
+      - 'research/apex4-*.mjs'
+      - 'tests/apex4-*.test.mjs'
       - 'scripts/*apex4*'
       - 'scripts/*v4-knowledge*'
       - 'ea/XauCloud-Apex-v4.0.0-DEMO-Candidate.mq5'

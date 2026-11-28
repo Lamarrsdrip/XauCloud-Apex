@@ -6,10 +6,11 @@ import { resolveHourlyBias } from "./xaucloud/marketOutlookSignal.ts";
 import { computeZoneAndTargets, expectedPath } from "./xaucloud/marketOutlookConfidence.ts";
 import { evaluateOwnerPolicy, clampGoldStopToMaxDistance, XAUCLOUD_TP1_GOLD_MOVES, XAUCLOUD_TP2_GOLD_MOVES } from "./xaucloud/marketOutlookCore.ts";
 import { usableCurrentQuote } from "./xaucloud/aiCurrentOpportunity.ts";
+import { educationRuleKey, holdMinutes, recognizePullback, selectEducatedPullback } from "./apex4-pullback-education.mjs";
 import { isMarketOpen } from "./xaucloud/marketCalendar.ts";
 type Row = Record<string, unknown>;
 export type Quote={bid:number;ask:number;at:string};
-export type Plan={id:string;kind:"OUTLOOK"|"PULLBACK";side:Side;entry:number;sl:number;tp1:number;tp2:number;published:number;expires:number;reason:string;grade?:string;source:string;group?:string};
+export type Plan={id:string;kind:"OUTLOOK"|"PULLBACK";side:Side;entry:number;sl:number;tp1:number;tp2:number;published:number;expires:number;reason:string;grade?:string;source:string;group?:string;holdMinutes?:number;observationMinutes?:number};
 export type PullbackCase={at:number;group:string;r:number;tp1?:boolean;tp2:boolean;stopped?:boolean;maeR:number;mfeR?:number;minutes:number};
 export type PullbackGroup={group:string;train:{n:number;avgR:number};validation:{n:number;avgR:number}};
 export type Knowledge={version:string;builtAt:number;dataThrough:number;rules:QualityRule[];history:ReturnType<typeof gradeHistory>;hours:number[];pullbacks:PullbackGroup[];diagnostics:Row};
@@ -228,30 +229,52 @@ export function trainKnowledge(cases:TradingCase[],pullbacks:PullbackCase[],trai
  const lessons=[...discoverLessons(training,"OUTLOOK",trEnd,vaEnd),...discoverLessons(training,"M10_ENGINE",trEnd,vaEnd)];
  return {version:VERSION,builtAt:Date.now(),dataThrough,rules,history,hours,pullbacks:selected,diagnostics:{hourRows,pullbackGroups:groups,pullbackHoldout:stat(holdout),outlookHoldout:validateQuality(eligible,rules,vaEnd),exam:holdoutExam(eligible,lessons,vaEnd),lessons,strategyEvidence:STRATEGY_EVIDENCE,caseCount:eligible.length,pullbackCaseCount:pullbacks.length,trainEnd,validationEnd,pullbackSplit}};
 }
-export function selectIndependentPlan(raw:Bar[],q:Quote,now:number,k:Knowledge|null,canonical?:Parameters<typeof outlookFromCanonicalEvidence>[0]){
+export function selectIndependentPlan(raw:Bar[],q:Quote,now:number,k:Knowledge|null,canonical?:Parameters<typeof outlookFromCanonicalEvidence>[0],education?:Parameters<typeof selectEducatedPullback>[1]){
  const market=brokerFrames(raw,q,now);
  const local=localOutlookFromMarket(market,q,now);
  const calibrated=Boolean(k&&k.dataThrough<=now);
  if(!market)return {plan:null,researchPlan:null,local,status:"MISSING_BROKER_DATA"};
  if(!isMarketOpen(new Date(now)))return {plan:null,researchPlan:null,local,status:"MARKET_CLOSED"};
+ const recent=raw.filter(bar=>bar.t+60000<=now).slice(-150);
+ const broader=recognizePullback(market,q,recent,aggregate(recent,5,now,5));
+ if(broader?.plan){
+   const f=broader.evidence;
+   broader.plan.id=hash([broader.plan.source,f.side,f.impulsePeak,educationRuleKey(f)].join("|"));
+ }
+ const educated=selectEducatedPullback(broader,education,now);
+ const classroomTrial=educated?.researchPlan?{
+   ...educated.researchPlan,lessonEvidence:educated.lessonEvidence,lessonDisposition:educated.lessonEvidence.stage
+ }:null;
+ const observation={pullbackEvidence:educated?.lessonEvidence??null,
+   researchPlans:classroomTrial?[classroomTrial]:[]};
+ const classroomDecision=education!==undefined?{
+   ...observation,local,plan:educated?.plan??null,researchPlan:classroomTrial,
+   status:!education?"EDUCATION_UNAVAILABLE":educated?.status??"NO_PULLBACK"
+ }:null;
  if(now%3600000<25000){
    const p=canonical&&outlookFromCanonicalEvidence(canonical,now);
-   if(!calibrated||!k)return {plan:null,researchPlan:p??local.plan,local,status:"KNOWLEDGE_MISSING"};
+   if(!calibrated||!k)return classroomDecision?.plan?classroomDecision:{...observation,plan:null,researchPlan:p??local.plan,local,status:"KNOWLEDGE_MISSING"};
    if(p&&canonical){
      const f=caseFeatures(raw,now,p.side,{...canonical.thesis,structure_state:canonical.thesis.structure,market_regime:canonical.thesis.market_regime,confidence_pct:resolveHourlyBias(canonical.canonicalM10,canonical.thesis).confidence});
      const grade=assessOutlookQuality(f,k.rules,k.history);
      const researchPlan={...p,grade:grade.grade};
-     if(grade.grade==="STRONG"&&k.hours.includes(hourWAT(now)))return {plan:researchPlan,researchPlan,local,status:"CANONICAL_OUTLOOK"};
-     return {plan:null,researchPlan,local,status:"OUTLOOK_NOT_QUALIFIED"};
+     if(grade.grade==="STRONG"&&k.hours.includes(hourWAT(now)))return {...observation,plan:researchPlan,researchPlan,local,status:"CANONICAL_OUTLOOK"};
+     return classroomDecision?.plan?classroomDecision:{...observation,plan:null,researchPlan,local,status:"OUTLOOK_NOT_QUALIFIED"};
    }
-   return {plan:null,researchPlan:local.plan,local,status:canonical?"OUTLOOK_NOT_QUALIFIED":"ORIGINAL_M10_PRODUCER_REQUIRED"};
+   return classroomDecision?.plan?classroomDecision:{...observation,plan:null,researchPlan:local.plan,local,status:canonical?"OUTLOOK_NOT_QUALIFIED":"ORIGINAL_M10_PRODUCER_REQUIRED"};
  }
+ if(classroomDecision)return classroomDecision;
  const p=pullbackFromMarket(market,q,now);
- if(!calibrated||!k)return {plan:null,researchPlan:p,local,status:"KNOWLEDGE_MISSING"};
- if(p&&k.pullbacks.some(x=>x.group===p.group))return {plan:p,researchPlan:p,local,status:"HISTORICALLY_SELECTED_PULLBACK_CANDIDATE"};
- return {plan:null,researchPlan:p,local,status:p?"PULLBACK_UNCALIBRATED":"NO_PULLBACK"};
+ if(!calibrated||!k)return {...observation,plan:null,researchPlan:p,local,status:"KNOWLEDGE_MISSING"};
+ if(p&&k.pullbacks.some(x=>x.group===p.group))return {...observation,plan:p,researchPlan:p,local,status:"HISTORICALLY_SELECTED_PULLBACK_CANDIDATE"};
+ return {...observation,plan:null,researchPlan:p,local,status:p?"PULLBACK_UNCALIBRATED":"NO_PULLBACK"};
 }
 export function wire(p:Plan|null):string{
  if(!p||!planOK(p))return "NONE|ARMED_NO_PLAN";
- return ["APEX4",p.id,p.side,p.entry,p.sl,p.tp1,p.tp2,Math.floor(p.published/1000),Math.floor(p.expires/1000),p.kind].join("|");
+ const fields=["APEX4",p.id,p.side,p.entry,p.sl,p.tp1,p.tp2,Math.floor(p.published/1000),Math.floor(p.expires/1000),p.kind];
+ if(p.kind==="PULLBACK"&&p.holdMinutes!==undefined){
+   if(!holdMinutes.includes(p.holdMinutes))return "NONE|ARMED_NO_PLAN";
+   fields.push(p.holdMinutes);
+ }
+ return fields.join("|");
 }

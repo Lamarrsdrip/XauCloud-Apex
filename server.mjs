@@ -1365,7 +1365,7 @@ const server=http.createServer(async(req,res)=>{
         const runtime=await apex4Runtime();
         return json(res,200,runtime.changeLearningKnowledge(v.key,String(b.account),b.action,b.versionId));
       }catch(error){
-        if(['VERSION_NOT_VALIDATED','NO_ACTIVE_VERSION'].includes(error?.message))return json(res,409,{error:error.message});
+        if(['VERSION_NOT_VALIDATED','VERSION_POLICY_CHANGED','VERSION_COMPARATOR_CHANGED','NO_ACTIVE_VERSION'].includes(error?.message))return json(res,409,{error:error.message});
         return json(res,503,{error:'learning_unavailable'});
       }
     }

@@ -6,6 +6,8 @@ const FORWARD_WINDOW = 30 * DAY;
 
 export function quoteResearchStats(rows) {
   const totalR = rows.reduce((sum, row) => sum + row.r, 0);
+  const gains = rows.reduce((sum, row) => sum + Math.max(0, row.r), 0);
+  const losses = rows.reduce((sum, row) => sum + Math.max(0, -row.r), 0);
   let equityR = 0, peakR = 0, drawdownR = 0;
   for (const row of rows) {
     equityR += row.r;
@@ -14,7 +16,7 @@ export function quoteResearchStats(rows) {
   }
   const count = rows.length;
   return {
-    count, totalR, drawdownR,
+    count, totalR, drawdownR, profitFactor: losses ? gains / losses : null,
     expectancyR: count ? totalR / count : null,
     winRate: count ? rows.filter(row => row.r > 0).length / count : null,
     tp1Rate: count ? rows.filter(row => row.tp1At !== null).length / count : null,
@@ -51,15 +53,21 @@ export function evaluateLearningCandidate(candidate, rows) {
   // All policies are compared on the same forward opportunity set, including their skipped cases.
   // Rows that lack quote coverage or straddle the boundary never enter the comparison.
   const unseen = chronological(rows).filter(row => row.at >= candidate.holdoutStart && row.until <= candidate.holdoutEnd);
-  const baseline = quoteResearchStats(unseen.filter(row => row.accepted));
+  const baseline = quoteResearchStats(candidate.reference === 'ALL_ELIGIBLE_CLASSROOM_RESEARCH'
+    ? unseen : unseen.filter(row => row.accepted));
   const candidateRows = unseen.filter(row => candidate.selectedGroups.includes(row.group));
   const improved = quoteResearchStats(candidateRows);
-  const enough = improved.count >= MIN_FORWARD && baseline.count >= MIN_FORWARD;
+  const comparator = candidate.comparedVersion ? quoteResearchStats(unseen.filter(
+    row => candidate.comparisonGroups.includes(row.group)
+  )) : null;
+  const enough = improved.count >= MIN_FORWARD && baseline.count >= MIN_FORWARD && (!comparator || comparator.count >= MIN_FORWARD);
+  const beats = reference => improved.totalR > reference.totalR && improved.drawdownR <= reference.drawdownR;
   const verdict = !enough ? 'FORWARD_INSUFFICIENT' :
-    improved.totalR > baseline.totalR && improved.expectancyR > 0 && improved.drawdownR <= baseline.drawdownR
+    improved.expectancyR > 0 && beats(baseline) && (!comparator || beats(comparator))
       ? 'FORWARD_VALIDATED' : 'FORWARD_REJECTED';
   return {
     verdict, evidenceSource: candidate.evidenceSource, holdoutStart: candidate.holdoutStart, holdoutEnd: candidate.holdoutEnd,
-    opportunities: unseen.length, baseline, candidate: improved
+    opportunities: unseen.length, baseline, candidate: improved,
+    ...(comparator ? { comparator: { version: candidate.comparedVersion, ...comparator } } : {})
   };
 }

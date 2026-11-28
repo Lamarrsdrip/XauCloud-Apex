@@ -323,8 +323,11 @@ void AddOne(){
  double latency=(GetMicrosecondCount()-latencyStart)/1000.0;
  long ms=t.time_msc-BrokerOffsetSeconds()*1000;
  string id="R"+IntegerToString(ms)+"-"+IntegerToString((long)now)+"-"+active.id;
- string result=StringFormat("{\"kind\":\"ORDER_RESULT\",\"eventId\":\"%s\",\"planId\":\"%s\",\"atMs\":%I64d,\"retcode\":%u,\"requestedPrice\":%.8f,\"requestedVolume\":%.8f,\"filledVolume\":%.8f,\"filledPrice\":%.8f,\"latencyMs\":%.3f,\"spread\":%.8f,\"equity\":%.2f,\"marginFree\":%.2f}",
-   id,active.id,ms,ret,entry,volume,trade.ResultVolume(),trade.ResultPrice(),latency,t.ask-t.bid,eq,free);
+
+ ulong resultDeal=trade.ResultDeal();
+ string dealField=resultDeal>0?StringFormat(",\"dealId\":\"%I64u\"",resultDeal):"";
+ string result=StringFormat("{\"kind\":\"ORDER_RESULT\",\"eventId\":\"%s\",\"planId\":\"%s\",\"atMs\":%I64d,\"retcode\":%u,\"requestedPrice\":%.8f,\"requestedVolume\":%.8f,\"filledVolume\":%.8f,\"filledPrice\":%.8f,\"latencyMs\":%.3f,\"spread\":%.8f,\"equity\":%.2f,\"marginFree\":%.2f%s}",
+   id,active.id,ms,ret,entry,volume,trade.ResultVolume(),trade.ResultPrice(),latency,t.ask-t.bid,eq,free,dealField);
  if(!DurableEvent(id,result))Print("APEX4 DEMO order telemetry could not be persisted ",id);
 
  Print("APEX4 DEMO ORDER ",sent+1," ",volume," ret=",ret," deal=",trade.ResultDeal());
@@ -385,12 +388,19 @@ bool Poll(){
  int n=StringSplit(line,'|',a);
  if(n==2&&a[0]=="NONE"&&a[1]=="NEED_HISTORY"){needHistory=true;armedUntil=0;return true;}
  if(n==2&&a[0]=="NONE"&&a[1]=="ARMED_NO_PLAN"){needHistory=false;armedUntil=TimeGMT()+8;return true;}
- if(n!=10||a[0]!="APEX4"||(a[2]!="BUY"&&a[2]!="SELL")||!PlanIdOK(a[1])||(a[9]!="OUTLOOK"&&a[9]!="PULLBACK")){armedUntil=0;return true;}
+ if((n!=10&&n!=11)||a[0]!="APEX4"||(a[2]!="BUY"&&a[2]!="SELL")||!PlanIdOK(a[1])||(a[9]!="OUTLOOK"&&a[9]!="PULLBACK")){armedUntil=0;return true;}
+ int hold=a[9]=="OUTLOOK"?60:20;
+ if(n==11){
+   if(a[9]!="PULLBACK"||(a[10]!="10"&&a[10]!="20"&&a[10]!="30"&&a[10]!="45"&&a[10]!="60"&&a[10]!="120")){
+     armedUntil=0;return true;
+   }
+   hold=(int)StringToInteger(a[10]);
+ }
  needHistory=false;armedUntil=TimeGMT()+8;
  if(a[9]=="PULLBACK"&&!EnablePullback)return true;
  Plan p;p.id=a[1];p.kind=a[9];p.side=a[2]=="BUY"?1:-1;p.ref=StringToDouble(a[3]);p.sl=StringToDouble(a[4]);p.tp1=StringToDouble(a[5]);p.tp2=StringToDouble(a[6]);
  p.published=(datetime)StringToInteger(a[7]);p.entryUntil=(datetime)MathMin(StringToInteger(a[8]),(long)p.published+MathMin(90,EntryWindowSeconds));
- p.tradeUntil=p.published+(p.kind=="OUTLOOK"?3600:1200);
+ p.tradeUntil=p.published+hold*60;
  if(p.published>TimeGMT()+2||TimeGMT()>=p.entryUntil)return true;
  Start(p);return true;
 }

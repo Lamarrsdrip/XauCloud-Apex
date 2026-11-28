@@ -457,7 +457,7 @@ bool ApexClassroomFeatures(MqlRates &bars[],ApexClassroomFrame &f)
    }
    f.pressure=NormalizeDouble(pressure/6.0,2);
    f.close=bars[n-1].close;f.emaFast=ef;f.emaSlow=es;f.momentum=(f.close-bars[n-4].close)/atr;f.extension=(f.close-es)/atr;
-   double gain=0,loss=0,rsi[];ArrayResize(rsi,n);rsi[0]=50;
+   double gain=0,loss=0;double rsi[];ArrayResize(rsi,n);rsi[0]=50;
    for(int i=1;i<n;i++){double d=bars[i].close-bars[i-1].close;if(i<=14){gain+=MathMax(d,0)/14.0;loss+=MathMax(-d,0)/14.0;}else{gain=(gain*13+MathMax(d,0))/14.0;loss=(loss*13+MathMax(-d,0))/14.0;}rsi[i]=loss==0?100:100-100/(1+gain/loss);}
    f.rsi=rsi[n-1];
    f.bearishDivergence=priorHi>=0&&lastHi>=0&&f.high>prevHigh&&rsi[lastHi]<rsi[priorHi]-2;
@@ -616,4 +616,36 @@ void ApexNativeDisplay()
  Comment("APEX 4 | ",ApexStrategyName(),"\n",apexBasketSide==0?"Scanning Gold":apexBasketSide>0?"BUY basket":"SELL basket",
    "\nPositions: ",ApexBasketPositions()," | target: ",DoubleToString(apexBasketTarget,_Digits),
    "\nBuy evidence: ",apexBuyScore," | Sell evidence: ",apexSellScore,"\n",apexEntryDiagnostic);
+}
+
+// Broker stop-out frees margin by liquidating positions, not by profitable
+// movement. Do not recycle forced-liquidation margin into the failed basket.
+bool ApexNativeTradeEvent(const MqlTradeTransaction &trans)
+{
+ if(trans.type!=TRADE_TRANSACTION_DEAL_ADD||trans.deal==0||!HistoryDealSelect(trans.deal))return false;
+ ulong deal=trans.deal;
+ if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)return false;
+ long magic=HistoryDealGetInteger(deal,DEAL_MAGIC);
+ long reason=HistoryDealGetInteger(deal,DEAL_REASON);
+ long entry=HistoryDealGetInteger(deal,DEAL_ENTRY);
+ ulong pos=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+ double price=HistoryDealGetDouble(deal,DEAL_PRICE),vol=HistoryDealGetDouble(deal,DEAL_VOLUME),profit=HistoryDealGetDouble(deal,DEAL_PROFIT);
+ bool owned=magic==InpApexBasketMagic;
+ if(!owned&&reason==DEAL_REASON_SO&&pos>0&&HistorySelectByPosition(pos))
+ {
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+     ulong t=HistoryDealGetTicket(i);
+     if(t>0&&HistoryDealGetInteger(t,DEAL_ENTRY)==DEAL_ENTRY_IN&&HistoryDealGetInteger(t,DEAL_MAGIC)==InpApexBasketMagic){owned=true;break;}
+   }
+ }
+ if(!owned)return false;
+ Print("APEX_NATIVE_DEAL ticket=",deal," position=",pos," entry=",entry," reason=",reason," price=",price," volume=",vol," profit=",profit);
+ if(reason==DEAL_REASON_SO&&apexBasketSide!=0)
+ {
+   apexBasketUncertain=true;
+   apexEntryDiagnostic="Broker stop-out: additional entries paused; remaining basket managed";
+   ApexBasketSave();
+ }
+ return true;
 }

@@ -3,7 +3,7 @@
 // This is an explicitly high-risk historical experiment, not a live-money release.
 #include <Trade/Trade.mqh>
 input long InpApexBasketMagic = 90410001;
-input int InpApexOrderGapMilliseconds = 250;
+input int InpApexOrderGapMilliseconds = 100;
 input bool InpApexNativePullbackEnabled = true;
 // Native tester is always offline. The same executor may run on an explicitly
 // opted-in USD hedging demo, never a real account in this candidate.
@@ -32,6 +32,8 @@ long apexBasketLastAttempt=-1;
 datetime apexBasketLastSignal=0;
 bool apexBasketClosing=false,apexBasketFilled=false,apexBasketUncertain=false;
 int apexBasketOrders=0;
+double apexBasketLastFillVolume=0;
+ulong apexBasketLastWallAttempt=0;
 
 bool ApexBasketTesterOnly(){return (bool)MQLInfoInteger(MQL_TESTER);}
 bool ApexBasketAllowed()
@@ -120,7 +122,7 @@ bool ApexBasketOtherExposure()
 void ApexBasketReset()
 {
    apexBasketSide=0;apexBasketAnchor=0;apexBasketTarget=0;apexBasketVolume=0;
-   apexBasketLastAttempt=-1;apexBasketClosing=false;apexBasketFilled=false;apexBasketUncertain=false;apexBasketOrders=0;
+   apexBasketLastAttempt=-1;apexBasketLastWallAttempt=0;apexBasketClosing=false;apexBasketFilled=false;apexBasketUncertain=false;apexBasketOrders=0;apexBasketLastFillVolume=0;
    if(apexDemoLockHeld&&!ApexBasketSave())Print("APEX_NATIVE_STATE_SAVE_FAILED");
 }
 bool ApexBasketReadReplay()
@@ -202,6 +204,42 @@ void ApexBasketClose()
       ApexBasketReset();
    }
 }
+// Descend through legal volume increments. Never wait for the preferred
+// tier if the broker can accept a smaller volume. OrderCheck models actual
+// account margin (including existing positions) rather than leverage guesses.
+ENUM_ORDER_TYPE_FILLING ApexBasketFilling()
+{
+   long flags=SymbolInfoInteger(_Symbol,SYMBOL_FILLING_MODE);
+   if((flags&SYMBOL_FILLING_FOK)!=0)return ORDER_FILLING_FOK;
+   if((flags&SYMBOL_FILLING_IOC)!=0)return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
+}
+double ApexBasketAffordableVolume(const ENUM_ORDER_TYPE type,const double price,const double ceiling)
+{
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+   double minimum=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   double maximum=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
+   if(step<=0||minimum<=0||maximum<minimum||ceiling<minimum)return 0;
+   long low=(long)MathCeil((minimum-1e-9)/step);
+   long high=(long)MathFloor((MathMin(maximum,ceiling)+1e-9)/step);
+   for(long units=high;units>=low;units--)
+   {
+      double vol=NormalizeDouble(units*step,8);
+      MqlTradeRequest req={};MqlTradeCheckResult check={};
+      req.action=TRADE_ACTION_DEAL;req.symbol=_Symbol;req.magic=(ulong)InpApexBasketMagic;
+      req.type=type;req.volume=vol;req.price=price;req.deviation=10;req.type_filling=ApexBasketFilling();
+      req.sl=0;req.tp=0;req.comment="APEX_NATIVE_BASKET";
+      ResetLastError();
+      if(OrderCheck(req,check)&&check.retcode==TRADE_RETCODE_DONE&&check.margin_free>=-1e-8)return vol;
+      // Invalid volume/limit can be satisfied by a smaller order. All
+      // unknown errors fail closed, rather than spinning on broker errors.
+      if(check.retcode!=TRADE_RETCODE_NO_MONEY&&check.retcode!=TRADE_RETCODE_INVALID_VOLUME&&check.retcode!=TRADE_RETCODE_LIMIT_VOLUME)
+      {
+         Print("APEX_NATIVE_MARGIN_CHECK ret=",check.retcode," error=",GetLastError());return 0;
+      }
+   }
+   return 0;
+}
 void ApexBasketManage()
 {
    if(!ApexBasketAllowed()||apexBasketSide==0)return;
@@ -215,25 +253,31 @@ void ApexBasketManage()
    if(apexBasketClosing||apexBasketSide*((apexBasketSide>0?q.bid:q.ask)-apexBasketTarget)>=0)
    {ApexBasketClose();return;}
    if(!ApexBasketCanStart()||apexBasketUncertain||ApexBasketHasPending()||ApexBasketOtherExposure())return;
-   if(apexBasketLastAttempt>=0&&q.time_msc-apexBasketLastAttempt<InpApexOrderGapMilliseconds)return;
-   apexBasketLastAttempt=q.time_msc;
+   ulong wall=GetTickCount64();
+   if(ApexBasketTesterOnly())
+   {
+      if(apexBasketLastAttempt>=0&&q.time_msc-apexBasketLastAttempt<InpApexOrderGapMilliseconds)return;
+   }
+   else if(apexBasketLastWallAttempt>0&&wall-apexBasketLastWallAttempt<(ulong)InpApexOrderGapMilliseconds)return;
+   apexBasketLastAttempt=q.time_msc;apexBasketLastWallAttempt=wall;
    double price=apexBasketSide>0?q.ask:q.bid;
    if(apexBasketSide*(apexBasketTarget-price)<=0)return;
    ENUM_ORDER_TYPE type=apexBasketSide>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
-   double margin=0;
-   if(!OrderCalcMargin(type,_Symbol,apexBasketVolume,price,margin)||margin>AccountInfoDouble(ACCOUNT_MARGIN_FREE))return;
+   double volume=ApexBasketAffordableVolume(type,price,apexBasketVolume);
+   if(volume<=0)return;
+   apexNativeTrade.SetTypeFilling(ApexBasketFilling());
    // No SL, broker TP, arbitrary holding deadline, or software layer/risk cap.
    // The basket owns its fixed exit. Broker restrictions and stop-out still apply.
-   bool sent=apexNativeTrade.PositionOpen(_Symbol,type,apexBasketVolume,price,0.0,0.0,"APEX_NATIVE_BASKET");
+   bool sent=apexNativeTrade.PositionOpen(_Symbol,type,volume,price,0.0,0.0,"APEX_NATIVE_BASKET");
    uint ret=apexNativeTrade.ResultRetcode();
    if(sent&&(ret==TRADE_RETCODE_DONE||ret==TRADE_RETCODE_DONE_PARTIAL)&&apexNativeTrade.ResultDeal()>0)
    {
-      apexBasketFilled=true;apexBasketOrders++;
+      apexBasketFilled=true;apexBasketOrders++;apexBasketLastFillVolume=apexNativeTrade.ResultVolume();
       if(!ApexBasketSave()){apexBasketUncertain=true;Print("APEX_NATIVE_FILL_STATE_SAVE_FAILED");}
       Print("APEX_NATIVE_FILL #",apexBasketOrders," vol=",apexNativeTrade.ResultVolume()," price=",apexNativeTrade.ResultPrice()," target=",apexBasketTarget);
       return;
    }
-   if(ret==TRADE_RETCODE_NO_MONEY||ret==TRADE_RETCODE_REQUOTE||ret==TRADE_RETCODE_PRICE_CHANGED||
+   if(ret==TRADE_RETCODE_NO_MONEY||ret==TRADE_RETCODE_INVALID_VOLUME||ret==TRADE_RETCODE_LIMIT_VOLUME||ret==TRADE_RETCODE_REQUOTE||ret==TRADE_RETCODE_PRICE_CHANGED||
       ret==TRADE_RETCODE_PRICE_OFF||ret==TRADE_RETCODE_MARKET_CLOSED||ret==TRADE_RETCODE_TOO_MANY_REQUESTS)return;
    Print("APEX_NATIVE_ORDER_REJECT_OR_UNCERTAIN ret=",ret);
    // Avoid duplicate exposure after an ambiguous broker result.
@@ -252,7 +296,7 @@ bool ApexBasketStart(const int dir,const double anchor,const string source)
    if(dir*((dir>0?q.ask:q.bid)-(anchor+dir*5.0))>=0)return false;
    apexBasketSide=dir;apexBasketAnchor=anchor;apexBasketTarget=anchor+dir*5.0;apexBasketVolume=vol;
    if(!ApexBasketSave()){ApexBasketReset();return false;}
-   Print("APEX_NATIVE_PLAN ",source," dir=",dir," anchor=",apexBasketAnchor," target=",apexBasketTarget," clip=",vol);
+   Print("APEX_NATIVE_PLAN ",source," dir=",dir," anchor=",apexBasketAnchor," target=",apexBasketTarget," preferred clip=",vol);
    ApexBasketManage();
    if(!apexBasketFilled&&!apexBasketUncertain&&!ApexBasketHasPending()&&ApexBasketPositions()==0)
    {

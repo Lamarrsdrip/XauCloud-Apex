@@ -624,6 +624,7 @@ async function saveLicenseConfig(key,partial,{bumpRevision=true,expectedRevision
       licenses[key]=lic;
       await writeLicenses(licenses);
     }
+    if(APEX4_NATIVE_PREVIEW)return {config:next,revision,configHash:configHash(next),delivery:{status:'NATIVE_LOCAL_SAVED',localSaved:true}};
     const delivery=await syncBridgeConfig(key,next,revision,{queueOnFailure:true});
     return {config:next,revision,configHash:configHash(next),
       delivery:classifyConfigDelivery(delivery,bridgeConfigured())};
@@ -1154,7 +1155,7 @@ async function buildMe(key){
   const nativePreview=APEX4_NATIVE_PREVIEW;
   const native=lic?.nativeBasket;
   const nativeFresh=!!native&&Date.now()-native.observedAt<=8000&&Date.now()>=native.observedAt;
-  const candidate=nativePreview?{mode:'APEX4_NATIVE_BASKET',status:nativeFresh?(native.armed?'ARMED':'DISARMED'):'AWAITING_NATIVE_TERMINAL',
+  const candidate=nativePreview?{mode:'APEX4_NATIVE_BASKET',status:nativeFresh?(native.terminalArmed===true?'ARMED':native.terminalArmed===false?'DISARMED':'AWAITING_ARM_ACK'):'AWAITING_NATIVE_TERMINAL',
     fresh:nativeFresh,basket:nativeFresh?native:null,hoursWAT:nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9'),
     outlookKnowledge:await apex4Runtime().then(m=>m.nativeOutlookKnowledgeStatus()).catch(()=>({status:'OUTLOOK_GRADE_UNAVAILABLE',rules:0,strongCases:0})),
     execution:'DEMO_ONLY',modelExecution:false}
@@ -1172,7 +1173,7 @@ async function buildMe(key){
     const at=nativeFresh?new Date(native.observedAt).toISOString():null;
     return {license:base,release,candidate,dataAvailable:nativeFresh,waitingForFirstContact:!native,
       armed:cfg.armed,mt5:{status:nativeFresh?'CONNECTED':native?'STALE':'DISCONNECTED',lastSeen:at},
-      control:{desired:{armed:cfg.armed,revision:Number(lic.commandRevision||0)},applied:{inSync:null,asOf:at}},
+      control:{desired:{armed:cfg.armed,revision:Number(lic.commandRevision||0)},applied:{inSync:nativeFresh&&native.terminalArmed!==null?native.terminalArmed===cfg.armed:null,asOf:at}},
       account:{account:lic.account||null,currency:'USD',equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
         openPositions:nativeFresh?native.positions:null,asOf:at},
       campaign:null,history:[],recentHuman:[],settings:settingsView(cfg),learning:learningShape([]),
@@ -1359,7 +1360,7 @@ const server=http.createServer(async(req,res)=>{
         const all=await readLicenses(),current=all[v.key];
         if(licenseStatusFor(current)!=='ACTIVE'||String(current.account||'')!==String(b.account||''))return;
         const prev=current.nativeBasket;
-        if(!prev||snapshot.observedAt-prev.observedAt>=5000||prev.active!==snapshot.active||prev.positions!==snapshot.positions||prev.armed!==snapshot.armed){
+        if(!prev||snapshot.observedAt-prev.observedAt>=5000||prev.active!==snapshot.active||prev.positions!==snapshot.positions||prev.armed!==snapshot.armed||prev.terminalArmed!==snapshot.terminalArmed){
           current.nativeBasket=snapshot;current.lastSeen=new Date(snapshot.observedAt).toISOString();
           current.lastAccount=String(b.account);await writeLicenses(all);
         }

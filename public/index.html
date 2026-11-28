@@ -424,7 +424,7 @@ function startPolling(){
       renderStatusPills();
       if (['dashboard','campaigns','history','learning'].indexOf(STATE.page)>=0){
         var main=document.getElementById('main');
-        if(main&&main.querySelector('#arm-toggle:disabled'))return;
+        if(main&&main.querySelector('#arm-toggle:disabled,#apx-outlook-toggle:disabled,#apx-pullback-toggle:disabled'))return;
         var opened=main?Array.from(main.querySelectorAll('.hist-item.open')).map(function(x){return x.id;}):[];
         var details=main?Array.from(main.querySelectorAll('details')).map(function(x){return x.open;}):[];
         renderPage();
@@ -497,7 +497,7 @@ function renderPage(){
   else if (STATE.page==='learning') main.innerHTML = pageLearning(me);
   else if (STATE.page==='ai'||STATE.page==='lab') {if(window.AstraUI&&typeof window.AstraUI.chatPage==='function'&&typeof window.AstraUI.bindChat==='function'){main.innerHTML=window.AstraUI.chatPage(me,STATE.page==='lab'?'lab':'chat');window.AstraUI.bindChat(me);}else{main.innerHTML='<section class="card"><h1>Apex AI</h1><p>The research interface could not load. Reload to retrieve the current version.</p><button id="reload-ai" class="btn btn-primary">Reload Apex</button></section>';document.getElementById('reload-ai').onclick=function(){location.reload();};}}
   else if (STATE.page==='settings') { main.innerHTML = pageSettings(me); wireSettings(me); }
-  else if (STATE.page==='account') main.innerHTML = pageAccount(me);
+  else if (STATE.page==='account') {main.innerHTML = pageAccount(me);if(me.candidate?.mode==='APEX4_NATIVE_BASKET')wireSettings(me);}
   wireDashboardControls();
   if (STATE.page==='dashboard')wireOverviewControls();
   if(STATE.page==='learning')loadLearningLedger();
@@ -923,6 +923,7 @@ function wireDashboardControls(){
       var d = (r && r.delivery) || '';
       if (d==='BRIDGE_NOT_CONFIGURED') toast('Saved, but your MT5 connection is not ready. Check connection details in Settings.', true);
       else if (d==='QUEUED_FOR_BRIDGE') toast('Your change is saved. Waiting for MT5 to confirm.');
+      else if(d==='NATIVE_LOCAL_SAVED')toast('Saved · MT5 will apply the trading switch');
       else if (d==='EA_APPLIED' || r.inSync) toast(val?'Apex is now allowed to open new trades':'New trades are paused');
       else toast('Your change is saved. Waiting for MT5 to confirm.');
       return api('/api/auth/me');
@@ -1239,7 +1240,7 @@ function wireSettings(me){
     }).then(function(newMe){
       STATE.me = newMe;
       renderStatusPills();
-      if (STATE.page==='settings') renderPage();
+      if (STATE.page==='settings'||STATE.page==='account') renderPage();
     }).catch(function(e){
       changeBtn.disabled=false; changeBtn.textContent='Switch license';
       errBox.textContent = licenseErrorMessage(e.message);
@@ -1354,6 +1355,7 @@ function saveConfig(payload, btnId, btnLabel){
 
 // ---------- Account ----------
 function pageAccount(me){
+  if(me.candidate?.mode==='APEX4_NATIVE_BASKET')return '<div class="apx-work">'+nativeHead('Your account','License and MT5 connection')+nativeSetup(me)+'<section class="apx-panel"><button class="btn btn-danger" id="logout-btn2">Sign out</button></section></div>';
   var lic=me.license||{},mt5=me.mt5||{},status=lic.status||'LICENSE_NOT_FOUND';
   var html='<div class="settings-top"><div class="overview-eyebrow">Your access</div><h1 class="page-title">Your account</h1>'
     +'<p class="page-sub">License details and the MetaTrader account connected to Apex.</p></div>'

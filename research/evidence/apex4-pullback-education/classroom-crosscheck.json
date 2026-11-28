@@ -1,0 +1,213 @@
+{
+  "persistedOutcomes": 1784517,
+  "splitResults": {
+    "train": {
+      "aggregate": {
+        "cases": 15073,
+        "wins": 5256,
+        "losses": 9817,
+        "tp1": 0.45186757778809794,
+        "tp2": 0.2789756518277715,
+        "maeR": 0.9014108979133382,
+        "mfeR": 0.45579338279529463,
+        "winAverageR": 0.5942621543238688,
+        "lossAverageR": 0.9751830577437863
+      },
+      "allResolvedExamples": {
+        "cases": 36623,
+        "wins": 13245,
+        "losses": 23378,
+        "tp1": 0.4515468421483767,
+        "tp2": 0.2632498703000846,
+        "maeR": 0.8222822910374047,
+        "mfeR": 0.42895443481306444,
+        "winAverageR": 0.5392938955536345,
+        "lossAverageR": 0.8822795329560437
+      },
+      "timing": {
+        "through2": {
+          "count": 8598,
+          "netR": -4274.147565641939,
+          "expectancyR": -0.4971095098443753
+        },
+        "atLeast5": {
+          "count": 4128,
+          "netR": -1362.3536724161547,
+          "expectancyR": -0.33002753692251807
+        }
+      },
+      "outcomeFeatureContrast": {
+        "winners": {
+          "depth": 0.41474255131672183,
+          "recoveryMinutes": 2.0,
+          "entryRoomR": 0.8645849531030467,
+          "impulseAtr": 4.136740770146875,
+          "m1Pressure": -0.03
+        },
+        "losers": {
+          "depth": 0.42497819133464787,
+          "recoveryMinutes": 1,
+          "entryRoomR": 1.1290824261276515,
+          "impulseAtr": 4.193333333333352,
+          "m1Pressure": -0.04
+        }
+      }
+    },
+    "practice": {
+      "aggregate": {
+        "cases": 3029,
+        "wins": 1275,
+        "losses": 1754,
+        "tp1": 0.5348299768900627,
+        "tp2": 0.3687685704853087,
+        "maeR": 0.8839386842867408,
+        "mfeR": 0.5930863571138749,
+        "winAverageR": 0.6735707255534701,
+        "lossAverageR": 0.9861221565768831
+      },
+      "allResolvedExamples": {
+        "cases": 7149,
+        "wins": 3080,
+        "losses": 4069,
+        "tp1": 0.5245488879563576,
+        "tp2": 0.3434046719820954,
+        "maeR": 0.8015578785351879,
+        "mfeR": 0.5421778916997656,
+        "winAverageR": 0.6081733588648558,
+        "lossAverageR": 0.9013215926263645
+      },
+      "timing": {
+        "through2": {
+          "count": 1825,
+          "netR": -591.87279192546,
+          "expectancyR": -0.3243138585892931
+        },
+        "atLeast5": {
+          "count": 766,
+          "netR": -180.27110040000147,
+          "expectancyR": -0.23534086214099406
+        }
+      },
+      "outcomeFeatureContrast": {
+        "winners": {
+          "depth": 0.3346733668341392,
+          "recoveryMinutes": 2,
+          "entryRoomR": 0.7480527261832532,
+          "impulseAtr": 4.173429951690881,
+          "m1Pressure": -0.02
+        },
+        "losers": {
+          "depth": 0.3682061775427655,
+          "recoveryMinutes": 0.0,
+          "entryRoomR": 1.207504542722494,
+          "impulseAtr": 4.102154797565016,
+          "m1Pressure": -0.04
+        }
+      }
+    },
+    "validation": {
+      "aggregate": {
+        "cases": 3271,
+        "wins": 1454,
+        "losses": 1817,
+        "tp1": 0.5365331702843167,
+        "tp2": 0.3806175481504127,
+        "maeR": 0.8794357894323964,
+        "mfeR": 0.6146674871563421,
+        "winAverageR": 0.6889509438974039,
+        "lossAverageR": 0.9822057742391392
+      },
+      "allResolvedExamples": {
+        "cases": 7770,
+        "wins": 3417,
+        "losses": 4353,
+        "tp1": 0.5307593307593308,
+        "tp2": 0.34401544401544404,
+        "maeR": 0.8028075832816458,
+        "mfeR": 0.5683370014590416,
+        "winAverageR": 0.6301240636723481,
+        "lossAverageR": 0.8904276127243316
+      },
+      "timing": {
+        "through2": {
+          "count": 1957,
+          "netR": -564.7575684726983,
+          "expectancyR": -0.2885833257397538
+        },
+        "atLeast5": {
+          "count": 848,
+          "netR": -142.00721916435313,
+          "expectancyR": -0.16746134335419002
+        }
+      },
+      "outcomeFeatureContrast": {
+        "winners": {
+          "depth": 0.3248626759678419,
+          "recoveryMinutes": 2.0,
+          "entryRoomR": 0.7911697455044282,
+          "impulseAtr": 4.112421908429617,
+          "m1Pressure": 0.0
+        },
+        "losers": {
+          "depth": 0.3536006330783331,
+          "recoveryMinutes": 0,
+          "entryRoomR": 1.1857018308624334,
+          "impulseAtr": 4.078920741989899,
+          "m1Pressure": -0.03
+        }
+      }
+    },
+    "knownDevelopment": {
+      "aggregate": {
+        "cases": 6540,
+        "wins": 2963,
+        "losses": 3577,
+        "tp1": 0.5607033639143731,
+        "tp2": 0.3970948012232416,
+        "maeR": 0.8943059067649427,
+        "mfeR": 0.7297699087126341,
+        "winAverageR": 0.7842432798237865,
+        "lossAverageR": 0.9831434976765934
+      },
+      "allResolvedExamples": {
+        "cases": 15382,
+        "wins": 7124,
+        "losses": 8258,
+        "tp1": 0.5548693277857236,
+        "tp2": 0.3645819789364192,
+        "maeR": 0.8094356035659648,
+        "mfeR": 0.6917944701131796,
+        "winAverageR": 0.7420213007423159,
+        "lossAverageR": 0.9075082200005061
+      },
+      "timing": {
+        "through2": {
+          "count": 3992,
+          "netR": -930.8659019759154,
+          "expectancyR": -0.2331828411763315
+        },
+        "atLeast5": {
+          "count": 1550,
+          "netR": -129.32501468287785,
+          "expectancyR": -0.08343549334379215
+        }
+      },
+      "outcomeFeatureContrast": {
+        "winners": {
+          "depth": 0.3101832713242014,
+          "recoveryMinutes": 2,
+          "entryRoomR": 0.7655172413792296,
+          "impulseAtr": 4.039894551845356,
+          "m1Pressure": -0.02
+        },
+        "losers": {
+          "depth": 0.33413010073417126,
+          "recoveryMinutes": 0,
+          "entryRoomR": 1.4557382785163409,
+          "impulseAtr": 4.01699164345399,
+          "m1Pressure": -0.02
+        }
+      }
+    }
+  }
+}

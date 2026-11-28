@@ -1,0 +1,77 @@
+{
+  "provenance": "ORIGINAL_XAUCLOUD_DEMO_REFERENCE",
+  "sourceClock": "TERMINAL_TIME",
+  "excludesTerminalDateFrom": "2026.11.26",
+  "authority": "REFERENCE_ONLY",
+  "sources": {
+    "demo-tradebrain-20260820": {
+      "sha256": "50e3abdb109a0bd3ce7f9499f68dfde7f92e050227d7e5a0dc9319c587a94ab0",
+      "count": 901,
+      "events": {
+        "OPEN": 132,
+        "CLOSE": 129,
+        "POST_CLOSE": 640
+      },
+      "fromTerminal": "2026.08.13 09:52:34",
+      "throughTerminal": "2026.11.24 16:00:28",
+      "closeLabels": {
+        "NORMAL_STRATEGY_WIN": 73,
+        "NORMAL_STRATEGY_LOSS": 55,
+        "EXECUTION_OUTLIER": 1
+      },
+      "statEligibleCloses": 100,
+      "quarantinedCloses": 1,
+      "normalWinnerMaeUsdPerOz": {
+        "n": 58,
+        "median": 2.9050000000000002
+      },
+      "normalLoserMfeUsdPerOz": {
+        "n": 42,
+        "median": 2.2960000000000003
+      }
+    },
+    "demo-blocked-trade-memory-20260820": {
+      "sha256": "ce5146c26bad45625daf559ddea148624cf7eb213609fa8f0c8a17fcb9811a8d",
+      "count": 7687,
+      "events": {
+        "BLOCKED": 1288,
+        "CHECK": 6399
+      },
+      "fromTerminal": "2026.08.12 00:38:07",
+      "throughTerminal": "2026.11.25 18:50:00"
+    },
+    "demo-timing-proof-20260820": {
+      "sha256": "b85e33aded0c537af467306c8e7e28e9f8867b8e54b359299ca90c5708d947e3",
+      "count": 112,
+      "events": {
+        "TIMING": 112
+      },
+      "fromTerminal": "2026.08.13 09:50:04",
+      "throughTerminal": "2026.11.24 14:40:02",
+      "timingEngineWaitSeconds": {
+        "n": 112,
+        "median": 150.5
+      }
+    },
+    "demo-executed-trade-memory-20250401": {
+      "sha256": "cca6a750ede2b142d320e153073729ba5d6abf75b74eb88db59278ef68cdce2f",
+      "count": 174,
+      "events": {
+        "CLOSE": 36,
+        "OPEN": 30,
+        "POST_CLOSE": 108
+      },
+      "fromTerminal": "2026.07.14 00:37:56",
+      "throughTerminal": "2026.07.17 13:35:47"
+    },
+    "m10-v6.28.6": {
+      "sha256": "2e9116ae5f2da086d3a70193173f33620b2d8cd1d8859610d851103d3721674d",
+      "count": 8,
+      "events": {
+        "REC": 8
+      },
+      "fromTerminal": "2026.09.06 23:03:46",
+      "throughTerminal": "2026.09.07 00:10:00"
+    }
+  }
+}

@@ -9,7 +9,7 @@ const managementPolicies = ['TP2', 'TP1', 'PARTIAL', 'PARTIAL_PROTECTED'];
 
 /** Reprice the original November plan geometry using recorded Exness bid/ask ticks. */
 export async function replayNovemberTicks(zip, opportunities, {
-  slippage = .10, commissionPerOunce = .07, maxSpread = .35, entryExpiry = 12_000,
+  slippage = .10, commissionPerOunce = .07, maxSpread = .35, entryExpiry = 12_000, includeCases = false,
 } = {}) {
   const groups = opportunities.map(({ plan, family }) => ({
     plan, family, status: 'PENDING',
@@ -105,6 +105,7 @@ export async function replayNovemberTicks(zip, opportunities, {
     while (groups[cursor]?.plan.published <= at) {
       const candidate = groups[cursor++];
       const { plan, direction } = candidate;
+      if (includeCases) candidate.firstQuote = { at, bid, ask };
       const entry = direction > 0 ? ask : bid;
       const exitQuote = direction > 0 ? bid : ask;
       if (at >= candidate.expiry) candidate.status = 'MISSED_ENTRY';
@@ -129,14 +130,25 @@ export async function replayNovemberTicks(zip, opportunities, {
   if (unzipCode !== 0 || sortCode !== 0 || ticks !== 7_606_941) throw Error('Unverified November tick coverage');
 
   const withFill = groups.filter(x => x.status === 'FILLED_MODEL');
+  const resultFor = (candidate, policy) => candidate.baskets?.get(policy)?.outcome ?? {
+    status: ['FILLED_MODEL', 'PENDING'].includes(candidate.status) ? 'CENSORED' : candidate.status,
+  };
   return {
     source: 'Exness November recorded tick bid/ask, stable-sorted by timestamp. First quote at or after publication. Fixed model slippage and commission.',
     ticks,
     entrySpreadMean: withFill.length ? withFill.reduce((sum, row) => sum + row.spread, 0) / withFill.length : null,
-    policies: Object.fromEntries(managementPolicies.map(policy => [policy, summarizePullbackPolicies(groups.map(
-      candidate => candidate.baskets?.get(policy)?.outcome ?? {
-        status: ['FILLED_MODEL', 'PENDING'].includes(candidate.status) ? 'CENSORED' : candidate.status,
-      },
-    ))])),
+    policies: Object.fromEntries(managementPolicies.map(policy => [
+      policy, summarizePullbackPolicies(groups.map(candidate => resultFor(candidate, policy))),
+    ])),
+    ...(includeCases ? {
+      cases: groups.map(candidate => ({
+        planId: candidate.plan.id,
+        firstQuote: candidate.firstQuote ?? null,
+        entryStatus: candidate.status,
+        entryAt: candidate.entryAt ?? null,
+        modeledFill: candidate.fill ?? null,
+        policies: Object.fromEntries(managementPolicies.map(policy => [policy, resultFor(candidate, policy)])),
+      })),
+    } : {}),
   };
 }

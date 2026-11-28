@@ -1,0 +1,20 @@
+{
+  "lines": 137,
+  "accepted": 137,
+  "hourlyWindow": 22,
+  "hourlyWindowTrackingPlans": 13,
+  "noCommonTrackingPlan": 63,
+  "commonTrackingPlans": 74,
+  "classified": 0,
+  "differences": {
+    "direction": 0,
+    "confidence": 0,
+    "eligibility": 0,
+    "entry": 0,
+    "sl": 0,
+    "tp1": 0,
+    "tp2": 0,
+    "classification": 0
+  },
+  "scope": "Same native telemetry packet, deterministic normalization, bias, and quote/SL/target geometry only. No claims about DB-dependent behavior, live campaigns, execution, or historical profitability."
+}

@@ -1,0 +1,3 @@
+Apex4-M10-Observer-v6.29.1-7bae39ab159f.mq5
+MetaEditor result (original compiler summary line)
+Result: 0 errors, 0 warnings, 793911 ms elapsed, cpu='X64 Regular'

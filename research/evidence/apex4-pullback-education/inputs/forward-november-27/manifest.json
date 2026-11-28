@@ -1,0 +1,20 @@
+{
+  "source": "EXNESS_PUBLIC_TICKS_M1",
+  "uri": "https://ticks.ex2archive.com/ticks/XAUUSD/2026/11/27/Exness_XAUUSD_2026_11_27.zip",
+  "validatedSymbol": "XAUUSD",
+  "priceBasis": "MID of XAUUSD Bid and Ask",
+  "rawFile": "Exness_XAUUSD_2026_11_27.zip",
+  "rawSize": 3515393,
+  "rawSha256": "24f6ec22c4053fb37006dce4ef2ab46d000965546e0dd315d997085a53f18628",
+  "rawValidCrc": true,
+  "tickCount": 376841,
+  "firstTickUtc": "2026-11-27T00:00:00.037000Z",
+  "lastTickUtc": "2026-11-27T19:44:59.483000Z",
+  "m1File": "XAUUSD_M1_2026_11.csv.gz",
+  "m1Rows": 1185,
+  "m1Sha256": "1d75cd05ebaa0aac0ad26c8f6ccfa9fb713c85c7d683203dcd94a3eab64be112",
+  "firstM1Utc": "2026-11-27T00:00:00Z",
+  "lastM1Utc": "2026-11-27T19:44:00Z",
+  "format": "epoch_minute,open,high,low,close,spread_avg,ticks",
+  "status": "sealed forward source; price outcomes deliberately unevaluated"
+}

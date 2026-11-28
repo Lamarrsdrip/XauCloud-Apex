@@ -1,0 +1,774 @@
+{
+  "coverage": {
+    "rows": 1765848,
+    "months": 60
+  },
+  "method": {
+    "commissionIncluded": false,
+    "spread": 0.3,
+    "slippage": 0.1
+  },
+  "splits": {
+    "TRAIN": {
+      "from": 1635724800000,
+      "to": 1735689600000
+    },
+    "VALIDATION": {
+      "from": 1735689600000,
+      "to": 1767225600000
+    },
+    "HELD_OUT": {
+      "from": 1767225600000,
+      "to": 1793491200000
+    }
+  },
+  "results": {
+    "TRAIN": {
+      "all": {
+        "n": 1243,
+        "winRate": 0.2839903459372486,
+        "tp2Rate": 0.24617860016090104,
+        "expectancyR": -0.4328933446485383,
+        "averageMaeR": 1.1640959652072969,
+        "drawdownR": 538.0983806569982,
+        "netR": -538.0864273981331
+      },
+      "selected": {
+        "n": 0,
+        "winRate": null,
+        "tp2Rate": null,
+        "expectancyR": null,
+        "averageMaeR": null,
+        "drawdownR": 0,
+        "netR": 0
+      }
+    },
+    "VALIDATION": {
+      "all": {
+        "n": 879,
+        "winRate": 0.310580204778157,
+        "tp2Rate": 0.2821387940841866,
+        "expectancyR": -0.3165213783986885,
+        "averageMaeR": 1.1158138949753482,
+        "drawdownR": 280.9000072083388,
+        "netR": -278.2222916124472
+      },
+      "selected": {
+        "n": 0,
+        "winRate": null,
+        "tp2Rate": null,
+        "expectancyR": null,
+        "averageMaeR": null,
+        "drawdownR": 0,
+        "netR": 0
+      }
+    },
+    "HELD_OUT": {
+      "all": {
+        "n": 864,
+        "winRate": 0.3194444444444444,
+        "tp2Rate": 0.2881944444444444,
+        "expectancyR": -0.2263345938647414,
+        "averageMaeR": 1.1706660637381772,
+        "drawdownR": 202.87247608718323,
+        "netR": -195.55308909913657
+      },
+      "selected": {
+        "n": 0,
+        "winRate": null,
+        "tp2Rate": null,
+        "expectancyR": null,
+        "averageMaeR": null,
+        "drawdownR": 0,
+        "netR": 0
+      }
+    }
+  },
+  "knowledge": {
+    "version": "APEX4_XAUCLOUD_DETERMINISTIC_V1",
+    "builtAt": 1795809697971,
+    "dataThrough": 1793491200000,
+    "rules": [],
+    "history": {
+      "STRONG": {
+        "signals": 0,
+        "positive_pct": 0,
+        "tp1_60m_pct": 0,
+        "tp2_60m_pct": 0,
+        "tp3_60m_pct": 0,
+        "sl_first_60m_pct": 0,
+        "avg_r": 0,
+        "median_minutes_to_tp1": null
+      },
+      "STANDARD": {
+        "signals": 0,
+        "positive_pct": 0,
+        "tp1_60m_pct": 0,
+        "tp2_60m_pct": 0,
+        "tp3_60m_pct": 0,
+        "sl_first_60m_pct": 0,
+        "avg_r": 0,
+        "median_minutes_to_tp1": null
+      },
+      "WEAK": {
+        "signals": 0,
+        "positive_pct": 0,
+        "tp1_60m_pct": 0,
+        "tp2_60m_pct": 0,
+        "tp3_60m_pct": 0,
+        "sl_first_60m_pct": 0,
+        "avg_r": 0,
+        "median_minutes_to_tp1": null
+      }
+    },
+    "hours": [],
+    "pullbacks": [],
+    "diagnostics": {
+      "hourRows": [
+        {
+          "h": 0,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 1,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 2,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 3,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 4,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 5,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 6,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 7,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 8,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 9,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 10,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 11,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 12,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 13,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 14,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 15,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 16,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 17,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 18,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 19,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 20,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 21,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 22,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        },
+        {
+          "h": 23,
+          "train": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0,
+            "tp2Rate": 0
+          }
+        }
+      ],
+      "pullbackGroups": [
+        {
+          "group": "SELL|REJECTION|EXTREME|TURN",
+          "train": {
+            "n": 330,
+            "avgR": -0.5141767817126648
+          },
+          "validation": {
+            "n": 208,
+            "avgR": -0.27641689287425264
+          }
+        },
+        {
+          "group": "SELL|REJECTION|EXTREME|PRESSURE",
+          "train": {
+            "n": 47,
+            "avgR": -0.31199125215039175
+          },
+          "validation": {
+            "n": 36,
+            "avgR": -0.5027806528989418
+          }
+        },
+        {
+          "group": "SELL|REJECTION|STRETCHED|TURN",
+          "train": {
+            "n": 321,
+            "avgR": -0.5582375321383332
+          },
+          "validation": {
+            "n": 234,
+            "avgR": -0.3814275061991851
+          }
+        },
+        {
+          "group": "BUY|REJECTION|EXTREME|TURN",
+          "train": {
+            "n": 213,
+            "avgR": -0.25970373134743757
+          },
+          "validation": {
+            "n": 114,
+            "avgR": -0.1224890819924076
+          }
+        },
+        {
+          "group": "BUY|REJECTION|EXTREME|PRESSURE",
+          "train": {
+            "n": 24,
+            "avgR": -0.6753833266630336
+          },
+          "validation": {
+            "n": 16,
+            "avgR": -0.2373021285888472
+          }
+        },
+        {
+          "group": "BUY|REJECTION|STRETCHED|TURN",
+          "train": {
+            "n": 216,
+            "avgR": -0.3680223094443857
+          },
+          "validation": {
+            "n": 199,
+            "avgR": -0.30024773134387467
+          }
+        },
+        {
+          "group": "SELL|REJECTION|STRETCHED|PRESSURE",
+          "train": {
+            "n": 61,
+            "avgR": -0.2925399375416949
+          },
+          "validation": {
+            "n": 36,
+            "avgR": -0.6294504415191022
+          }
+        },
+        {
+          "group": "BUY|REJECTION|STRETCHED|PRESSURE",
+          "train": {
+            "n": 27,
+            "avgR": -0.18554351467963862
+          },
+          "validation": {
+            "n": 33,
+            "avgR": -0.4086066520403829
+          }
+        },
+        {
+          "group": "SELL|SHIFT|EXTREME|PRESSURE",
+          "train": {
+            "n": 2,
+            "avgR": 0.017768413813171957
+          },
+          "validation": {
+            "n": 1,
+            "avgR": -0.05383177570101796
+          }
+        },
+        {
+          "group": "BUY|SHIFT|EXTREME|PRESSURE",
+          "train": {
+            "n": 2,
+            "avgR": -0.356132524904913
+          },
+          "validation": {
+            "n": 0,
+            "avgR": 0
+          }
+        },
+        {
+          "group": "BUY|SHIFT|STRETCHED|PRESSURE",
+          "train": {
+            "n": 0,
+            "avgR": 0
+          },
+          "validation": {
+            "n": 1,
+            "avgR": 1.362126245847404
+          }
+        },
+        {
+          "group": "SELL|SHIFT|STRETCHED|PRESSURE",
+          "train": {
+            "n": 0,
+            "avgR": 0
+          },
+          "validation": {
+            "n": 1,
+            "avgR": -1.0276090557702688
+          }
+        }
+      ],
+      "pullbackHoldout": {
+        "n": 0,
+        "avgR": 0
+      },
+      "outlookHoldout": {
+        "period": [
+          "2026-01-01T00:00:00.000Z",
+          "9999"
+        ],
+        "signals": 0,
+        "grades": [
+          {
+            "grade": "STRONG",
+            "signals": 0,
+            "net_r": 0,
+            "avg_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "positive_pct": null,
+            "predicted_positive_pct": 0,
+            "tp1_60m_pct": null,
+            "predicted_tp1_60m_pct": 0
+          },
+          {
+            "grade": "STANDARD",
+            "signals": 0,
+            "net_r": 0,
+            "avg_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "positive_pct": null,
+            "predicted_positive_pct": 0,
+            "tp1_60m_pct": null,
+            "predicted_tp1_60m_pct": 0
+          },
+          {
+            "grade": "WEAK",
+            "signals": 0,
+            "net_r": 0,
+            "avg_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "positive_pct": null,
+            "predicted_positive_pct": 0,
+            "tp1_60m_pct": null,
+            "predicted_tp1_60m_pct": 0
+          }
+        ],
+        "brier": {
+          "positive_result": {
+            "graded": null,
+            "base_rate": null
+          },
+          "tp1_60m": {
+            "graded": null,
+            "base_rate": null,
+            "outlook_confidence": null
+          }
+        }
+      },
+      "exam": {
+        "holdout_signals": 0,
+        "from": "2026-01-01T00:00:00.000Z",
+        "results": [
+          {
+            "policy": "Take every Outlook signal (no intelligence)",
+            "signals": 0,
+            "taken": 0,
+            "net_r": 0,
+            "expectancy_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "missed_winners": 0,
+            "avoided_losers": 0,
+            "win_rate_pct": null
+          },
+          {
+            "policy": "Similar-case memory: take when similar earlier cases paid",
+            "signals": 0,
+            "taken": 0,
+            "net_r": 0,
+            "expectancy_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "missed_winners": 0,
+            "avoided_losers": 0,
+            "win_rate_pct": null
+          },
+          {
+            "policy": "Similar-case memory incl. opposite side",
+            "signals": 0,
+            "taken": 0,
+            "net_r": 0,
+            "expectancy_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "missed_winners": 0,
+            "avoided_losers": 0,
+            "win_rate_pct": null
+          },
+          {
+            "policy": "Validated lessons: take when lessons net favour the signal",
+            "signals": 0,
+            "taken": 0,
+            "net_r": 0,
+            "expectancy_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "missed_winners": 0,
+            "avoided_losers": 0,
+            "win_rate_pct": null
+          },
+          {
+            "policy": "Validated lessons: skip only when lessons net oppose",
+            "signals": 0,
+            "taken": 0,
+            "net_r": 0,
+            "expectancy_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "missed_winners": 0,
+            "avoided_losers": 0,
+            "win_rate_pct": null
+          },
+          {
+            "policy": "Lessons + similar cases must both agree",
+            "signals": 0,
+            "taken": 0,
+            "net_r": 0,
+            "expectancy_r": null,
+            "profit_factor": null,
+            "max_drawdown_r": 0,
+            "missed_winners": 0,
+            "avoided_losers": 0,
+            "win_rate_pct": null
+          }
+        ],
+        "note": "Plan results include published bid/ask and $0.10 slippage; stop checked before targets within a minute; 4 h horizon; ⅓ off at each target, stop to entry after TP1."
+      },
+      "lessons": [],
+      "strategyEvidence": {
+        "MOMENTUM": {
+          "train": -0.125,
+          "validation": -0.072,
+          "holdout": -0.048,
+          "trades_train": 3601
+        },
+        "BREAKOUT_RETEST": {
+          "train": -0.146,
+          "validation": -0.092,
+          "holdout": -0.071,
+          "trades_train": 6035
+        },
+        "SR_REJECTION": {
+          "train": -0.282,
+          "validation": -0.197,
+          "holdout": -0.064,
+          "trades_train": 420
+        },
+        "FAILED_BREAKOUT": {
+          "train": -0.261,
+          "validation": -0.199,
+          "holdout": -0.096,
+          "trades_train": 4944
+        },
+        "TREND_CONTINUATION": {
+          "train": -0.276,
+          "validation": -0.188,
+          "holdout": -0.149,
+          "trades_train": 2174
+        },
+        "EXHAUSTION_REVERSAL": {
+          "train": -0.431,
+          "validation": -0.434,
+          "holdout": -0.417,
+          "trades_train": 4203
+        },
+        "COUNTERTREND_CORRECTION": {
+          "train": -0.412,
+          "validation": -0.456,
+          "holdout": -0.419,
+          "trades_train": 1042
+        }
+      },
+      "caseCount": 0,
+      "pullbackCaseCount": 2986,
+      "trainEnd": 1735689600000,
+      "validationEnd": 1767225600000,
+      "pullbackSplit": {
+        "trainEnd": 1735689600000,
+        "validationEnd": 1767225600000
+      },
+      "costScenario": {
+        "spread": 0.3,
+        "slippage": 0.1,
+        "commissionNotIncluded": true
+      }
+    }
+  }
+}

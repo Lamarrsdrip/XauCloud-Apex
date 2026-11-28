@@ -1,5 +1,7 @@
 # Apex 4 pullback education results
 
+[Download the full classroom and inspect every November trade](../research/evidence/apex4-pullback-education).
+
 ## Result
 
 Apex studied 233,881 historical lesson snapshots across 58,903 directional impulse episodes. The classroom persisted 1,784,517 outcome records, including price-path labels and alternate execution policies. The detector learned to distinguish a developing correction, recovery by rejection or momentum, a sweep followed by recovery, a structural reclaim, a late entry and a broken parent structure using closed candles and a contemporaneous quote.

@@ -89,3 +89,21 @@ packets had no valid tracking levels in either engine. The capture SHA-256 is
 This run had zero simulated trades. The verdict covers the same-packet
 logic only. Quality grade agreement, production scheduler behavior, and
 live demo fills remain unverified by this replay.
+
+A second isolated run used Exness's recorded `XAUUSDm` ticks. The captured
+November 23 interval ran from 00:00 to 12:50 UTC before the optional replay
+was stopped. Apex and XauCloud agreed on direction, confidence, and tracking
+eligibility for all 78 packets. All 39 comparable tracking plans matched on
+entry, SL, TP1 and TP2. Thirteen packets arrived within the hourly window,
+including eight with comparable tracking plans. The median and 95th percentile
+first recorded ticks were 164 ms and 500 ms after the M10 close. Those
+times describe the historical tick stream. The tester journal recorded one
+intercepted order attempt (`TRADE_RETCODE_TRADE_DISABLED`, 10017) and zero
+successful order or deal records. The partial capture SHA-256 is
+`33b643e19afdcf2c62af9e89f8cbd85164b50d40cb7bd9e194c798741f1a2919`.
+
+The observer inherited one XauCloud startup self-test failure. Owner R exit
+case 18 expects the final target gate to allow a close at 1R, while the
+pinned source defaults to a 10R final target. The observer disables broker
+orders and completed its M10 replay. This check gives no evidence about
+Apex's independent position management.

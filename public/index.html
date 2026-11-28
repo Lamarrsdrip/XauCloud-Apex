@@ -439,6 +439,7 @@ function route(){
   var h = (location.hash||'#dashboard').replace('#','');
   if (h.indexOf('admin')===0){ STATE.page='admin'; stopPolling(); renderAdmin(); return; }
   if(h==='settings-ai'){STATE.settingsTab='astra';h='settings';}
+  if(h==='lab'&&STATE.me?.candidate)h='ai';
   var valid = NAV.some(function(n){return n.id===h});
   STATE.page = valid? h : 'dashboard';
   renderNav();
@@ -453,9 +454,12 @@ function renderNav(){
     return '<button class="navitem'+(selected?' active':'')+'" data-nav="'+n.id+'" '+(selected?'aria-current="page"':'')+'><span class="ic">'+navIcon(n.id)+'</span><span>'+title+'</span></button>';
   }
   var sidebar=document.getElementById('sidebar'),bottomnav=document.getElementById('bottomnav');
+  var showLab=!STATE.me?.candidate;
+  var visibleItem=function(id){return showLab||id!=='lab';};
+  bottomnav.style.gridTemplateColumns=showLab?'':'repeat(4,minmax(0,1fr))';
   var groups=[{name:'WORKSPACE',ids:['dashboard','campaigns','history']},{name:'INTELLIGENCE',ids:['ai','lab','learning']},{name:'MANAGEMENT',ids:['settings','account']}];
-  sidebar.innerHTML=groups.map(function(g){return '<div class="nav-group"><div class="nav-caption">'+g.name+'</div>'+g.ids.map(function(id){return item(NAV.find(function(n){return n.id===id;}),false);}).join('')+'</div>';}).join('')+'<div class="sidebar-footer"><span>PRIVATE WORKSPACE</span><button class="navitem" id="logout-btn"><span class="ic">&#10162;</span><span>Sign out</span></button></div>';
-  bottomnav.innerHTML=['dashboard','campaigns','ai','lab','settings'].map(function(id){return item(NAV.find(function(n){return n.id===id;}),true);}).join('');
+  sidebar.innerHTML=groups.map(function(g){return '<div class="nav-group"><div class="nav-caption">'+g.name+'</div>'+g.ids.filter(visibleItem).map(function(id){return item(NAV.find(function(n){return n.id===id;}),false);}).join('')+'</div>';}).join('')+'<div class="sidebar-footer"><span>PRIVATE WORKSPACE</span><button class="navitem" id="logout-btn"><span class="ic">&#10162;</span><span>Sign out</span></button></div>';
+  bottomnav.innerHTML=['dashboard','campaigns','ai','lab','settings'].filter(visibleItem).map(function(id){return item(NAV.find(function(n){return n.id===id;}),true);}).join('');
   var accountButton=document.getElementById('shell-account');if(accountButton)accountButton.onclick=function(){location.hash='#account';};
   Array.prototype.forEach.call(document.querySelectorAll('[data-nav]'), function(el){
     el.addEventListener('click', function(){ location.hash = '#'+el.getAttribute('data-nav'); });
@@ -535,7 +539,7 @@ function pageDashboard(me){
   }
   var pnl=camp?camp.floatingPL:null;
   html+='<section class="desk-account-strip apex-portfolio" aria-label="Trading account balances"><div class="portfolio-hero"><div class="portfolio-top"><span>Account balance</span><span class="portfolio-broker">'+esc(acc.currency||'ACCOUNT')+'</span></div><strong>'+esc(fmtMoney(acc.balance,acc.currency))+'</strong><div class="portfolio-bottom"><span>'+esc(acc.broker||'MetaTrader 5')+'</span><button id="overview-view-account" class="desk-metric-link" type="button" aria-label="View account details">Account ↗</button></div></div><div class="portfolio-metrics">'+deskMetric('Equity',fmtMoney(acc.equity,acc.currency))+deskMetric('Open trade P/L',pnl==null?'—':fmtMoney(pnl,acc.currency),pnl==null?'':pnl>=0?'desk-positive':'desk-negative')+deskMetric('Free margin',fmtMoney(acc.freeMargin,acc.currency))+deskMetric('Positions',camp?(camp.layers==null?'—':String(camp.layers)):'0')+'</div></section>';
-  html+='<div class="desk-workspace"><div class="desk-primary">'+apexIntelligencePanel(me)+'</div><aside class="desk-secondary" aria-label="Execution and activity"><section class="desk-panel desk-execution"><div class="desk-section-head"><div><span class="overview-eyebrow">EXECUTION</span><h2>Trading control</h2></div><button class="text-link" type="button" id="overview-view-settings">Settings ↗</button></div>'+armDisarmCard(me)+overviewTradingCard(me)+'</section><section class="desk-panel ai-workspace-card"><div class="ai-workspace-icon">✦</div><div><span class="intel-kicker">APEX BRAIN</span><h2>Research workspace</h2><p>Analyse a gold chart or replay a historical setup.</p></div><div class="ai-workspace-actions"><a href="#ai">Open AI ↗</a><a href="#lab">Research Lab ↗</a></div></section>';
+  html+='<div class="desk-workspace"><div class="desk-primary">'+apexIntelligencePanel(me)+'</div><aside class="desk-secondary" aria-label="Execution and activity"><section class="desk-panel desk-execution"><div class="desk-section-head"><div><span class="overview-eyebrow">EXECUTION</span><h2>Trading control</h2></div><button class="text-link" type="button" id="overview-view-settings">Settings ↗</button></div>'+armDisarmCard(me)+overviewTradingCard(me)+'</section><section class="desk-panel ai-workspace-card"><div class="ai-workspace-icon">✦</div><div><span class="intel-kicker">APEX BRAIN</span><h2>Research workspace</h2><p>Analyse a gold chart or replay a historical setup.</p></div><div class="ai-workspace-actions"><a href="#ai">Open AI ↗</a>'+(me.candidate?'':'<a href="#lab">Research Lab ↗</a>')+'</div></section>';
   if(camp){var p=camp.weightedEntry??camp.firstEntry;html+='<section class="desk-panel"><div class="desk-section-head"><h2>Active campaign</h2><a class="text-link" href="#campaigns">Details ↗</a></div><div class="desk-campaign-side '+(camp.direction==='BUY'?'desk-positive':camp.direction==='SELL'?'desk-negative':'')+'">'+esc(camp.direction||'Active')+' <small>XAUUSD</small></div><div class="row"><span class="k">Entry</span><span class="v">'+esc(p==null?'—':Number(p).toFixed(2))+'</span></div><div class="row"><span class="k">Strategy owner</span><span class="v">'+esc(camp.strategyOwner==='ASTRA'?'Apex AI':camp.strategyOwner==='LIFESTYLE_NATIVE'?'Native Apex':'—')+'</span></div></section>';}
   html+='<section class="desk-panel desk-activity"><div class="desk-section-head"><h2>Recent activity</h2><button class="text-link" type="button" id="overview-view-history">History ↗</button></div>'+recentFeedCard(me.recentHuman||[])+'</section></aside></div>';
   return html;

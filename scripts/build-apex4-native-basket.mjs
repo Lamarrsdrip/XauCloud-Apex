@@ -7,8 +7,9 @@ export function nativeBasketSource(observer) {
   const replace=(a,b)=>{if(observer.split(a).length!==2)throw Error('Native basket anchor changed: '+a);observer=observer.replace(a,b);};
   replace('#property version   "6.291"','#property version   "4.100"');
   replace('   if(!Apex4ObserverAllowed() || (!isTester && !Apex4EvidenceIdValid())) return INIT_FAILED;',
-          '   if(!isTester || !ApexBasketInit()) return INIT_FAILED;');
-  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   ApexBasketReplayTick();');
+          '   if(!ApexBasketInit()) return INIT_FAILED;');
+  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   ApexBasketReplayTick();\n   ApexBasketLiveOutlookTick();');
+  replace('void OnDeinit(const int reason)\n{','void OnDeinit(const int reason)\n{\n   ApexBasketShutdown();');
   const hook='      Apex4PublishNativeEvidence();';
   if(observer.split(hook).length!==3)throw Error('Native M10 hook count changed');
   observer=observer.replaceAll(hook,hook+'\n      ApexBasketConsiderNative();');

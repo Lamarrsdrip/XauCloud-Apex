@@ -20,3 +20,27 @@ export function canonicalStrongBasket(signal,approvedWatHours,now=Date.now()){
  if(!approvedWatHours.includes(hour))return null;
  return basketFromEntry({id:signal.id,side:signal.side,entry:signal.entry,source:'CANONICAL_STRONG_OUTLOOK'});
 }
+
+// Owner-selected 08:00–10:00 WAT session; not a claim of new profitability.
+// Explicit override is parsed once and must contain valid unique WAT hours.
+export function nativeOutlookHours(raw='8,9'){
+ const xs=String(raw).split(',').map(x=>x.trim());
+ if(!xs.length||xs.some(x=>!/^([0-9]|1[0-9]|2[0-3])$/.test(x)))throw Error('INVALID_NATIVE_OUTLOOK_HOURS');
+ return [...new Set(xs.map(Number))];
+}
+export function nativeOutlookReplayCsv(signals,hours){
+ if(!Array.isArray(signals)||!Array.isArray(hours))throw Error('INVALID_REPLAY_INPUT');
+ const seen=new Set(),slots=new Set(),rows=[];
+ for(const s of [...signals].sort((a,b)=>a.publishedAt-b.publishedAt)){
+  if(!s||s.engine!=='OUTLOOK'||s.canonical!==true||typeof s.id!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(s.id))continue;
+  if(!Number.isSafeInteger(s.publishedAt)||!Number.isSafeInteger(s.expiresAt))continue;
+  if(!canonicalStrongBasket(s,hours,s.publishedAt))continue;
+  const slot=Math.floor(s.publishedAt/3600000);
+  if(seen.has(s.id)||slots.has(slot))throw Error('DUPLICATE_CANONICAL_OUTLOOK');
+  seen.add(s.id);slots.add(slot);
+  const published=Math.ceil(s.publishedAt/1000),expires=Math.floor(s.expiresAt/1000);
+  if(expires<=published)continue;
+  rows.push([published,expires,s.id,s.side,s.entry,'STRONG',new Date(s.publishedAt+3600000).getUTCHours()].join(','));
+ }
+ return rows.length?rows.join('\n')+'\n':'';
+}

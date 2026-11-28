@@ -1178,6 +1178,7 @@ async function buildMe(key){
       account:{account:lic.account||null,currency:'USD',equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
         openPositions:nativeFresh?native.positions:null,asOf:at},
       campaign:null,history:[],recentHuman:[],settings:settingsView(cfg),learning:learningShape([]),
+      astra:await ASTRA.status(key).catch(()=>({status:'AI_ERROR',hasKey:false})),
       bridge:{configured:false,ok:false,reason:'INDEPENDENT_NATIVE_MODE'}};
   }
   const bridge=await readBridgeStatusSafe(key);

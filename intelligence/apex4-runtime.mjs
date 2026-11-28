@@ -241,3 +241,24 @@ export async function nativeOutlookKnowledgeStatus(){
  const rules=k?.rules?.length??0,strongCases=k?.history?.STRONG?.signals??0;
  return {status:rules>0&&strongCases>0?'CALIBRATED_RULES_AVAILABLE':'OUTLOOK_GRADE_UNAVAILABLE',rules,strongCases,through:k?new Date(k.dataThrough).toISOString():null};
 }
+
+const nativeChatObservations=new Map();
+export function observeNativeChat(key,snapshot,now=Date.now()){
+ if(!snapshot||!Number.isFinite(snapshot.observedAt)||snapshot.observedAt>now)return;
+ nativeChatObservations.delete(key);
+ nativeChatObservations.set(key,snapshot);
+ while(nativeChatObservations.size>256)nativeChatObservations.delete(nativeChatObservations.keys().next().value);
+}
+export async function nativeChatContext(key,now=Date.now()){
+ const s=nativeChatObservations.get(key);
+ const context=await chatContext(key,now);
+ const native=!!s&&now-s.observedAt<=10000?s:null;
+ return {...context,mode:'APEX_NATIVE_CHAT_ONLY',
+   nativeTerminal:native,nativeAgeMs:s?now-s.observedAt:null,
+   nativeMarketPolicy:{source:'XauCloud native classifier and vendored opportunity-engine features',frames:['M1','M5','M15','H1'],signals:'two-sided evidence, not probability',
+    patterns:['trend continuation','countertrend pullback scalp','reversal reclaim','liquidity sweep','structure reclaim','rejection','momentum recovery'],
+    countertrend:'original 5/6 immediate exhaustion evidence plus reclaim; compare both sides',
+    execution:'fixed original entry +/- $5, dynamic margin lots, no individual SL; tester/demo only',outlook:'independent STRONG historical grade, 08–10 WAT default',
+    limitations:'Previous classroom fixed-SL outcomes do not validate this basket. No automatic AI execution. Native terminal diagnostics are observations, not independently verified orders.'},
+   outlookKnowledge:await nativeOutlookKnowledgeStatus()};
+}

@@ -6,7 +6,8 @@ app="${APEX_MT5_APP:-/Applications/MetaTrader 5.app}"
 prefix="${APEX_MT5_PREFIX:-$HOME/Library/Application Support/net.metaquotes.wine.metatrader5}"
 terminal="${APEX_MT5_TERMINAL_DIR:-$prefix/drive_c/Program Files/MetaTrader 5}"
 wine="$app/Contents/SharedSupport/wine/bin/wine"
-source="$repo_root/ea/XauCloud-Apex-v4.0.0-DEMO-Candidate.mq5"
+source="${APEX_COMPILE_SOURCE:-$repo_root/ea/XauCloud-Apex-v4.0.0-DEMO-Candidate.mq5}"
+[[ -f "$source" ]] || { printf 'Source missing: %s\n' "$source" >&2; exit 1; }
 if [[ ! -x "$wine" || ! -f "$terminal/MetaEditor64.exe" || ! -d "$terminal/MQL5/Include/Trade" ]]; then
   printf '%s\n' 'MetaTrader 5 Wine, MetaEditor or the standard MQL5 headers are missing.' >&2
   exit 1
@@ -20,6 +21,11 @@ cp "$terminal/MetaEditor64.exe" "$build_dir/MetaEditor64.exe"
 cp -R "$terminal/MQL5/Include" "$build_dir/MQL5/Include"
 name="$(basename "$source" .mq5)"
 cp "$source" "$build_dir/MQL5/Experts/$name.mq5"
+if [[ "$name" == "XauCloud-Apex-v4-NativeBasket-TESTER" ]]; then
+  src_dir="$(dirname "$source")"
+  cp "$src_dir/Apex4-NativeBasket-Tester.mqh" "$src_dir/Apex4-M10-Observer-Safety.mqh" "$build_dir/MQL5/Experts/"
+  cp -R "$src_dir/lease" "$build_dir/MQL5/Experts/lease"
+fi
 
 # MetaEditor does not consistently return zero after a clean compile in Wine.
 # Both the compiler report and the freshly created candidate bytes must pass.

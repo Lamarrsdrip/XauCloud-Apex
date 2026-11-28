@@ -44,3 +44,13 @@ export function nativeOutlookReplayCsv(signals,hours){
  }
  return rows.length?rows.join('\n')+'\n':'';
 }
+
+export function nativeBasketStatus(input,now,armed){
+ if(!input||!Number.isFinite(now)||typeof input.basketActive!=='boolean'||
+    ![0,1,-1].includes(input.side)||!Number.isSafeInteger(input.positions)||input.positions<0||
+    !Number.isSafeInteger(input.orders)||input.orders<0||![input.anchor,input.target].every(Number.isFinite))return null;
+ if(input.basketActive?(input.side===0||input.anchor<=5||Math.abs(input.target-input.anchor-input.side*5)>1e-6):
+    (input.side!==0||input.positions!==0||input.anchor!==0||input.target!==0))return null;
+ return {observedAt:now,armed:armed===true,active:input.basketActive,side:input.side===1?'BUY':input.side===-1?'SELL':null,
+  anchor:input.basketActive?input.anchor:null,target:input.basketActive?input.target:null,positions:input.positions,orders:input.orders,stopLoss:null};
+}

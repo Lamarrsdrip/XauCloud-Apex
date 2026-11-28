@@ -9,13 +9,15 @@ import { fileURLToPath } from 'node:url';
 import { createAstraService } from './astra/service.mjs';
 import { createReleaseStore } from './release-store.mjs';
 import { strategyFixtures } from './astra/fixtures.mjs';
+import { canonicalStrongBasket, nativeOutlookHours, nativeBasketStatus } from './intelligence/apex4-native-basket-contract.mjs';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'),'utf8'));
 const CONFIG_SCHEMA=Number(MANIFEST.configSchema||2);
 const PORT=Number(process.env.PORT||8787);
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
-const APEX4_PREVIEW=process.env.APEX4_CANDIDATE==='1';
+const APEX4_NATIVE_PREVIEW=process.env.APEX4_NATIVE_BASKET==='1';
+const APEX4_PREVIEW=!APEX4_NATIVE_PREVIEW&&process.env.APEX4_CANDIDATE==='1';
 let apex4RuntimePromise;
 function apex4Runtime(){
   if(!apex4RuntimePromise)apex4RuntimePromise=import('./intelligence/apex4-runtime.mjs').then(runtime=>{
@@ -622,6 +624,7 @@ async function saveLicenseConfig(key,partial,{bumpRevision=true,expectedRevision
       licenses[key]=lic;
       await writeLicenses(licenses);
     }
+    if(APEX4_NATIVE_PREVIEW)return {config:next,revision,configHash:configHash(next),delivery:{status:'NATIVE_LOCAL_SAVED',localSaved:true}};
     const delivery=await syncBridgeConfig(key,next,revision,{queueOnFailure:true});
     return {config:next,revision,configHash:configHash(next),
       delivery:classifyConfigDelivery(delivery,bridgeConfigured())};
@@ -1149,7 +1152,14 @@ async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const desiredHash=configHash(cfg);
   const release=await RELEASE_STORE.status();
-  const candidate=APEX4_PREVIEW?await apex4Runtime().then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
+  const nativePreview=APEX4_NATIVE_PREVIEW;
+  const native=lic?.nativeBasket;
+  const nativeFresh=!!native&&Date.now()-native.observedAt<=8000&&Date.now()>=native.observedAt;
+  const candidate=nativePreview?{mode:'APEX4_NATIVE_BASKET',status:nativeFresh?(native.terminalArmed===true?'ARMED':native.terminalArmed===false?'DISARMED':'AWAITING_ARM_ACK'):'AWAITING_NATIVE_TERMINAL',
+    fresh:nativeFresh,basket:nativeFresh?native:null,hoursWAT:nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9'),
+    outlookKnowledge:await apex4Runtime().then(m=>m.nativeOutlookKnowledgeStatus()).catch(()=>({status:'OUTLOOK_GRADE_UNAVAILABLE',rules:0,strongCases:0})),
+    execution:'DEMO_ONLY',modelExecution:false}
+    :APEX4_PREVIEW?await apex4Runtime().then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
     unlimitedEntitled:licenseAllowsUnlimited(lic),
@@ -1159,6 +1169,16 @@ async function buildMe(key){
       settings:settingsView(cfg),learning:learningShape([]),
       bridge:{configured:bridgeConfigured(),ok:false,reason:'LICENSE_'+status,sync:bridgeSyncState}};
 
+  if(nativePreview){
+    const at=nativeFresh?new Date(native.observedAt).toISOString():null;
+    return {license:base,release,candidate,dataAvailable:nativeFresh,waitingForFirstContact:!native,
+      armed:cfg.armed,mt5:{status:nativeFresh?'CONNECTED':native?'STALE':'DISCONNECTED',lastSeen:at},
+      control:{desired:{armed:cfg.armed,revision:Number(lic.commandRevision||0)},applied:{inSync:nativeFresh&&native.terminalArmed!==null?native.terminalArmed===cfg.armed:null,asOf:at}},
+      account:{account:lic.account||null,currency:'USD',equity:nativeFresh?native.equity:null,freeMargin:nativeFresh?native.freeMargin:null,
+        openPositions:nativeFresh?native.positions:null,asOf:at},
+      campaign:null,history:[],recentHuman:[],settings:settingsView(cfg),learning:learningShape([]),
+      bridge:{configured:false,ok:false,reason:'INDEPENDENT_NATIVE_MODE'}};
+  }
   const bridge=await readBridgeStatusSafe(key);
   const remote=bridge.data;
   const remoteLastSeen=remote?.mt5?.lastSeen||null;
@@ -1314,11 +1334,53 @@ const server=http.createServer(async(req,res)=>{
 
     if(req.method==='GET'&&u.pathname==='/health')
       return json(res,200,{ok:true,service:'xaucloud-apex',
-        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,candidateMode:APEX4_PREVIEW?'APEX4_DEMO':null,
+        version:MANIFEST.version,buildId:MANIFEST.buildId,eaVersion:MANIFEST.eaVersion,candidateMode:APEX4_NATIVE_PREVIEW?'APEX4_NATIVE_BASKET':APEX4_PREVIEW?'APEX4_DEMO':null,
         configSchema:CONFIG_SCHEMA,webRequestOrigin:MANIFEST.webRequestOrigin,
         bridge:{configured:bridgeConfigured(),sync:bridgeSyncState},
         secretsAcceptableForProduction:secretProblems().length===0,
         link:'command-center-style'});
+
+    // Native basket contract: generate canonical Outlook inside Apex from
+    // native evidence and the vendored XauCloud grade engine. Separate from the old v4 wire.
+    if(req.method==='POST'&&u.pathname==='/api/apex/v4/native-outlook'){
+      const send=(status,txt)=>{
+        res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
+        res.end(txt);
+      };
+      if(!APEX4_NATIVE_PREVIEW)return send(503,'NONE|CANDIDATE_DISABLED');
+      const b=await body(req,2e6);
+      if(b.environment!=='DEMO')return send(403,'NONE|DEMO_ONLY');
+      const v=await validateEa(b.license,b.account,{claim:false});
+      if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
+      if(!throttle('apex4-native-outlook:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
+      const cfg=await getLicenseConfig(v.key);
+      const snapshot=nativeBasketStatus(b,Date.now(),cfg.armed===true);
+      if(!snapshot)return send(400,'NONE|INVALID_BASKET_STATUS');
+      await withLock('lic:'+v.key,async()=>{
+        const all=await readLicenses(),current=all[v.key];
+        if(licenseStatusFor(current)!=='ACTIVE'||String(current.account||'')!==String(b.account||''))return;
+        const prev=current.nativeBasket;
+        if(!prev||snapshot.observedAt-prev.observedAt>=5000||prev.active!==snapshot.active||prev.positions!==snapshot.positions||prev.armed!==snapshot.armed||prev.terminalArmed!==snapshot.terminalArmed){
+          current.nativeBasket=snapshot;current.lastSeen=new Date(snapshot.observedAt).toISOString();
+          current.lastAccount=String(b.account);await writeLicenses(all);
+        }
+      });
+      if(cfg.armed!==true)return send(200,'NONE|NOT_ARMED');
+      try{
+        const hours=nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9');
+        const now=Date.now();
+        const result=await apex4Runtime().then(m=>m.nativeOutlookForBasket(v.key,String(b.account),b,now,hours));
+        res.setHeader('X-Apex-Outlook-Status',result.status);
+        const signal=result.signal;
+        const plan=canonicalStrongBasket(signal,hours,now);
+        if(!plan||!/^[A-Za-z0-9_-]{1,100}$/.test(plan.id))return send(200,'NONE|ARMED_NO_PLAN');
+        return send(200,['NATIVE',plan.id,plan.side,plan.anchor,plan.target,Math.floor(signal.publishedAt/1000),Math.floor(signal.expiresAt/1000)].join('|'));
+      }catch{
+        // A failed Outlook source must not disable already authorized native demo recognition.
+        res.setHeader('X-Apex-Outlook-Status','CANONICAL_OUTLOOK_UNAVAILABLE');
+        return send(200,'NONE|ARMED_NO_PLAN');
+      }
+    }
 
     // Apex v4 candidate is a separate, provider-free backend mode. The stable
     // deployment stays unchanged unless the staging operator enables it.
@@ -1510,7 +1572,7 @@ const server=http.createServer(async(req,res)=>{
     // --- first-party Apex Web Push (per-license; separate from EA config revision) ---
     if(u.pathname.startsWith('/api/session/lab/')){
       const s=await notificationSession(req,res);if(!s)return;
-      if(APEX4_PREVIEW)return json(res,409,{error:'legacy_lab_disabled_in_apex4'});
+      if(APEX4_PREVIEW||APEX4_NATIVE_PREVIEW)return json(res,409,{error:'legacy_lab_disabled_in_apex4'});
       if(!throttle('astra-lab:'+s.lic,ip,20,60_000))return json(res,429,{error:'too_many_lab_requests'});
       if(req.method!=='GET'){
         if(req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'cross_site_request'});
@@ -1616,7 +1678,7 @@ const server=http.createServer(async(req,res)=>{
       if(!String(req.headers['content-type']||'').startsWith('application/json'))
         return json(res,415,{error:'json_required'});
       if(u.pathname==='/api/admin/release'){
-        if(APEX4_PREVIEW)return json(res,409,{error:'candidate_mode_cannot_publish_stable_release'});
+        if(APEX4_PREVIEW||APEX4_NATIVE_PREVIEW)return json(res,409,{error:'candidate_mode_cannot_publish_stable_release'});
         if(!throttle('release-publish',ip,5,60*60*1000))return json(res,429,{error:'too_many_release_uploads'});
         const b=await body(req,8_000_000);
         const published=await RELEASE_STORE.publish(b);

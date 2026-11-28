@@ -48,7 +48,14 @@ done
 
 dest="${APEX_COMPILE_OUTPUT_DIR:-$HOME/Downloads}"
 mkdir -p "$dest"
-source_stamp="$(shasum -a 256 "$build_dir/MQL5/Experts/$name.mq5" | cut -c1-12)"
+if [[ "$name" == "XauCloud-Apex-v4-NativeBasket-TESTER" ]]; then
+  source_stamp="$( (
+    cd "$build_dir/MQL5/Experts"
+    shasum -a 256 "$name.mq5" Apex4-NativeBasket-Tester.mqh Apex4-M10-Observer-Safety.mqh lease/*.mqh
+  ) | shasum -a 256 | cut -c1-12)"
+else
+  source_stamp="$(shasum -a 256 "$build_dir/MQL5/Experts/$name.mq5" | cut -c1-12)"
+fi
 output="$dest/$name-$source_stamp"
 [[ -s "$build_dir/report.txt" ]] && cp "$build_dir/report.txt" "$output.compile.log"
 if [[ ! -s "$binary" ]] || ! grep -q '^Result: 0 errors, 0 warnings,' "$build_dir/report.txt"; then

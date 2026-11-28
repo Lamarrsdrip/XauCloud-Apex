@@ -1,32 +1,37 @@
-# Native XauCloud basket — isolated tester foundation
+# Native Apex basket candidate — audit and tester guide
 
-This is an additional, **tester-only** generated EA. It does not replace the stable manifest or turn on Apex 4 production trading. It derives from the same SHA-256-pinned XauCloud v6.29.1 source and lease files already used by the canonical M10 observer. All inherited order and network APIs stay disabled; only the separate Apex tester basket adapter can submit orders, and only under MQL_TESTER.
+Source lineage: exact XauCloud EA v6.29.1 commit `fc91b97e2ee88eae6b9d4e24c6d74ef522c1ec4c`, SHA-256-pinned source and lease dependencies. XauCloud's original trade and network sends remain intercepted. The original native direction and classification are reused; Apex owns the new basket executor. No modifications to XauCloud main are required.
 
-## Build on the Mac
+## Execution contract
 
-Use a clean XauAI-Sniper checkout at fc91b97e2ee88eae6b9d4e24c6d74ef522c1ec4c; the generator rejects any different source bytes.
+- Preferred lot per basket is frozen at initial USD equity: $20 .01, $50 .02, $100 .05, $200 .10, $500 .20, $1000 .50.
+- The preferred lot is a ceiling, not a minimum. Try every broker-valid volume increment from that ceiling down to the symbol minimum. OrderCheck success is retcode 0 (or DONE), with sufficient projected free margin. Actual orders use the selected smaller lot. Recheck after each fill, broker rejection or new tick; floating profit may create more capacity.
+- 100 ms target pacing. Demo timer and tick path share the same pacing state; tester uses historical tick timestamps. Synchronous fills, market ticks, terminal event queues and broker responses limit actual speed. Do not claim ten fills per second.
+- Fixed $5/oz move from original executable entry or independent Outlook entry; all owned positions close together at executable bid/ask crossing. No individual SL, no variable targets, no timed exit or software layer cap. Broker stop-out is still possible.
+- One basket at a time. No real account execution. Demo is opt-in and must initially receive a valid bound-license arm. Existing basket management remains local; an offline terminal cannot receive remote revocation. Restart recovery refuses unknown positions and avoids uncertain extra entries.
+
+## Intelligence
+
+The native EA uses XauCloud's existing M10 direction, candidate/retrace thesis, and original setup classifier. The classroom adapter uses the published closed M1/M5/M15 features: EMA/swing trend, 14-period true range, impulse and retracement depth, price recovery, liquidity sweep, rejection, pressure, acceleration and structural reclaim. It identifies developing, late, broken and actionable recovery stages. The original classroom's fixed-SL/TP2 outcomes and zero approved groups are not a fitted edge for this new basket. No outcome labels enter live features.
+
+Apex's backend independently applies the existing vendored XauCloud hourly bias, publication geometry, owner policy and historical quality rules to native evidence and closed history from the Apex terminal. The explicit owner-selected WAT window is 08:00–10:00 (hours 8 and 9); the earlier study is not a profitability guarantee. There is no XauCloud signal bridge dependency. The checked-in historical knowledge contains zero calibrated STRONG rules, so the independent Outlook cannot produce a genuine STRONG signal until a valid chronological knowledge file is supplied. Native pullback testing is unaffected.
+
+## Compile for native pullbacks on Mac
 
 ```bash
-XAU_SOURCE="$HOME/XauAI-Sniper/backend/ea_code"
-OUT="$(mktemp -d)"
-node scripts/build-apex4-native-basket.mjs "$XAU_SOURCE" "$OUT"
-APEX_COMPILE_SOURCE="$OUT/XauCloud-Apex-v4-NativeBasket-TESTER.mq5" bash scripts/compile-apex4-mac.sh
+bash scripts/build-apex4-native-pullback-mac.sh
 ```
 
-Install the resulting checksum-stamped EX5 in the MT5 Experts directory and run historical XAUUSD real ticks on a USD hedging tester. Do not attach it to a live or demo chart; initialization rejects all non-tester environments.
+The script uses the exact pinned XauCloud source bytes from a local checkout (or fetches them with GitHub access), verifies hashes, generates the native derivative and compiles using the existing Mac MetaEditor script. It saves a dependency-checksummed EX5 and log to Downloads only after a clean 0 errors, 0 warnings result. A failure is reported, not hidden.
 
-## Actual changes
+Copy the EX5 to MQL5/Experts, refresh MT5, select it in Strategy Tester, use XAUUSD/XAUUSDm, M1, Every tick based on real ticks, USD hedging, $100 starting deposit and the broker leverage you want to test. Set InpApexNativePullbackEnabled=true, InpApexReplayStrongOutlook=false, InpApexOrderGapMilliseconds=100. No license, API or backend needed in tester. First test a short interval, then an independent period. Inspect actual deals, drawdown, stop-out, margin, elapsed first-to-last fill and position sizes, not the old single-position R report.
 
-- Reuse native XauCloud M10 snapshots, candidate direction and XAU_ClassifySetup, including its countertrend scalp, reversal reclaim and continuation families.
-- Record pullback/reclaim categories without claiming that the prior fixed-SL research proves a no-SL basket edge.
-- One basket at a time, frozen original executable quote and equity tier; fixed exit at original price +/- $5.
-- No per-order SL or TP, fixed holding deadline or software layer/risk cap. Additional orders are attempted when broker margin permits and the target has not been crossed; simulated tick time drives pacing.
-- Original broker APIs are fenced. The new executor uses its own magic and rejects foreign exposure. Ambiguous order responses pause further entries.
-- Broker stop-outs remain possible and may wipe the deposit. This is a deliberately high-risk research execution mode, not a profitability claim.
-- Backend contract tests define the intended fixed basket geometry for a future native adapter and require canonical STRONG Outlook, current publication, and a separately approved WAT hour. This contract is **not wired into an active endpoint**. Live Outlook integration, full classroom-feature parity, independent historical basket execution evidence, compiler verification, website/backend cutover and live deployment remain open.
+Optional offline Outlook replay is separate: export verified original timestamped canonical STRONG records using scripts/export-apex4-strong-outlook.mjs; generate with --outlook-replay; supply the CSV and historical broker UTC offset. No verified historical grade export is bundled.
 
-The existing research used individual equal-risk positions with structural stops, variable targets and timed exits; those returns cannot validate this different basket policy. The published classroom records remain untouched. The 8–10 AM WAT preference is not hardcoded as proven: the original validated production Outlook records have not been recovered.
+## Backend and web
 
-## Verification
+APEX4_NATIVE_BASKET=1 selects the candidate mode; APEX4_NATIVE_OUTLOOK_WAT_HOURS=8,9 specifies the window. APEX4_KNOWLEDGE_FILE must reference a valid independent chronological calibration. Demo uses the existing bound Apex license, terminal native evidence, and local dashboard controls. The old candidate execution route and legacy settings are not the new basket authority. Stable version.json and published EX5 are unchanged.
 
-The connector supplied the pinned native source and the generation transforms were checked against that source. The 12 isolated structural checks are not a MetaEditor compile or MT5 execution test. A clean compile and real-tick tester runs must be recorded before any release promotion.
+## Audit results and open verification
+
+The 6 isolated JS contract tests (44 assertions) and 17 structural checks of the complete pinned source transformation passed. These are not a MetaEditor compilation, actual broker simulation, full CI, or end-to-end production deployment. The candidate has not yet been run in MT5 here. Native per-deal history and a fitted classroom model for this new margin-exhaustion policy are not demonstrated. No live-money release is authorized by this source merge. Use actual real-tick tester and demo receipts to verify the behavior.

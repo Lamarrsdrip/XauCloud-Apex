@@ -278,3 +278,19 @@ export function wire(p:Plan|null):string{
  }
  return fields.join("|");
 }
+
+// Independent Apex hourly publication: the vendored XauCloud bias and quality
+// functions operate on this terminal's native evidence and prior local history.
+// The original signal geometry is evidence only; the basket executor owns exits.
+export function independentNativeOutlook(raw:Bar[],q:Quote,now:number,k:Knowledge|null,canonical:Parameters<typeof outlookFromCanonicalEvidence>[0]|undefined,hours:number[]){
+ if(!hours.includes(hourWAT(now))||now%3600000>=60000)return {status:"OUTSIDE_OUTLOOK_WINDOW",signal:null};
+ if(!k||k.dataThrough>now||!k.rules.length||!k.history?.STRONG?.signals)return {status:"OUTLOOK_GRADE_UNAVAILABLE",signal:null};
+ if(!canonical||!brokerFrames(raw,q,now))return {status:"AWAITING_NATIVE_EVIDENCE",signal:null};
+ const p=outlookFromCanonicalEvidence(canonical,now);
+ if(!p)return {status:"NO_VALID_OUTLOOK",signal:null};
+ const features=caseFeatures(raw,now,p.side,{...canonical.thesis,structure_state:canonical.thesis.structure,market_regime:canonical.thesis.market_regime,
+  confidence_pct:resolveHourlyBias(canonical.canonicalM10,canonical.thesis).confidence});
+ const grade=assessOutlookQuality(features,k.rules,k.history);
+ if(grade.grade!=="STRONG")return {status:"OUTLOOK_"+grade.grade,signal:null};
+ return {status:"STRONG",signal:{id:p.id,side:p.side,entry:p.entry,grade:"STRONG",status:"ACTIONABLE",publishedAt:now,expiresAt:Math.min(Math.floor(now/3600000)*3600000+60000,now+25000)}};
+}

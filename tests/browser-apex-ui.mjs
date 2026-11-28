@@ -80,6 +80,10 @@ try{
   await page.getByText('SWEEP RECOVERY',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
   await page.screenshot({path:'apex-pullback-education-'+size.width+'.png'});
+  await page.locator('[data-nav="ai"]:visible').click();
+  await page.getByRole('heading',{name:'Apex AI',exact:true}).waitFor();
+  await page.getByText('Awaiting fresh Apex M1 broker data',{exact:false}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Research Lab'}).count(),0);
   assert.deepEqual(errors,[]);
   await page.close();
  }

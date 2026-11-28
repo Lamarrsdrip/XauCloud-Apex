@@ -65,5 +65,18 @@
       "mode": "pure-function subset",
       "modifications": "local import extensions, provenance header; subset removes DB/provider-dependent sections"
     }
-  ]
+  ],
+  "nativeEvidence": {
+    "commit": "fc91b97e2ee88eae6b9d4e24c6d74ef522c1ec4c",
+    "version": "v6.29.1",
+    "source": "backend/ea_code/XauCloud.mq5",
+    "sourceSha256": "5be1ef095d7bf3d23c1d2cc7ee482368700bfff871a08e8f8f340a932d686d71",
+    "build": "scripts/build-apex4-m10-observer.mjs",
+    "canonicalNormalizer": {
+      "file": "intelligence/xaucloud/marketOutlookEvidence.ts",
+      "source": "backend_node/src/services/marketOutlookEvidence.ts",
+      "blob": "b42c71db7c258851e9c0ecaecd40e60309037c21",
+      "mode": "canonicalM10Signal pure-function subset"
+    }
+  }
 }

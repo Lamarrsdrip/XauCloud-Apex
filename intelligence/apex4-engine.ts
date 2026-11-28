@@ -10,7 +10,7 @@ import { isMarketOpen } from "./xaucloud/marketCalendar.ts";
 type Row = Record<string, unknown>;
 export type Quote={bid:number;ask:number;at:string};
 export type Plan={id:string;kind:"OUTLOOK"|"PULLBACK";side:Side;entry:number;sl:number;tp1:number;tp2:number;published:number;expires:number;reason:string;grade?:string;source:string;group?:string};
-export type PullbackCase={at:number;group:string;r:number;tp2:boolean;maeR:number;minutes:number};
+export type PullbackCase={at:number;group:string;r:number;tp1?:boolean;tp2:boolean;stopped?:boolean;maeR:number;mfeR?:number;minutes:number};
 export type PullbackGroup={group:string;train:{n:number;avgR:number};validation:{n:number;avgR:number}};
 export type Knowledge={version:string;builtAt:number;dataThrough:number;rules:QualityRule[];history:ReturnType<typeof gradeHistory>;hours:number[];pullbacks:PullbackGroup[];diagnostics:Row};
 const VERSION="APEX4_XAUCLOUD_DETERMINISTIC_V1";
@@ -67,7 +67,9 @@ export function outlookFromCanonicalEvidence(input:{canonicalM10:Row;thesis:Row;
 // Uses actual XauCloud feature extraction and directional resolver, NOT a fabricated M10 signal.
 // Keep output observable in research; cannot authorize a production trade.
 export function localOutlookResearch(raw:Bar[],quote:Quote,now:number):{plan:Plan|null;features:Row;status:string}{
- const mk=brokerFrames(raw,quote,now);
+ return localOutlookFromMarket(brokerFrames(raw,quote,now),quote,now);
+}
+function localOutlookFromMarket(mk:Market|null,quote:Quote,now:number):{plan:Plan|null;features:Row;status:string}{
  if(!mk||!isMarketOpen(new Date(now)))return {plan:null,features:{},status:"MISSING_BROKER_DATA"};
  const f=mk.m5!,h=mk.m15!, m1=mk.m1!;
  const pressure=(f.pressure+h.pressure+m1.pressure)/3;
@@ -89,72 +91,116 @@ export function pullbackCandidate(raw:Bar[],q:Quote,now:number):Plan|null{
  const mk=brokerFrames(raw,q,now);
  return mk&&isMarketOpen(new Date(now))?pullbackFromMarket(mk,q,now):null;
 }
-function pullbackFromMarket(mk:Market,q:Quote,now:number):Plan|null{
+export function pullbackFromMarket(mk:Market,q:Quote,now:number):Plan|null{
  const f=mk.m1!,slow=mk.m5!,higher=mk.m15!;
- const s=slow.trend==="UP"?-1:slow.trend==="DOWN"?1:0;
- if(!s||higher.trend==="RANGE")return null;
- const side:Side=s>0?"BUY":"SELL",entry=s>0?q.ask:q.bid;
- const stretched=s*slow.extension<=-1.2|| (s>0?slow.rsi<35:slow.rsi>65);
- const turn=s>0?(f.sweptLow||f.lowerRejection||f.bullishDivergence):(f.sweptHigh||f.upperRejection||f.bearishDivergence);
- const shift=s>0?f.structureShiftUp||f.brokeUp:f.structureShiftDown||f.brokeDown;
- const liveTurn=s*(entry-f.close)>f.atr*.1;
- // Earlier bar evidence + live quote; no requirement to wait for another bar.
- if(!stretched||!(turn||shift)||!(s*f.acceleration>0||s*f.pressure>.1||liveTurn))return null;
+ const higherSide=higher.trend==="UP"?1:higher.trend==="DOWN"?-1:0;
+ if(!higherSide)return null;
+ const trendAligned=trendPullback(mk,q,now,higherSide);
+ if(trendAligned)return trendAligned;
+
+ // Preserve the earlier correction study. These groups still need positive
+ // chronological evidence before they can authorize a candidate order.
+ const side=slow.trend==="UP"?-1:slow.trend==="DOWN"?1:0;
+ if(!side)return null;
+ const entry=side>0?q.ask:q.bid;
+ const stretched=side*slow.extension<=-1.2|| (side>0?slow.rsi<35:slow.rsi>65);
+ const turn=side>0?(f.sweptLow||f.lowerRejection||f.bullishDivergence):(f.sweptHigh||f.upperRejection||f.bearishDivergence);
+ const shift=side>0?f.structureShiftUp||f.brokeUp:f.structureShiftDown||f.brokeDown;
+ const liveTurn=side*(entry-f.close)>f.atr*.1;
+ if(!stretched||!(turn||shift)||!(side*f.acceleration>0||side*f.pressure>.1||liveTurn))return null;
+ const direction:Side=side>0?"BUY":"SELL";
  const execution:Market={...mk,m5:f,h1:slow,m15:higher};
- const rawIdeas=sideCandidates(execution,side,15).filter(c=>["COUNTERTREND_CORRECTION","EXHAUSTION_REVERSAL","FAILED_BREAKOUT","SR_REJECTION"].includes(c.strategy));
- const adverse=s>0?Math.min(f.last.l,f.lastSwingLow??f.last.l):Math.max(f.last.h,f.lastSwingHigh??f.last.h);
- const stop=r2(adverse-s*(f.atr*.25+(q.ask-q.bid)));
- // The retracement target is bounded by the prior move's mean rather than promising reversal.
- const room=s*(slow.emaFast-entry);
- if(!(room>0)||s*(entry-stop)<=0)return null;
- const risk=Math.abs(entry-stop),dist=Math.min(room,f.atr*2);
- if(dist<risk+(q.ask-q.bid))return null;
- const group=[side,turn?"REJECTION":"SHIFT",Math.abs(slow.extension)>=2?"EXTREME":"STRETCHED",s*f.pressure>0?"PRESSURE":"TURN"].join("|");
- const p:Plan={id:hash("PULLBACK:"+side+":"+f.last.t),kind:"PULLBACK",side,entry,sl:stop,tp1:r2(entry+s*dist*.5),tp2:r2(entry+s*dist),published:now,expires:now+12000,reason:group+"; "+rawIdeas.map(c=>c.strategy).join(","),source:"XAUCLOUD_M1_FEATURES_EXPERIMENTAL_PULLBACK",group};
- return planOK(p)?p:null;
+ const ideas=sideCandidates(execution,direction,15).filter(c=>["COUNTERTREND_CORRECTION","EXHAUSTION_REVERSAL","FAILED_BREAKOUT","SR_REJECTION"].includes(c.strategy));
+ const group=[direction,turn?"REJECTION":"SHIFT",Math.abs(slow.extension)>=2?"EXTREME":"STRETCHED",side*f.pressure>0?"PRESSURE":"TURN"].join("|");
+ return buildPullback(f,q,now,side,slow.emaFast,group,ideas.map(c=>c.strategy));
+}
+
+function trendPullback(mk:Market,q:Quote,now:number,side:number):Plan|null{
+ const f=mk.m1!,slow=mk.m5!,higher=mk.m15!;
+ const entry=side>0?q.ask:q.bid;
+ const parentInvalidation=side>0?higher.lastSwingLow:higher.lastSwingHigh;
+ const previousExtreme=side>0?higher.lastSwingHigh:higher.lastSwingLow;
+ if(parentInvalidation===null||previousExtreme===null||
+    side*(entry-parentInvalidation)<=0||side*(previousExtreme-entry)<=0)return null;
+ // An opposing higher timeframe or a completed M15 structural failure moves
+ // the idea out of the trend-continuation family.
+ const opposing=side>0?"DOWN":"UP";
+ if(mk.h1?.trend===opposing||(side>0?higher.structureShiftDown:higher.structureShiftUp))return null;
+ const excursion=side*(previousExtreme-parentInvalidation);
+ const depth=side*(previousExtreme-entry)/excursion;
+ if(depth<.25||depth>.78)return null;
+ const touchedValue=side>0?f.last.l<=slow.emaFast:f.last.h>=slow.emaFast;
+ const sweep=side>0?f.sweptLow:f.sweptHigh;
+ const rejection=side>0?f.lowerRejection:f.upperRejection;
+ const shift=side>0?f.structureShiftUp||f.brokeUp:f.structureShiftDown||f.brokeDown;
+ if(!(touchedValue||sweep)||!(sweep||rejection||shift))return null;
+ const reclaim=side*(entry-f.close)>f.atr*.1;
+ if(!reclaim&&!(side*f.acceleration>0&&side*f.pressure>0))return null;
+ const direction=side>0?"BUY":"SELL";
+ const trigger=sweep?"LIQUIDITY_SWEEP":shift?"STRUCTURE_RECLAIM":"REJECTION";
+ const group=["CONTINUATION",direction,depth>=.5?"DEEP":"HEALTHY",trigger].join("|");
+ const cues=["M15 structure intact",trigger.toLowerCase().replaceAll("_"," "),reclaim?"live quote reclaim":"M1 pressure recovering"];
+ return buildPullback(f,q,now,side,previousExtreme,group,cues,parentInvalidation);
+}
+
+function buildPullback(f:Frame,q:Quote,now:number,side:number,targetLimit:number,group:string,cues:string[],parentInvalidation?:number):Plan|null{
+ const direction:Side=side>0?"BUY":"SELL",entry=side>0?q.ask:q.bid;
+ const adverse=side>0?Math.min(f.last.l,f.lastSwingLow??f.last.l):Math.max(f.last.h,f.lastSwingHigh??f.last.h);
+ const stop=r2(adverse-side*(f.atr*.25+(q.ask-q.bid)));
+ if(parentInvalidation!==undefined&&side*(adverse-parentInvalidation)<=0)return null;
+ const risk=side*(entry-stop),room=side*(targetLimit-entry),dist=Math.min(room,f.atr*2);
+ if(!(risk>0)||dist<risk+(q.ask-q.bid))return null;
+ const plan:Plan={id:hash("PULLBACK:"+direction+":"+f.last.t),kind:"PULLBACK",side:direction,entry,sl:stop,tp1:r2(entry+side*dist*.5),tp2:r2(entry+side*dist),published:now,expires:now+12000,reason:[group,...cues].join("; "),source:"XAUCLOUD_M1_FEATURES_EXPERIMENTAL_PULLBACK",group};
+ return planOK(plan)?plan:null;
 }
 // Score the TP2-only basket exit policy, not XauCloud's thirds-at-targets P&L.
 // Minute data cannot prove sub-second execution. Stop is pessimistically checked first.
-export function replayPullback(p:Plan,bars:Bar[],spread:number,slippage:number,horizon=20):PullbackCase|null{
+export function replayPullback(p:Plan,bars:Bar[],spread:number,slippage:number,horizon=20,roundTripCommissionPerOunce=0):PullbackCase|null{
+ if(!Number.isFinite(roundTripCommissionPerOunce)||roundTripCommissionPerOunce<0)throw Error("INVALID_COMMISSION");
  const after=bars.filter(b=>b.t>=Math.ceil(p.published/60000)*60000&&b.t<p.published+horizon*60000);
  if(after.length<horizon-2)return null;
  const s=sg(p.side),fill=p.entry+s*slippage,risk=s*(fill-p.sl);
  if(!(risk>0)||s*(p.tp2-fill)<=0)return null;
- let mae=0,exit=fill,hit=false,minutes=0;
+ let mae=0,mfe=0,exit=fill,tp1=false,hit=false,stopped=false,minutes=0;
  for(const b of after){
    const low=b.l,high=b.h+(s<0?spread:0);
    const adverse=s>0?low:high,favorable=s>0?b.h:b.l+spread;
    mae=Math.max(mae,Math.max(0,s*(fill-adverse))/risk);minutes=(b.t-p.published)/60000+1;
-   if(s*(adverse-p.sl)<=0){exit=p.sl-s*slippage;break;}
+   if(s*(adverse-p.sl)<=0){exit=p.sl-s*slippage;stopped=true;break;}
+   mfe=Math.max(mfe,Math.max(0,s*(favorable-fill))/risk);
+   if(s*(favorable-p.tp1)>=0)tp1=true;
    if(s*(favorable-p.tp2)>=0){exit=p.tp2-s*slippage;hit=true;break;}
    exit=b.c+(s<0?spread:0)-s*slippage;
  }
- return {at:p.published,group:p.group??"UNKNOWN",r:s*(exit-fill)/risk,tp2:hit,maeR:mae,minutes};
+ return {at:p.published,group:p.group??"UNKNOWN",r:(s*(exit-fill)-roundTripCommissionPerOunce)/risk,tp1,tp2:hit,stopped,maeR:mae,mfeR:mfe,minutes};
 }
-export function scanPullbacks(bars:Bar[],spread=.25,slippage=.10):PullbackCase[]{
+export function scanPullbacks(bars:Bar[],spread=.25,slippage=.10,roundTripCommissionPerOunce=0,
+ onReplay?:(plan:Plan,index:number,outcome:PullbackCase)=>void):PullbackCase[]{
  if(!Number.isFinite(spread)||spread<=0||!Number.isFinite(slippage)||slippage<0)throw Error("INVALID_COSTS");
  const cases:PullbackCase[]=[];
  const end=bars.at(-1)?.t??0;
- const f5=aggregate(bars,5,end+60000,5),f15=aggregate(bars,15,end+60000,14);
- let i5=0,i15=0,cache5:Frame|null=null,cache15:Frame|null=null;
+ const f5=aggregate(bars,5,end+60000,5),f15=aggregate(bars,15,end+60000,14),f60=aggregate(bars,60,end+60000,54);
+ let i5=0,i15=0,i60=0,cache5:Frame|null=null,cache15:Frame|null=null,cache60:Frame|null=null;
  const recent=(a:number)=>bars.slice(Math.max(0,a-150),a);
  // Pre-aggregated bars are consumed only after their complete interval ended.
  // This avoids rescanning five days of history per minute in a long archive.
  for(let i=450;i<bars.length-20;){
    const now=bars[i]!.t,open=bars[i]!.o;
-   let a=i5,b=i15;
+   const a=i5,b=i15,cursor60=i60;
    while(i5<f5.length&&f5[i5]!.t+300000<=now)i5++;
    while(i15<f15.length&&f15[i15]!.t+900000<=now)i15++;
+   while(i60<f60.length&&f60[i60]!.t+3600000<=now)i60++;
    if(a!==i5||!cache5)cache5=analyzeFrame(f5.slice(Math.max(0,i5-120),i5));
    if(b!==i15||!cache15)cache15=analyzeFrame(f15.slice(Math.max(0,i15-120),i15));
+   if(cursor60!==i60||!cache60)cache60=analyzeFrame(f60.slice(Math.max(0,i60-120),i60));
    const m1=analyzeFrame(recent(i)),last=bars[i-1]!;
    if(!cache5||!cache15||!m1||now-last.t>150000||recent(i).filter(x=>x.t>=now-150*60000).length<135||!isMarketOpen(new Date(now))){i++;continue;}
    const q={bid:open,ask:open+spread,at:new Date(now).toISOString()};
-   const mk:Market={now,bid:q.bid,ask:q.ask,m1,m5:cache5,m15:cache15,h1:null};
+   const mk:Market={now,bid:q.bid,ask:q.ask,m1,m5:cache5,m15:cache15,h1:cache60};
    const p=pullbackFromMarket(mk,q,now);
    if(!p){i++;continue;}
-   const c=replayPullback(p,bars.slice(i,i+20),spread,slippage);
-   if(c)cases.push(c);
+   const c=replayPullback(p,bars.slice(i,i+20),spread,slippage,20,roundTripCommissionPerOunce);
+   if(c){cases.push(c);onReplay?.(p,i,c);}
    i+=20;
  }
  return cases;
@@ -183,24 +229,27 @@ export function trainKnowledge(cases:TradingCase[],pullbacks:PullbackCase[],trai
  return {version:VERSION,builtAt:Date.now(),dataThrough,rules,history,hours,pullbacks:selected,diagnostics:{hourRows,pullbackGroups:groups,pullbackHoldout:stat(holdout),outlookHoldout:validateQuality(eligible,rules,vaEnd),exam:holdoutExam(eligible,lessons,vaEnd),lessons,strategyEvidence:STRATEGY_EVIDENCE,caseCount:eligible.length,pullbackCaseCount:pullbacks.length,trainEnd,validationEnd,pullbackSplit}};
 }
 export function selectIndependentPlan(raw:Bar[],q:Quote,now:number,k:Knowledge|null,canonical?:Parameters<typeof outlookFromCanonicalEvidence>[0]){
- const local=localOutlookResearch(raw,q,now);
- // User's morning window is a test hypothesis, not a fabricated historical result.
- if(!k||k.dataThrough>now)return{plan:null,local,status:"KNOWLEDGE_MISSING"};
- if(new Date(now).getUTCMinutes()===0&&now%3600000<25000){
-   if(canonical){
-     const p=outlookFromCanonicalEvidence(canonical,now);
-     if(p){
-       const f=caseFeatures(raw,now,p.side,{...canonical.thesis,structure_state:canonical.thesis.structure,market_regime:canonical.thesis.market_regime,confidence_pct:resolveHourlyBias(canonical.canonicalM10,canonical.thesis).confidence});
-       const grade=assessOutlookQuality(f,k.rules,k.history);
-       // Require actual historical grade; strongest hours are separately measured.
-       if(grade.grade==="STRONG"&&k.hours.includes(hourWAT(now)))return{plan:{...p,grade:grade.grade},local,status:"CANONICAL_OUTLOOK"};
-     }
+ const market=brokerFrames(raw,q,now);
+ const local=localOutlookFromMarket(market,q,now);
+ const calibrated=Boolean(k&&k.dataThrough<=now);
+ if(!market)return {plan:null,researchPlan:null,local,status:"MISSING_BROKER_DATA"};
+ if(!isMarketOpen(new Date(now)))return {plan:null,researchPlan:null,local,status:"MARKET_CLOSED"};
+ if(now%3600000<25000){
+   const p=canonical&&outlookFromCanonicalEvidence(canonical,now);
+   if(!calibrated||!k)return {plan:null,researchPlan:p??local.plan,local,status:"KNOWLEDGE_MISSING"};
+   if(p&&canonical){
+     const f=caseFeatures(raw,now,p.side,{...canonical.thesis,structure_state:canonical.thesis.structure,market_regime:canonical.thesis.market_regime,confidence_pct:resolveHourlyBias(canonical.canonicalM10,canonical.thesis).confidence});
+     const grade=assessOutlookQuality(f,k.rules,k.history);
+     const researchPlan={...p,grade:grade.grade};
+     if(grade.grade==="STRONG"&&k.hours.includes(hourWAT(now)))return {plan:researchPlan,researchPlan,local,status:"CANONICAL_OUTLOOK"};
+     return {plan:null,researchPlan,local,status:"OUTLOOK_NOT_QUALIFIED"};
    }
-   return{plan:null,local,status:canonical?"OUTLOOK_NOT_QUALIFIED":"ORIGINAL_M10_PRODUCER_REQUIRED"};
+   return {plan:null,researchPlan:local.plan,local,status:canonical?"OUTLOOK_NOT_QUALIFIED":"ORIGINAL_M10_PRODUCER_REQUIRED"};
  }
- const p=pullbackCandidate(raw,q,now);
- if(p&&k.pullbacks.some(x=>x.group===p.group))return{plan:p,local,status:"HISTORICALLY_SELECTED_PULLBACK_CANDIDATE"};
- return {plan:null,local,status:p?"PULLBACK_UNCALIBRATED":"NO_PULLBACK"};
+ const p=pullbackFromMarket(market,q,now);
+ if(!calibrated||!k)return {plan:null,researchPlan:p,local,status:"KNOWLEDGE_MISSING"};
+ if(p&&k.pullbacks.some(x=>x.group===p.group))return {plan:p,researchPlan:p,local,status:"HISTORICALLY_SELECTED_PULLBACK_CANDIDATE"};
+ return {plan:null,researchPlan:p,local,status:p?"PULLBACK_UNCALIBRATED":"NO_PULLBACK"};
 }
 export function wire(p:Plan|null):string{
  if(!p||!planOK(p))return "NONE|ARMED_NO_PLAN";

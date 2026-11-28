@@ -1,11 +1,40 @@
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
-import path from 'node:path';
-import {normalizeBars,selectIndependentPlan,wire,brokerFrames} from './apex4-engine.ts';
+import {normalizeBars,selectIndependentPlan,wire} from './apex4-engine.ts';
 import {buildEvidencePack} from './xaucloud/aiTraderBrain.ts';
+import { brainScope, createApexTradeBrain } from './apex4-trade-brain.mjs';
+import { canonicalSourceCommit, readNativeEvidence } from './apex4-canonical-evidence.mjs';
 const states=new Map();
+const accountLocks=new Map();
+let brain=null;
+
+export function initializeTradeBrain(dataDir) {
+ if(!brain){
+  const policyVersion=crypto.createHash('sha256')
+   .update(readFileSync(new URL('./apex4-engine.ts',import.meta.url)))
+   .update(readFileSync(new URL('./apex4-canonical-evidence.mjs',import.meta.url)))
+   .digest('hex');
+  brain=createApexTradeBrain(dataDir,{policyVersion});
+ }
+}
+export function recordBrokerEvents(key,account,events) {
+ return brain?.recordBrokerEvents(key,account,events) ?? null;
+}
+export function runLearningCycle() {
+ return brain?.cycle() ?? {processed:0};
+}
+export function changeLearningKnowledge(key,account,action,versionId) {
+ if(!brain)throw Error('LEARNING_UNAVAILABLE');
+ return brain.changeKnowledge(brainScope(key,account),{action,versionId});
+}
+function withAccountLock(id,fn) {
+ const pending=(accountLocks.get(id)??Promise.resolve()).catch(()=>{}).then(fn);
+ accountLocks.set(id,pending);
+ return pending.finally(()=>{if(accountLocks.get(id)===pending)accountLocks.delete(id);});
+}
 let knowledgeCache=null,knowledgeMtime=0,loading=null;
-const idOf=(key,account)=>crypto.createHash('sha256').update(key+'|'+account).digest('hex');
+const idOf=brainScope;
 async function knowledge(){
  const file=process.env.APEX4_KNOWLEDGE_FILE;
  if(!file)return null;
@@ -16,7 +45,9 @@ async function knowledge(){
   if(st.size>20_000_000)throw Error('KNOWLEDGE_TOO_LARGE');
   const k=JSON.parse(await fs.readFile(file,'utf8'));
   if(k.version!=='APEX4_XAUCLOUD_DETERMINISTIC_V1'||!Number.isFinite(k.dataThrough)||!Array.isArray(k.rules)||!k.history||!Array.isArray(k.hours)||!Array.isArray(k.pullbacks))throw Error('INVALID_KNOWLEDGE');
-  knowledgeCache=k;knowledgeMtime=st.mtimeMs;return k;
+  knowledgeCache={ ...k, digest:crypto.createHash('sha256').update(JSON.stringify(k)).digest('hex') };
+  knowledgeMtime=st.mtimeMs;
+  return knowledgeCache;
  }catch{return null;}})();
  try{return await loading;}finally{loading=null;}
 }
@@ -24,64 +55,113 @@ function sanitizeQuote(raw,now){
  if(!raw||!Number.isFinite(raw.bid)||!Number.isFinite(raw.ask)||!Number.isFinite(raw.atMs)||raw.bid<=0||raw.ask<raw.bid||raw.atMs>now+2000||now-raw.atMs>3000)return null;
  return {bid:raw.bid,ask:raw.ask,at:new Date(raw.atMs).toISOString()};
 }
-// Optional local adapter for the ORIGINAL evidence producer. The operator must
-// install it on the Apex host; never infer canonical M10 evidence from a published signal.
-async function canonicalEvidence(id,account,q,now){
- const root=process.env.APEX4_LOCAL_EVIDENCE_DIR;
- if(!root)return undefined;
- try{
-  const f=path.join(root,id+'.json'),st=await fs.stat(f);if(st.size>256000)return undefined;
-  const d=JSON.parse(await fs.readFile(f,'utf8'));
-  if(d.schema!=='XAUCLOUD_CANONICAL_M10_EVIDENCE_V1'||String(d.account)!==String(account)||d.symbol!=='XAUUSD'||d.sourceCommit!==process.env.APEX4_CANONICAL_SOURCE_COMMIT||
-    !process.env.APEX4_CANONICAL_SOURCE_COMMIT||!d.canonicalM10||!d.thesis||d.htfComplete!==true||!Number.isFinite(d.observedAt)||now-d.observedAt>3000||d.observedAt>now+2000)return undefined;
-  const eq=sanitizeQuote(d.quote,now);
-  if(!eq||Math.abs(eq.bid-q.bid)>.05||Math.abs(eq.ask-q.ask)>.05)return undefined;
-  return {canonicalM10:d.canonicalM10,thesis:d.thesis,quote:eq,htfComplete:true,brainRecommendation:d.brainRecommendation,observedAt:d.observedAt};
- }catch{return undefined;}
+const observerConfigured=()=>!!process.env.APEX4_LOCAL_EVIDENCE_DIR&&process.env.APEX4_CANONICAL_SOURCE_COMMIT===canonicalSourceCommit;
+function m10Snapshot(evidence,brokerServer){
+ if(!evidence)return {status:!observerConfigured()?'NOT_CONFIGURED':brokerServer?'AWAITING_VERIFIED_EVIDENCE':'BROKER_ID_MISSING'};
+ const m10=evidence.canonicalM10;
+ return {status:'VERIFIED',observedAt:evidence.observedAt,sourceCommit:evidence.producer,
+  evidenceId:m10.evidence_id??evidence.thesis.evidence_id??null,direction:m10.direction||m10.preferred_direction||null,
+  decision:m10.decision??null,confidence:m10.confidence??null};
+}
+function currentM10(s,now){
+ const m10=s?.m10;
+ if(!m10)return {status:observerConfigured()?'AWAITING_VERIFIED_EVIDENCE':'NOT_CONFIGURED'};
+ return m10.status==='VERIFIED'&&now-m10.observedAt>3000?{...m10,status:'STALE'}:m10;
 }
 
-export async function analyzeBroker(key,account,input,now=Date.now()){
+export async function analyzeBroker(key,account,input,now=Date.now(),{armed=true}={}){
  const q=sanitizeQuote(input.quote,now);
  if(!q)return {status:'STALE_QUOTE',text:'NONE|STALE_QUOTE'};
- const id=idOf(key,account),old=states.get(id);
+ const id=idOf(key,account);
  let added;
  try{added=normalizeBars(input.bars);}catch{return{status:'INVALID_BARS',text:'NONE|INVALID_BARS'};}
- const merge=new Map((old?.bars??[]).map(b=>[b.t,b]));
- for(const b of added)if(b.t+60000<=now)merge.set(b.t,b);
- const bars=[...merge.values()].sort((a,b)=>a.t-b.t).slice(-7500);
- if(bars.length<450){return{status:'NEED_HISTORY',text:'NONE|NEED_HISTORY'};}
- const k=await knowledge();
- // Local broker M1 ingestion only. Never accept arbitrary user-supplied M10 evidence
- // as "the XauCloud EA". The original producer must be integrated and attested first.
- const canonical=now%3600000<25000?await canonicalEvidence(id,account,q,now):undefined;
- const decision=selectIndependentPlan(bars,q,now,k,canonical);
- const state={key,account,bars,quote:q,at:now,status:decision.status,local:decision.local,plan:decision.plan};
- states.delete(id);states.set(id,state);
- while(states.size>64)states.delete(states.keys().next().value);
- return {status:decision.status,text:!k?'NONE|KNOWLEDGE_MISSING':decision.status==='MISSING_BROKER_DATA'?'NONE|STALE_QUOTE':wire(decision.plan),local:decision.local?.status??null};
+ return withAccountLock(id,async()=>{
+  if(!brain)throw Error('LEARNING_UNAVAILABLE');
+  const observation=brain.capture(key,account,{quote:q,bars:added,now,metadata:input});
+  const old=states.get(id);
+  const bars=old&&old.observationId===observation.priorId
+   ? (()=>{const merged=new Map(old.bars.map(b=>[b.t,b]));
+     for(const b of observation.added)merged.set(b.t,b);
+     return [...merged.values()].sort((a,b)=>a.t-b.t).slice(-7500);})()
+   : brain.recentBars(id,now,observation.id);
+  let decision=observation.duplicate?brain.decisionAt(observation):null;
+  if(!decision){
+   const brokerServer=typeof input.brokerServer==='string'&&input.brokerServer.trim()?input.brokerServer.trim():undefined;
+   const native=brokerServer?await readNativeEvidence(id,{account,brokerServer,quote:q,now}):undefined;
+   const m10=m10Snapshot(native,brokerServer);
+   if(bars.length<450){
+    decision=brain.recordDecision(observation,{status:'NEED_HISTORY',local:null,plan:null,m10},{now});
+   } else {
+    const k=await knowledge();
+    // Only the first 25 seconds of an hourly interval use the native fields for a decision.
+    const canonical=now%3600000<25000?native:undefined;
+    const selected={...selectIndependentPlan(bars,q,now,k,canonical),m10};
+    decision=brain.recordDecision(observation,armed?selected:{...selected,status:'NOT_ARMED',
+     researchPlan:selected.researchPlan??selected.plan,baselineSelected:!!selected.plan,plan:null},{now,canonical,knowledgeDigest:k?.digest});
+   }
+  }
+  const plan=armed&&decision.plan?.expires>now?decision.plan:null;
+  const status=decision.status==='NEED_HISTORY'?'NEED_HISTORY':armed?decision.status:'NOT_ARMED';
+  const state={key,account,bars,quote:q,at:decision.at??now,status,local:decision.local,plan,
+   detected:decision.researchPlan,m10:decision.m10,observationId:observation.id};
+  if(!old||old.observationId<=observation.id){
+   states.delete(id);states.set(id,state);
+   while(states.size>64)states.delete(states.keys().next().value);
+  }
+  const reason={NEED_HISTORY:'NEED_HISTORY',NOT_ARMED:'NOT_ARMED',KNOWLEDGE_MISSING:'KNOWLEDGE_MISSING',MISSING_BROKER_DATA:'STALE_QUOTE'}[status];
+  return {status,text:reason?'NONE|'+reason:wire(plan),local:decision.local?.status??null};
+ });
+}
+
+function persistedState(key,account=null){
+ const saved=brain?.latestMarket(key,account);
+ if(!saved)return null;
+ return {bars:saved.bars,quote:saved.quote,at:saved.at,status:saved.decision?.status??'AWAITING_EVALUATION',
+  local:saved.decision?.local??null,plan:saved.decision?.plan??null,detected:saved.decision?.researchPlan??null,
+  m10:saved.decision?.m10??null,scope:saved.scope};
+}
+function chatExecution(scope){
+ const execution=scope?brain?.latestExecution(scope):null;
+ if(!execution)return null;
+ const {dealId,positionId,eventId,planId,...researchContext}=execution;
+ return researchContext;
 }
 export async function chatContext(key,now=Date.now()){
- const latest=[...states.values()].filter(s=>s.key===key).sort((a,b)=>b.at-a.at)[0];
+ const latest=[...states.values()].filter(s=>s.key===key).sort((a,b)=>b.at-a.at)[0]??persistedState(key);
+ const scope=latest?.scope??(latest?idOf(key,latest.account):null);
  const k=await knowledge();
  return {
   mode:'APEX4_PROVIDER_FREE_EXECUTION_RESEARCH',
   market:latest&&now-latest.at<600000?buildEvidencePack(latest.bars,now,latest.quote):null,
   marketAgeMs:latest?now-latest.at:null,localOutlook:latest?.local??null,lastDecision:latest?.plan??null,
+  lastDetectedSetup:latest?.detected??null,m10:currentM10(latest,now),
   status:latest?.status??'NO_LOCAL_MARKET',
   historical:k?{through:new Date(k.dataThrough).toISOString(),hoursWAT:k.hours,validatedPullbackGroups:k.pullbacks,
-   outlookQuality:k.history,pullbackHoldout:k.diagnostics?.pullbackHoldout,strategyEvidence:k.diagnostics?.strategyEvidence}:null,
-  caveat:'Historical evidence is not guaranteed performance. Experimental local Outlook is not parity with the original M10 producer. No chat response can execute an order.'
+   outlookQuality:k.history,pullbackHoldout:k.diagnostics?.pullbackHoldout,strategyEvidence:k.diagnostics?.strategyEvidence,
+   caseCount:k.diagnostics?.caseCount,pullbackCaseCount:k.diagnostics?.pullbackCaseCount}:null,
+  currentLearning:scope?brain?.summary(scope)??null:null,
+  promotedResearch:scope?brain?.promotedResearch(scope)??null:null,
+  recentLessons:scope?brain?.recentLessons(scope)??[]:[],
+  latestExecution:chatExecution(scope),
+  caveat:'Observed-quote simulations and EA-reported broker deals are separate. Chat has no order authority.'
  };
 }
 
-// Dashboard projection is license-scoped; never claim an order has filled from a plan.
 export async function dashboardStatus(key,account,now=Date.now()){
- const s=states.get(idOf(key,String(account||''))),k=await knowledge();
+ const scope=idOf(key,String(account||''));
+ const s=states.get(scope)??(account?persistedState(key,String(account)):null);
+ const k=await knowledge();
  const fresh=!!s&&now>=s.at&&now-s.at<=8000&&now-Date.parse(s.quote.at)<=8000;
  return {mode:'APEX4_DEMO',fresh,observedAt:s?new Date(s.at).toISOString():null,
   status:s?(fresh?s.status:'MARKET_STALE'):'AWAITING_CANDIDATE',
   quote:fresh?s.quote:null,plan:fresh&&s.plan&&s.plan.expires>now?s.plan:null,
-  candles:s?s.bars.slice(-60):[],knowledge:{loaded:!!k,through:k?new Date(k.dataThrough).toISOString():null,hoursWAT:k?.hours??[],pullbackGroups:k?.pullbacks?.length??0},
-  canonicalProducerConfigured:!!process.env.APEX4_LOCAL_EVIDENCE_DIR&&!!process.env.APEX4_CANONICAL_SOURCE_COMMIT,
+  latestAssessment:s?.local??null,latestDecision:s?{status:s.status,at:new Date(s.at).toISOString(),plan:s.plan,detected:s.detected}:null,
+  m10:currentM10(s,now),
+  candles:s?s.bars.slice(-60):[],
+  knowledge:{loaded:!!k,through:k?new Date(k.dataThrough).toISOString():null,hoursWAT:k?.hours??[],pullbackGroups:k?.pullbacks?.length??0,
+   caseCount:k?.diagnostics?.caseCount??null,pullbackCaseCount:k?.diagnostics?.pullbackCaseCount??null},
+  learning:account?brain?.summary(scope)??null:null,
+  latestExecution:account?brain?.latestExecution(scope)??null:null,
+  canonicalProducerConfigured:observerConfigured(),
   execution:'DEMO_ONLY',modelExecution:false};
 }

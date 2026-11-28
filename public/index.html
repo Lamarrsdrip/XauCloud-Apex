@@ -542,14 +542,30 @@ function pageDashboard(me){
 }
 
 function apex4IntelligencePanel(s){
-  var k=s.knowledge||{},p=s.plan,q=s.quote;
+  var k=s.knowledge||{},learn=s.learning||{},p=s.plan,q=s.quote,exec=s.latestExecution,m10=s.m10||{},assessment=s.latestAssessment;
   function price(x){return typeof x==='number'&&Number.isFinite(x)?x.toFixed(2):'—';}
-  var rows=[['Market',s.fresh?'Recent broker quote':'Awaiting fresh M1 data'],['Historical knowledge',k.loaded?'Loaded · '+(k.pullbackGroups||0)+' selected groups':'Calibration required'],['Outlook hours (WAT)',k.hoursWAT&&k.hoursWAT.length?k.hoursWAT.map(function(h){return String(h).padStart(2,'0')+':00';}).join(', '):'Not established'],['Original Outlook producer',s.canonicalProducerConfigured?'Configured · parity unverified':'Not connected'],['Execution','Demo only · no model calls']];
-  return '<section class="apex-intel" aria-label="Apex 4 intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / M1 · DEMO PREVIEW</span><h2>Outlook &amp; pullbacks</h2></div><a class="intel-link" href="#ai">Open AI chat ↗</a></div>'
-    +'<div class="intel-grid"><div><span>Engine status</span><strong>'+esc(String(s.status||'Awaiting data').replace(/_/g,' '))+'</strong><small>Independent candidate</small></div><div><span>Bid / ask</span><strong>'+esc(q?price(q.bid)+' / '+price(q.ask):'—')+'</strong><small>Fresh executable prices only</small></div></div>'
+  function count(x){return Number.isSafeInteger(x)?x.toLocaleString():'—';}
+  function label(value){return String(value||'Awaiting data').replace(/_/g,' ');}
+  var rows=[
+    ['M10 evidence',m10.status?label(m10.status):s.canonicalProducerConfigured?'Observer configured · awaiting verified snapshot':'Observer disconnected'],
+    ['Market assessment',s.fresh&&assessment?.features?.market_regime?label(assessment.features.market_regime):'Awaiting assessment'],
+    ['Hourly Outlook',k.hoursWAT&&k.hoursWAT.length?k.hoursWAT.map(function(h){return String(h).padStart(2,'0')+':00 WAT';}).join(', '):k.loaded?'No hour qualified':'Historical calibration pending'],
+    ['Pullback Master',k.loaded?count(k.pullbackGroups)+' qualified historical groups':'Historical calibration pending'],
+    ['Historical coverage',k.through?('Through '+fmtDate(k.through)):'Awaiting archives'],
+    ['Historical cases studied',k.loaded?count(k.caseCount)+' signal · '+count(k.pullbackCaseCount)+' pullback':'—'],
+    ['Continuous learning',learn.status?label(learn.status):'Awaiting broker evidence'],
+    ['Latest learning cycle',learn.lastCycleAt?fmtDate(learn.lastCycleAt):'Awaiting first cycle'],
+    ['Recorded evidence',learn.status?count(learn.observations)+' observations · '+count(learn.simulatedCases)+' simulated cases · '+count(learn.brokerDeals)+' broker deals':'—'],
+  ];
+  if(learn.activeVersion||learn.candidateVersion)rows.push(['Knowledge version',learn.activeVersion||'Historical baseline'],['Research candidate',learn.candidateVersion||'—']);
+  var stages=s.latestDecision||s.decision;
+  var latest=p||stages?.detected||stages?.plan;
+  return '<section class="apex-intel" aria-label="Apex 4 intelligence"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD / M1 · DEMO PREVIEW</span><h2>Outlook &amp; pullbacks</h2></div><a class="intel-link" href="#settings-ai">AI chat settings ↗</a></div>'
+    +'<div class="intel-grid"><div><span>Independent engine</span><strong>'+esc(label(s.status))+'</strong><small>Deterministic execution</small></div><div><span>Bid / ask</span><strong>'+esc(q?price(q.bid)+' / '+price(q.ask):'—')+'</strong><small>'+esc(s.fresh?'Recent broker quote':'Awaiting fresh broker data')+'</small></div></div>'
     +rows.map(function(x){return '<div class="row"><span class="k">'+esc(x[0])+'</span><span class="v">'+esc(x[1])+'</span></div>';}).join('')
-    +(p?'<div class="intel-thesis"><span class="intel-kicker">CURRENT PLAN · NOT A BROKER FILL</span><strong>'+esc(p.kind+' · '+p.side)+'</strong><small>Entry '+price(p.entry)+' · SL '+price(p.sl)+' · TP1 '+price(p.tp1)+' · TP2 '+price(p.tp2)+'</small><p>'+esc(p.reason||'')+'</p></div>':'<p class="settings-subtle">No qualified executable plan reported.</p>')
-    +'<div class="intel-foot"><span>Broker M1 data · historical replay · chat-only API</span><span>Test build — not a stable release</span></div></section>';
+    +(latest?'<div class="intel-thesis"><span class="intel-kicker">'+(p?'QUALIFIED DEMO PLAN':'LATEST RESEARCH DECISION')+'</span><strong>'+esc(latest.kind+' · '+latest.side)+'</strong><small>Entry '+price(latest.entry)+' · SL '+price(latest.sl)+' · TP1 '+price(latest.tp1)+' · TP2 '+price(latest.tp2)+'</small><p>'+esc(latest.reason||'')+'</p></div>':'<p class="settings-subtle">Awaiting a detected setup.</p>')
+    +(exec?'<div class="intel-thesis"><span class="intel-kicker">LATEST DEMO BROKER EVENT</span><strong>'+esc(exec.kind==='DEAL'?label(exec.entry)+' · '+label(exec.reason):'Order reply · code '+String(exec.retcode??'—'))+'</strong><small>'+esc(exec.kind==='DEAL'?price(exec.price)+' · '+String(exec.volume??'—')+' lot':fmtDate(exec.atMs))+'</small></div>':'<p class="settings-subtle">Awaiting a broker execution report.</p>')
+    +'<div class="intel-foot"><span>Broker M1 data · historical replay</span><a href="#ai">Open AI chat ↗</a></div></section>';
 }
 
 function apexIntelligencePanel(me){

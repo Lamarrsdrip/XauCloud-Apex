@@ -8,9 +8,9 @@ export function nativeBasketSource(observer,{outlookReplay=false}={}) {
   replace('#property version   "6.291"','#property version   "4.100"');
   replace('   if(!Apex4ObserverAllowed() || (!isTester && !Apex4EvidenceIdValid())) return INIT_FAILED;',
           '   if(!ApexBasketInit()) return INIT_FAILED;');
-  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   if(apexBasketSide!=0) return;\n   ApexBasketReplayTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;');
+  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   if(apexBasketSide!=0) return;\n   ApexBasketReplayTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;\n   ApexBasketConsiderNative();\n   if(apexBasketSide!=0) return;');
   replace('void OnTimer()\n{','void OnTimer()\n{\n   ApexBasketManage();\n   ApexBasketLiveOutlookTick();\n   if(apexBasketSide!=0) return;\n   if(!MQLInfoInteger(MQL_TESTER)) { static ulong apexNativeLastTimerScan=0; ulong now=GetTickCount64(); if(apexNativeLastTimerScan>0&&now-apexNativeLastTimerScan<1000) return; apexNativeLastTimerScan=now; }');
-  replace('      EventSetTimer(InpTimerScanSec);','      if(MQLInfoInteger(MQL_TESTER)) EventSetTimer(InpTimerScanSec); else EventSetMillisecondTimer(InpApexOrderGapMilliseconds);');
+  replace('   if(InpTimerScanSec > 0)\n   {\n      EventSetTimer(InpTimerScanSec);','   if(InpTimerScanSec > 0 || !MQLInfoInteger(MQL_TESTER))\n   {\n      if(MQLInfoInteger(MQL_TESTER)) EventSetTimer(InpTimerScanSec); else if(!EventSetMillisecondTimer(InpApexOrderGapMilliseconds)) return INIT_FAILED;');
   replace('void OnDeinit(const int reason)\n{','void OnDeinit(const int reason)\n{\n   ApexBasketShutdown();');
   replace('if(!Apex4ObserverAllowed() || (replay && !InpApexReplayEvidence) || (!replay && !Apex4EvidenceIdValid())) return;','if(!Apex4ObserverAllowed() || (replay && !InpApexReplayEvidence)) return;');
   replace('   if(replay)\n   {\n      const int capture = FileOpen','   if(!replay) { apexNativeEvidencePacket=packet; if(!Apex4EvidenceIdValid()){lastTick=tick.time_msc;lastBar=g_m10Snapshot.closedBarTime;return;} }\n   if(replay)\n   {\n      const int capture = FileOpen');

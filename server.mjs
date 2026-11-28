@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createAstraService } from './astra/service.mjs';
 import { createReleaseStore } from './release-store.mjs';
 import { strategyFixtures } from './astra/fixtures.mjs';
-import { canonicalStrongBasket, nativeOutlookHours } from './intelligence/apex4-native-basket-contract.mjs';
+import { canonicalStrongBasket, nativeOutlookHours, nativeBasketStatus } from './intelligence/apex4-native-basket-contract.mjs';
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST=JSON.parse(fsSync.readFileSync(path.join(__dirname,'version.json'),'utf8'));
@@ -1150,7 +1150,12 @@ async function buildMe(key){
   const licenses=await readLicenses(),lic=licenses[key],status=licenseStatusFor(lic),cfg=await getLicenseConfig(key);
   const desiredHash=configHash(cfg);
   const release=await RELEASE_STORE.status();
-  const candidate=APEX4_PREVIEW?await apex4Runtime().then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
+  const nativePreview=process.env.APEX4_NATIVE_BASKET==='1';
+  const native=lic?.nativeBasket;
+  const nativeFresh=!!native&&Date.now()-native.observedAt<=8000&&Date.now()>=native.observedAt;
+  const candidate=nativePreview?{mode:'APEX4_NATIVE_BASKET',status:nativeFresh?(native.armed?'ARMED':'DISARMED'):'AWAITING_NATIVE_TERMINAL',
+    fresh:nativeFresh,basket:nativeFresh?native:null,hoursWAT:nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9'),execution:'DEMO_ONLY',modelExecution:false}
+    :APEX4_PREVIEW?await apex4Runtime().then(m=>m.dashboardStatus(key,lic?.account)).catch(()=>({mode:'APEX4_DEMO',status:'ENGINE_UNAVAILABLE',fresh:false,modelExecution:false})):null;
   const base={key,status,account:lic?.account||null,lastAccount:lic?.lastAccount||null,
     accountProfile:cfg.accountProfile,licenseTier:lic?.licenseTier||lic?.accountProfile||null,
     unlimitedEntitled:licenseAllowsUnlimited(lic),
@@ -1335,6 +1340,17 @@ const server=http.createServer(async(req,res)=>{
       if(!v.ok||String(v.lic?.account||'')!==String(b.account||''))return send(403,'NONE|NOT_BOUND');
       if(!throttle('apex4-native-outlook:'+v.key,ip,90,60_000))return send(429,'NONE|RATE_LIMITED');
       const cfg=await getLicenseConfig(v.key);
+      const snapshot=nativeBasketStatus(b,Date.now(),cfg.armed===true);
+      if(!snapshot)return send(400,'NONE|INVALID_BASKET_STATUS');
+      await withLock('lic:'+v.key,async()=>{
+        const all=await readLicenses(),current=all[v.key];
+        if(licenseStatusFor(current)!=='ACTIVE'||String(current.account||'')!==String(b.account||''))return;
+        const prev=current.nativeBasket;
+        if(!prev||snapshot.observedAt-prev.observedAt>=5000||prev.active!==snapshot.active||prev.positions!==snapshot.positions||prev.armed!==snapshot.armed){
+          current.nativeBasket=snapshot;current.lastSeen=new Date(snapshot.observedAt).toISOString();
+          current.lastAccount=String(b.account);await writeLicenses(all);
+        }
+      });
       if(cfg.armed!==true)return send(200,'NONE|NOT_ARMED');
       try{
         const hours=nativeOutlookHours(process.env.APEX4_NATIVE_OUTLOOK_WAT_HOURS??'8,9');
@@ -1343,7 +1359,11 @@ const server=http.createServer(async(req,res)=>{
         const plan=canonicalStrongBasket(signal,hours,now);
         if(!plan||!/^[A-Za-z0-9_-]{1,100}$/.test(plan.id))return send(200,'NONE|ARMED_NO_PLAN');
         return send(200,['NATIVE',plan.id,plan.side,plan.anchor,plan.target,Math.floor(signal.publishedAt/1000),Math.floor(signal.expiresAt/1000)].join('|'));
-      }catch{return send(503,'NONE|CANONICAL_OUTLOOK_UNAVAILABLE');}
+      }catch{
+        // A failed Outlook source must not disable already authorized native demo recognition.
+        res.setHeader('X-Apex-Outlook-Status','CANONICAL_OUTLOOK_UNAVAILABLE');
+        return send(200,'NONE|ARMED_NO_PLAN');
+      }
     }
 
     // Apex v4 candidate is a separate, provider-free backend mode. The stable

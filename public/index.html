@@ -560,6 +560,7 @@ function apex4IntelligencePanel(s){
       ['Available margin',price(b.freeMargin)],['Order pacing',b.orderGapMs?b.orderGapMs+' ms target':'100 ms default'],
       ['Lot allocation','Largest affordable legal lot; reduce to broker minimum'],
       ['Outlook source','Independent Apex engine · vendored XauCloud logic'],
+      ['STRONG grading',s.outlookKnowledge?.status==='CALIBRATED_RULES_AVAILABLE'?s.outlookKnowledge.rules+' historical rules available':'Awaiting calibrated grade history'],
       ['Accepted order count',Number.isSafeInteger(b.orders)?String(b.orders):'—']];
     return '<section class="apex-intel" aria-label="Native Apex basket"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD · NATIVE DEMO CANDIDATE</span><h2>Outlook &amp; pullbacks</h2></div></div>'
       +'<div class="intel-grid"><div><span>Terminal status</span><strong>'+esc(s.status.replace(/_/g,' '))+'</strong><small>'+esc(s.fresh?'Recent terminal snapshot':'Waiting for native terminal')+'</small></div><div><span>Basket target</span><strong>'+esc(price(b.target))+'</strong><small>Fixed to original signal</small></div></div>'

@@ -546,6 +546,21 @@ function pageDashboard(me){
 }
 
 function apex4IntelligencePanel(s){
+  if(s.mode==='APEX4_NATIVE_BASKET'){
+    var b=s.basket||{},price=function(x){return Number.isFinite(x)?x.toFixed(2):'—';};
+    var rows=[['Native engine','XauCloud v6.29.1 · local pullback intelligence'],
+      ['Outlook',(s.hoursWAT||[]).map(function(h){return String(h).padStart(2,'0')+':00 WAT';}).join(', ')+' · canonical STRONG only'],
+      ['Basket exit','Original entry ± $5.00 · 50 pips'],['Stop loss','None · broker stop-out possible'],
+      ['Holding deadline','None'],['Execution','Explicit demo candidate'],
+      ['Basket',b.active?(b.side+' · '+b.positions+' open positions'):'No active basket'],
+      ['Original entry',price(b.anchor)],['Basket target',price(b.target)],
+      ['Accepted order count',Number.isSafeInteger(b.orders)?String(b.orders):'—']];
+    return '<section class="apex-intel" aria-label="Native Apex basket"><div class="intel-heading"><div><span class="intel-kicker">XAUUSD · NATIVE DEMO CANDIDATE</span><h2>Outlook &amp; pullbacks</h2></div></div>'
+      +'<div class="intel-grid"><div><span>Terminal status</span><strong>'+esc(s.status.replace(/_/g,' '))+'</strong><small>'+esc(s.fresh?'Recent terminal snapshot':'Waiting for native terminal')+'</small></div><div><span>Basket target</span><strong>'+esc(price(b.target))+'</strong><small>Fixed to original signal</small></div></div>'
+      +rows.map(function(x){return '<div class="row"><span class="k">'+esc(x[0])+'</span><span class="v">'+esc(x[1])+'</span></div>';}).join('')
+      +'<p class="settings-subtle">Native basket execution is not the previous fixed-SL classroom replay. Profitability and actual broker fills require separate tests.</p></section>';
+  }
+
   var k=s.knowledge||{},learn=s.learning||{},edu=s.education||{},p=s.plan,q=s.quote,exec=s.latestExecution,m10=s.m10||{},assessment=s.latestAssessment;
   function price(x){return typeof x==='number'&&Number.isFinite(x)?x.toFixed(2):'—';}
   function count(x){return Number.isSafeInteger(x)?x.toLocaleString():'—';}

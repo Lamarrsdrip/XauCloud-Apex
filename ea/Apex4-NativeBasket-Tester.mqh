@@ -350,8 +350,8 @@ void ApexBasketLiveOutlookTick()
    ulong interval=apexBasketSide!=0?5000:1000;
    if(apexLastPoll>0&&now-apexLastPoll<interval)return;
    apexLastPoll=now;
-   string payload=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"environment\":\"DEMO\",\"basketActive\":%s,\"side\":%d,\"anchor\":%.8f,\"target\":%.8f,\"positions\":%d,\"orders\":%d,\"preferredVolume\":%.8f,\"lastFillVolume\":%.8f,\"freeMargin\":%.8f,\"equity\":%.8f,\"orderGapMs\":%d}",
-      InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),apexBasketSide!=0?"true":"false",apexBasketSide,
+   string payload=StringFormat("{\"license\":\"%s\",\"account\":\"%I64d\",\"environment\":\"DEMO\",\"terminalArmed\":%s,\"basketActive\":%s,\"side\":%d,\"anchor\":%.8f,\"target\":%.8f,\"positions\":%d,\"orders\":%d,\"preferredVolume\":%.8f,\"lastFillVolume\":%.8f,\"freeMargin\":%.8f,\"equity\":%.8f,\"orderGapMs\":%d}",
+      InpApexNativeLicense,AccountInfoInteger(ACCOUNT_LOGIN),apexDemoArmed?"true":"false",apexBasketSide!=0?"true":"false",apexBasketSide,
       apexBasketAnchor,apexBasketTarget,ApexBasketPositions(),apexBasketOrders,apexBasketVolume,apexBasketLastFillVolume,
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),AccountInfoDouble(ACCOUNT_EQUITY),InpApexOrderGapMilliseconds);
    long utc=(long)TimeGMT();

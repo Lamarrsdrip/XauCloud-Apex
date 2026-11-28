@@ -81,3 +81,11 @@ test('native quote and strategy acknowledgment are validated rather than inferre
  assert.equal(nativeBasketStatus({...b,quote:{...b.quote,atMs:at-10000}},at,true).quote,null);
  assert.equal(nativeBasketStatus({...b,buyScore:100},at,true).buyScore,null);
 });
+
+test('both disabled sources cannot publish a new Outlook plan and account metrics are real fields',()=>{
+ assert.equal(nativeStrategy('OFF'),'OFF');
+ assert.equal(nativeStrategyWire({armed:true,strategy:'OFF',plan:{id:'x',side:'BUY'},signal:{}}),'NONE|ARMED_NO_PLAN|OFF');
+ const b={basketActive:false,side:0,anchor:0,target:0,positions:0,orders:0,strategy:'OFF',balance:100,equity:99,floatingPL:-1,basketLots:0,broker:'Test broker'};
+ const s=nativeBasketStatus(b,1,true);
+ assert.equal(s.balance,100);assert.equal(s.equity,99);assert.equal(s.floatingPL,-1);assert.equal(s.basketLots,0);assert.equal(s.broker,'Test broker');
+});

@@ -8,11 +8,11 @@ export function nativeBasketSource(observer) {
   replace('#property version   "6.291"','#property version   "4.100"');
   replace('   if(!Apex4ObserverAllowed() || (!isTester && !Apex4EvidenceIdValid())) return INIT_FAILED;',
           '   if(!isTester || !ApexBasketInit()) return INIT_FAILED;');
-  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();');
+  replace('void OnTick()\n{','void OnTick()\n{\n   ApexBasketManage();\n   ApexBasketReplayTick();');
   const hook='      Apex4PublishNativeEvidence();';
   if(observer.split(hook).length!==3)throw Error('Native M10 hook count changed');
   observer=observer.replaceAll(hook,hook+'\n      ApexBasketConsiderNative();');
-  return observer+'\n#include "Apex4-NativeBasket-Tester.mqh"\n';
+  return '#property tester_file "Apex4StrongOutlook.csv"\n'+observer+'\n#include "Apex4-NativeBasket-Tester.mqh"\n';
 }
 export async function generateNativeBasket(sourceDir,outputDir){
  if(resolve(sourceDir)===resolve(outputDir))throw Error('Use separate output folder');
